@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>button-states-primary — Corebase</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap">
+<link rel="stylesheet" href="../tokens.css">
+<link rel="stylesheet" href="../components.css">
+</head>
+<body>
+<div class="ref-toggle"><button class="cb-btn cb-btn--secondary cb-btn--sm" onclick="cbToggle()">Theme: <span class="js-theme-label">Light</span></button></div>
+<main class="ref-main">
+  <h1 class="ref-item__name">button-states-primary</h1>
+  <p class="ref-sub">Real states are CSS pseudo-classes; <code>.is-*</code> classes force them for reference.</p>
+  <div class="ref-demo">
+<div class="ref-labelled"><span>default</span><button class="cb-btn">Button</button></div>
+<div class="ref-labelled"><span>hover</span><button class="cb-btn is-hover">Button</button></div>
+<div class="ref-labelled"><span>active</span><button class="cb-btn is-active">Button</button></div>
+<div class="ref-labelled"><span>focus</span><button class="cb-btn is-focus">Button</button></div>
+<div class="ref-labelled"><span>disabled</span><button class="cb-btn" disabled>Button</button></div>
+  </div>
+</main>
+<script>
+(function(){
+  var r=document.documentElement, K='cb-theme';
+  try{var s=localStorage.getItem(K); if(s) r.setAttribute('data-theme',s);}catch(e){}
+  window.cbToggle=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur) cur = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark':'light';
+    var next = cur==='dark' ? 'light':'dark';
+    r.setAttribute('data-theme',next);
+    try{localStorage.setItem(K,next);}catch(e){}
+    document.querySelectorAll('.js-theme-label').forEach(function(n){n.textContent=next==='dark'?'Dark':'Light';});
+  };
+  document.addEventListener('DOMContentLoaded',function(){
+    document.querySelectorAll('.js-indeterminate').forEach(function(n){n.indeterminate=true;});
+    var cur=r.getAttribute('data-theme')|| (matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+    document.querySelectorAll('.js-theme-label').forEach(function(n){n.textContent=cur==='dark'?'Dark':'Light';});
+  });
+})();
+</script>
+</body>
+</html>

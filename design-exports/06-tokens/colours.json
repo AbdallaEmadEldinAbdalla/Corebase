@@ -1,0 +1,156 @@
+{
+  "meta": {
+    "system": "Corebase",
+    "accent": "Electric Violet",
+    "decision": "D-177",
+    "note": "Components reference role tokens, never ramp steps (D-178)."
+  },
+  "ramps": {
+    "violet": {
+      "light": {
+        "50": "#F5F3FF",
+        "100": "#EDE9FE",
+        "300": "#C4B5FD",
+        "500": "#7C3AED",
+        "600": "#6D28D9",
+        "700": "#5B21B6"
+      },
+      "dark": {
+        "50": "#2A1D4A",
+        "100": "#3A2A63",
+        "300": "#6D48C9",
+        "500": "#7C3AED",
+        "600": "#8B5CF6",
+        "700": "#A78BFA"
+      }
+    },
+    "ink": {
+      "light": {
+        "50": "#F7F6FB",
+        "100": "#EFECF8",
+        "200": "#E1DCF0",
+        "300": "#C3BADF",
+        "400": "#8B82A3",
+        "500": "#6B6285",
+        "600": "#4B4360",
+        "700": "#2C2640",
+        "800": "#1F1A2E",
+        "900": "#16121F"
+      },
+      "dark": {
+        "50": "#120F1A",
+        "100": "#1A1526",
+        "200": "#241D33",
+        "300": "#322847",
+        "400": "#453A63",
+        "500": "#5D5080",
+        "600": "#8E85A8",
+        "700": "#BEB4D6",
+        "800": "#DDD6EE",
+        "900": "#F3F0FA"
+      }
+    }
+  },
+  "semantic": {
+    "success": {
+      "light": "#1E9E6A",
+      "light_bg": "#E4F5EE",
+      "dark": "#4ADE80",
+      "dark_bg": "#0F2E1E"
+    },
+    "warning": {
+      "light": "#C77A02",
+      "light_bg": "#FDF1DC",
+      "dark": "#FBBF24",
+      "dark_bg": "#2E2410"
+    },
+    "error": {
+      "light": "#B3261E",
+      "light_bg": "#F9E3E1",
+      "dark": "#F87171",
+      "dark_bg": "#2E1614"
+    },
+    "info": {
+      "light": "#2F6FB5",
+      "light_bg": "#E4EEF8",
+      "dark": "#60A5FA",
+      "dark_bg": "#12233A"
+    }
+  },
+  "roles": {
+    "bg": {
+      "light": "#F7F6FB",
+      "dark": "#120F1A"
+    },
+    "surface": {
+      "light": "#FFFFFF",
+      "dark": "#1A1526"
+    },
+    "surface-alt": {
+      "light": "#EFECF8",
+      "dark": "#241D33"
+    },
+    "border": {
+      "light": "#E1DCF0",
+      "dark": "#322847"
+    },
+    "border-strong": {
+      "light": "#C3BADF",
+      "dark": "#453A63"
+    },
+    "text": {
+      "light": "#16121F",
+      "dark": "#F3F0FA"
+    },
+    "text-secondary": {
+      "light": "#4B4360",
+      "dark": "#BEB4D6"
+    },
+    "text-muted": {
+      "light": "#8B82A3",
+      "dark": "#8E85A8"
+    },
+    "accent": {
+      "light": "#7C3AED",
+      "dark": "#8B5CF6"
+    },
+    "accent-hover": {
+      "light": "#6D28D9",
+      "dark": "#A78BFA"
+    },
+    "accent-active": {
+      "light": "#5B21B6",
+      "dark": "#6D48C9"
+    },
+    "accent-subtle": {
+      "light": "#EDE9FE",
+      "dark": "#2A1D4A"
+    },
+    "on-accent": {
+      "light": "#FFFFFF",
+      "dark": "#FFFFFF"
+    },
+    "danger": {
+      "light": "#B3261E",
+      "dark": "#DC2626"
+    },
+    "on-danger": {
+      "light": "#FFFFFF",
+      "dark": "#FFFFFF"
+    },
+    "code-bg": {
+      "light": "#16121F",
+      "dark": "#0D0A14"
+    },
+    "scrim": {
+      "light": "rgb(22 18 31 / 28%)",
+      "dark": "rgb(0 0 0 / 55%)"
+    }
+  },
+  "notes": [
+    "error must never share the brand hue \u2014 a destructive action and a primary action must not be confusable.",
+    "In dark, the accent lifts one ramp step (500 -> 600) to hold against a dark surface.",
+    "In dark, danger FILL (#DC2626) is darker than error TEXT (#F87171) so white labels keep contrast.",
+    "No shadow scale: elevation is surface tint plus border weight (D-179)."
+  ]
+}

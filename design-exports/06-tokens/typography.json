@@ -1,0 +1,110 @@
+{
+  "families": {
+    "ui": {
+      "name": "Inter",
+      "stack": "Inter, system-ui, sans-serif",
+      "weights": [
+        400,
+        500,
+        600,
+        700
+      ]
+    },
+    "mono": {
+      "name": "JetBrains Mono",
+      "stack": "\"JetBrains Mono\", ui-monospace, monospace",
+      "weights": [
+        400
+      ],
+      "use": "SQL, connection strings, API keys, project refs, request IDs, log lines"
+    }
+  },
+  "scale": [
+    {
+      "token": "display",
+      "size": 32,
+      "line": 40,
+      "weight": 700,
+      "tracking": -0.6,
+      "family": "ui",
+      "use": "Page hero, empty states"
+    },
+    {
+      "token": "heading/1",
+      "size": 24,
+      "line": 32,
+      "weight": 700,
+      "tracking": -0.4,
+      "family": "ui",
+      "use": "Page title"
+    },
+    {
+      "token": "heading/2",
+      "size": 20,
+      "line": 28,
+      "weight": 600,
+      "tracking": -0.2,
+      "family": "ui",
+      "use": "Section title"
+    },
+    {
+      "token": "heading/3",
+      "size": 16,
+      "line": 24,
+      "weight": 600,
+      "tracking": 0,
+      "family": "ui",
+      "use": "Card title, table group"
+    },
+    {
+      "token": "body/l",
+      "size": 16,
+      "line": 24,
+      "weight": 400,
+      "tracking": 0,
+      "family": "ui",
+      "use": "Lead paragraph"
+    },
+    {
+      "token": "body/m",
+      "size": 14,
+      "line": 20,
+      "weight": 400,
+      "tracking": 0,
+      "family": "ui",
+      "use": "Default body, table cells"
+    },
+    {
+      "token": "body/s",
+      "size": 13,
+      "line": 18,
+      "weight": 400,
+      "tracking": 0,
+      "family": "ui",
+      "use": "Secondary detail"
+    },
+    {
+      "token": "caption",
+      "size": 12,
+      "line": 16,
+      "weight": 500,
+      "tracking": 0.4,
+      "family": "ui",
+      "use": "Labels, metadata, table headers"
+    },
+    {
+      "token": "code",
+      "size": 13,
+      "line": 20,
+      "weight": 400,
+      "tracking": 0,
+      "family": "mono",
+      "use": "Code, keys, identifiers"
+    }
+  ],
+  "rules": [
+    "Negative tracking on headings only, never body or mono.",
+    "Minimum body size is 13px; 12px is for labels and metadata only.",
+    "Mono signals 'this is data you can copy' \u2014 an affordance, not decoration."
+  ]
+}
