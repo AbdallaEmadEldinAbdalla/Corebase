@@ -1,0 +1,65 @@
+# Milestone 0 — The Walking Skeleton
+
+## Purpose
+
+The first executable milestone, task by task: from empty repo to *"`POST /v1/projects` returns a connection string and `psql` works, reliably, survivably."* This is proposal §122 made concrete. Milestone 0 deliberately builds the **hard, risky spine** (provisioning, state machine, idempotency, teardown) with the thinnest possible skin — no dashboard, no auth product, no pooler, no backups yet. Everything later hangs off this spine.
+
+## Design
+
+### What Milestone 0 proves
+
+1. The provisioning saga works and is **idempotent under crash** (proposal §75–76 — the riskiest V1 mechanism).
+2. Desired state (control-plane Postgres) and actual state (containers on a node) can **reconcile** after failures.
+3. The container-per-project unit (D-009/D-054) actually provisions in **<60s** — the lane-1 claim gets its first measurement.
+4. Deletion truly tears down (the inverse path is as important as the forward path).
+
+### Explicitly NOT in Milestone 0
+
+Dashboard, org model (a single hardcoded dev account is fine), PgBouncer, PostgREST, auth, storage, backups, pause/resume, billing, rate limiting, TLS niceties (staging can run on a private network + SSH tunnel). All arrive in P1–P6 per the [phase plan](01-phase-plan.md).
+
+### Task breakdown
+
+Ordered; each task lists its done-signal. (Est. sizes: S <1d, M 1–3d, L ~1wk for one engineer — provisional.)
+
+**T1. Repo scaffold (S)** — pnpm + Turborepo monorepo per [repo layout](../01-architecture/05-repo-and-service-layout.md): `services/api`, `services/worker`, `packages/types`, `infra/terraform`, `migrations/`. CI: lint + typecheck + vitest on PR. *Done: green pipeline on a hello-world test.*
+
+**T2. Staging infrastructure (M)** — Terraform: 1 control node + 1 data node (Hetzner, private network), cloud-init installs Docker with TLS-guarded Engine API (D-052), control node runs Postgres 17 + Redis via compose. *Done: `terraform apply` from zero produces SSH-able nodes; re-apply is a no-op.*
+
+**T3. Control-plane schema, minimal cut (S)** — `projects`, `project_databases`, `nodes`, `provisioning_jobs` tables only (subset of [data model](../02-control-plane/01-data-model.md), same DDL so nothing is thrown away). Migration runner wired (plain SQL, the same discipline customers will get). *Done: migrations apply from empty in CI and on staging.*
+
+**T4. API skeleton (S)** — Fastify `/v1/projects` POST/GET/DELETE + `/health`; error envelope + `X-Request-ID` (D-032) from the very first endpoint; a single static bearer token for now. *Done: create returns `{id, ref, status: CREATING}` and a job row exists (same transaction — the two-phase enqueue pattern from [job queue](../02-control-plane/04-job-queue-and-workers.md) from day one).*
+
+**T5. Worker + provisioning saga (L)** — BullMQ worker consuming `provision_project`: allocate node (trivial: the one node) → create XFS-quota volume → start `postgres:17` container with cgroup limits (D-054/D-055 subset: memory + CPU only) → wait healthy → create the project's base roles (even though nothing uses them yet — the [role model](../04-data-api/03-api-keys-and-roles.md) DDL runs here so it's never retrofitted) → generate + store credentials (envelope encryption D-035 from day one, even at this size) → write connection details → status READY. **Every step: check-then-act idempotency.** *Done: 20 consecutive creates <60s each.*
+
+**T6. Crash-resume proof (M)** — kill the worker (SIGKILL) between each pair of saga steps in a scripted test; on restart the job resumes and converges with **zero duplicate containers/volumes**; a `provisioning_jobs` sweeper re-enqueues orphaned rows. *Done: the kill-matrix test passes in CI against a disposable node.*
+
+**T7. Deletion saga (M)** — DELETE → status DELETING → stop/remove containers → remove volume → mark DELETED (soft-delete window D-038 is modeled but the timer can be a stub). Idempotent like T5. *Done: create+delete loop ×20 leaves node and control plane clean (asserted by listing Docker + volumes).*
+
+**T8. Reconciliation sweep v0 (M)** — periodic job (D-053): list containers on the node, diff against desired state; restart missing containers, flag orphans (alert, don't auto-delete — [executing with care](../02-control-plane/03-provisioning-state-machine.md)). *Done: reboot the data node; all READY projects come back without human action; an orphan container is detected and reported.*
+
+**T9. Observability seed (S)** — structured logs (request_id, project_ref) shipped to Loki; three metrics exported: provisioning duration histogram, job failure counter, node RAM reserved. One Grafana panel + one alert (job stuck >10min). *Done: the provisioning-duration panel shows T5's 20 runs.*
+
+**T10. The demo script (S)** — a `scripts/demo.sh`: create project via curl → poll to READY → `psql "$URL" -c 'CREATE TABLE hello(...); INSERT ...; SELECT ...'` → delete. *Done: runs green end to end; this script is the seed of the golden-path e2e ([testing strategy](../13-quality/01-testing-strategy.md)).*
+
+### Exit criteria (restated from the phase plan)
+
+- 20 consecutive create→READY <60s; kill-matrix (T6) green; delete leaves no residue; node reboot converges (T8); the demo script runs clean.
+- Everything above runs in CI or on a schedule — Milestone 0 ends with *automation proving it*, not a hand-run demo.
+
+### What Milestone 0 decides by building
+
+Building this settles, with running code instead of debate: real idle RSS per project triplet-precursor (feeds OQ-056/OQ-090 back into the [cost model](../12-business/01-cost-model.md)), actual provisioning latency vs the <60s/<30s targets, and whether Docker-Engine-API-over-mTLS control (D-052) feels operationally sound. **A Milestone-0 retro updating the cost model and decision log with measured numbers is part of the milestone.**
+
+## Decisions
+
+- **D-168 — Milestone 0 builds the provisioning spine with production-grade patterns (two-phase enqueue, envelope encryption, error envelope, idempotent sagas) from the first line — never "temporary" versions of load-bearing mechanisms.** *(Rationale: these exact mechanisms are the top technical risks (§115); prototyping them throwaway means testing the wrong thing.)*
+- **D-169 — Milestone 0 ends with a measurement retro that corrects the cost model and any density/latency assumptions in the corpus.** *(Rationale: the corpus runs on assumptions; this is the first chance to replace them with data.)*
+
+## Open Questions
+
+- OQ-165: Whether T2's staging runs on Hetzner cloud VMs (cheap, fast to boot) vs a dedicated box matching prod-intended hardware (representative RSS/IO numbers for the retro). Leaning: cloud VMs for T1–T8 speed, one dedicated box before the retro.
+
+## Dependencies
+
+- Builds on: [phase plan](01-phase-plan.md), [provisioning state machine](../02-control-plane/03-provisioning-state-machine.md), [job queue](../02-control-plane/04-job-queue-and-workers.md), [postgres provisioning](../03-database-platform/01-postgres-provisioning.md), [repo layout](../01-architecture/05-repo-and-service-layout.md)
+- Feeds: Phase 1 (everything it builds is kept), [cost model](../12-business/01-cost-model.md) via the retro.
