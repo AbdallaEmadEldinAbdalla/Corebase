@@ -1,0 +1,5 @@
+# macOS
+.DS_Store
+
+# Derived: regenerate from design-exports/ with `zip -r design-exports.zip design-exports`
+design-exports.zip
