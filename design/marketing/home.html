@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Corebase — one command to a production backend</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap">
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/components.css">
+<link rel="stylesheet" href="../assets/marketing.css">
+</head>
+<body class="mk">
+
+<nav class="mk-nav"><div class="mk-wrap mk-nav__in">
+  <a class="mk-logo" href="#"><i></i>Corebase</a>
+  <div class="mk-nav__links">
+    <a href="#product">Product</a><a href="#compare">Compare</a>
+    <a href="#pricing">Pricing</a><a href="#">Docs</a>
+  </div>
+  <div class="mk-nav__end">
+    <button class="cb-btn cb-btn--ghost cb-btn--sm mk-theme" onclick="cbToggle()">
+      <span class="js-theme-label">Light</span></button>
+    <a class="cb-btn cb-btn--ghost cb-btn--sm" href="#">Sign in</a>
+    <a class="cb-btn cb-btn--sm" href="#">Start free</a>
+  </div>
+</div></nav>
+
+<header class="mk-hero"><div class="mk-wrap mk-hero__grid">
+  <div>
+    <p class="mk-eyebrow">Postgres backend as a service</p>
+    <h1>One command to a production backend.</h1>
+    <p class="mk-lede">A real PostgreSQL database, an API generated from your schema,
+      authentication with row-level security, and file storage. Provisioned in under
+      30&nbsp;seconds — and exportable in one command, whenever you want to leave.</p>
+    <div class="mk-hero__cta">
+      <a class="cb-btn cb-btn--lg" href="#">Create a project</a>
+      <a class="cb-btn cb-btn--secondary cb-btn--lg" href="#">Read the docs</a>
+    </div>
+    <p class="mk-hero__note">Free tier needs no card. 500&nbsp;MB database, unlimited API requests.</p>
+  </div>
+
+  <div class="mk-term" role="img" aria-label="Terminal showing corebase create provisioning a project in 24 seconds">
+    <div class="mk-term__bar"><i></i><i></i><i></i><span>zsh — corebase</span></div>
+<pre><span class="p">$</span> <span class="hi">corebase create my-app</span>
+
+<span class="dim">Creating project in eu-central…</span>
+
+<span class="ok">✓</span> Project created          <span class="dim">proj_7f3a9c</span>
+<span class="ok">✓</span> PostgreSQL 17 provisioned <span class="dim">2.1s</span>
+<span class="ok">✓</span> Connection pooling enabled
+<span class="ok">✓</span> Authentication enabled
+<span class="ok">✓</span> Storage enabled
+<span class="ok">✓</span> API generated
+<span class="ok">✓</span> Row-level security initialised
+<span class="ok">✓</span> Backups enabled          <span class="dim">7-day PITR</span>
+
+<span class="hi">Your backend is ready in 24s.</span>
+
+  Database  <span class="dim">postgresql://…@db.corebase.co:6543</span>
+  API       <span class="dim">https://my-app.corebase.co/rest/v1</span>
+  Dashboard <span class="dim">https://app.corebase.com/my-app</span>
+
+<span class="p">$</span> <span class="cur"></span></pre>
+  </div>
+</div></header>
+
+<section class="mk-strip"><div class="mk-wrap mk-strip__in">
+  <div class="mk-metric"><b>&lt; 30s</b><span>From command to first query</span></div>
+  <div class="mk-metric"><b>3</b><span>Billing meters, not eight</span></div>
+  <div class="mk-metric"><b>1</b><span>Command to export everything</span></div>
+  <div class="mk-metric"><b>100%</b><span>Standard Postgres — no dialect</span></div>
+</div></section>
+
+<section class="mk-sec" id="product"><div class="mk-wrap">
+  <div class="mk-head">
+    <p class="mk-eyebrow">Why we exist</p>
+    <h2>Three things we do better than the incumbents.</h2>
+    <p>We are not trying to out-feature Supabase or out-scale Firebase. We picked three
+      places where the big platforms are structurally weak, and went at those.</p>
+  </div>
+  <div class="mk-lanes">
+    <article class="mk-lane">
+      <span class="mk-lane__n">01 — Speed</span>
+      <h3>Provisioned before you switch tabs</h3>
+      <p>Postgres containers are pre-warmed and waiting, so creating a project is claiming
+        one, not building one. No spinner, no "your project is being set up" email.</p>
+      <dl><dt>Create → ready</dt><dd>&lt; 30s</dd><dt>Resume from idle</dt><dd>&lt; 5s</dd></dl>
+    </article>
+    <article class="mk-lane">
+      <span class="mk-lane__n">02 — Portability</span>
+      <h3>Leaving is a documented feature</h3>
+      <p>One command gives you a plain SQL dump, your users with their password hashes,
+        your files, and your migrations. No proprietary format. Nothing to reverse-engineer.</p>
+      <dl><dt>Export format</dt><dd>plain .sql</dd><dt>Lock-in</dt><dd>none</dd></dl>
+    </article>
+    <article class="mk-lane">
+      <span class="mk-lane__n">03 — Economics</span>
+      <h3>A free tier that can stay free</h3>
+      <p>Idle projects pause and release their memory, so an unused project costs us
+        almost nothing. That is why we can offer a free tier without a card and without
+        quietly deleting your data.</p>
+      <dl><dt>Card required</dt><dd>no</dd><dt>Data on pause</dt><dd>kept</dd></dl>
+    </article>
+  </div>
+</div></section>
+
+<section class="mk-sec mk-sec--alt"><div class="mk-wrap">
+  <div class="mk-head">
+    <p class="mk-eyebrow">What you get</p>
+    <h2>The backend, not a box of parts.</h2>
+  </div>
+  <div class="mk-feats">
+
+    <article class="mk-feat">
+      <div class="mk-feat__txt">
+        <span class="mk-kicker">Database + API</span>
+        <h3 style="margin-top:10px">Your schema is the API</h3>
+        <p>Create a table, get REST endpoints — filtering, ordering, pagination and
+          relationship embedding included. It is PostgREST under the hood, so the query
+          grammar is documented, stable and not ours to break.</p>
+        <ul class="mk-feat__list">
+          <li>PostgreSQL 17, no forks or dialects</li>
+          <li>Connection pooling on by default</li>
+          <li>Direct connection string for anything else</li>
+        </ul>
+      </div>
+      <div class="cb-code" style="max-width:none">
+        <div class="cb-code__header"><span class="cb-code__lang">JAVASCRIPT</span></div>
+<pre>const { data, error } = await corebase
+  .from(<span class="s">'projects'</span>)
+  .select(<span class="s">'ref, status, created_at'</span>)
+  .eq(<span class="s">'status'</span>, <span class="s">'READY'</span>)
+  .order(<span class="s">'created_at'</span>, { ascending: <span class="k">false</span> })
+  .limit(<span class="k">20</span>)</pre>
+      </div>
+    </article>
+
+    <article class="mk-feat">
+      <div class="mk-feat__txt">
+        <span class="mk-kicker">Auth + row-level security</span>
+        <h3 style="margin-top:10px">Authorisation lives next to your data</h3>
+        <p>Email and password auth with rotating refresh tokens, wired into Postgres
+          row-level security. Your access rules are policies in the database, not
+          middleware you have to remember to apply.</p>
+        <ul class="mk-feat__list">
+          <li>Policies enforced by Postgres itself</li>
+          <li>New tables are locked by default, not open</li>
+          <li>OAuth and magic links on the roadmap</li>
+        </ul>
+      </div>
+      <div class="cb-code" style="max-width:none">
+        <div class="cb-code__header"><span class="cb-code__lang">SQL</span></div>
+<pre><span class="k">create policy</span> <span class="s">"own rows only"</span>
+  <span class="k">on</span> profiles <span class="k">for select</span>
+  <span class="k">using</span> ( auth.uid() = user_id );
+
+<span class="c">-- new tables are force-RLS by default:
+-- no policy means no access, never accidental access</span></pre>
+      </div>
+    </article>
+
+    <article class="mk-feat">
+      <div class="mk-feat__txt">
+        <span class="mk-kicker">Storage + local dev</span>
+        <h3 style="margin-top:10px">Files, and the whole stack on your laptop</h3>
+        <p>S3-compatible object storage with the same policy model as your tables.
+          And <code>corebase dev</code> runs the real components in Docker — the same
+          Postgres, pooler and API you get in production.</p>
+        <ul class="mk-feat__list">
+          <li>Signed URLs, size and MIME limits</li>
+          <li>File permissions use the same RLS rules</li>
+          <li>Local and production paths are identical</li>
+        </ul>
+      </div>
+      <div class="cb-code" style="max-width:none">
+        <div class="cb-code__header"><span class="cb-code__lang">TERMINAL</span></div>
+<pre><span class="k">$</span> corebase dev
+
+<span class="s">✓</span> postgres    <span class="c">:54322</span>
+<span class="s">✓</span> pooler      <span class="c">:54329</span>
+<span class="s">✓</span> rest api    <span class="c">:54321</span>
+<span class="s">✓</span> auth        <span class="c">:54321/auth/v1</span>
+<span class="s">✓</span> storage     <span class="c">:54321/storage/v1</span>
+
+<span class="c">Same stack as production. Seeded and ready.</span></pre>
+      </div>
+    </article>
+
+  </div>
+</div></section>
+
+<section class="mk-sec" id="compare"><div class="mk-wrap">
+  <div class="mk-head">
+    <p class="mk-eyebrow">Honestly compared</p>
+    <h2>Where we sit next to Firebase and Supabase.</h2>
+    <p>Both are good products, and both would be a reasonable choice. Here is where we
+      differ — including the places we are behind.</p>
+  </div>
+  <div class="mk-cmp-scroll">
+    <table class="mk-cmp">
+      <thead><tr><th></th><th class="is-us">Corebase</th><th>Supabase</th><th>Firebase</th></tr></thead>
+      <tbody>
+        <tr><th>Database</th>
+          <td class="is-us">PostgreSQL 17, standard</td><td>PostgreSQL</td>
+          <td>Firestore — a document store, no SQL</td></tr>
+        <tr><th>Getting out</th>
+          <td class="is-us"><code>corebase export</code> → plain SQL, users, files</td>
+          <td>pg_dump works; no single export command</td>
+          <td>Proprietary format; a rewrite, not a migration</td></tr>
+        <tr><th>Free tier</th>
+          <td class="is-us">Pauses when idle, data kept, no card</td>
+          <td>Pauses after inactivity; project can be removed</td>
+          <td>Generous until it isn't — usage billing surprises</td></tr>
+        <tr><th>Billing meters</th>
+          <td class="is-us">Three: database, storage, active users</td>
+          <td>Around eight dimensions</td><td>Reads, writes, deletes, storage, egress…</td></tr>
+        <tr><th>Feature breadth</th>
+          <td class="is-us">Deliberately narrow — no realtime or functions at launch</td>
+          <td>Broad: realtime, edge functions, vectors, queues</td>
+          <td>Very broad, plus the Google ecosystem</td></tr>
+        <tr><th>Mobile SDKs</th>
+          <td class="is-us">JavaScript first; mobile later</td>
+          <td>Several official clients</td>
+          <td>Best in class — this is Firebase's home turf</td></tr>
+        <tr><th>Maturity</th>
+          <td class="is-us">New. We have not been load-tested by a million projects</td>
+          <td>Proven at scale, large community</td><td>A decade of production use</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="mk-cmp__foot">If you need realtime subscriptions, edge functions or first-class
+    mobile SDKs today, use Supabase or Firebase — we would rather tell you that now than after
+    you have built on us.</p>
+</div></section>
+
+<section class="mk-sec mk-sec--alt" id="pricing"><div class="mk-wrap">
+  <div class="mk-head">
+    <p class="mk-eyebrow">Pricing</p>
+    <h2>Three meters. No surprises.</h2>
+    <p>We bill on database size, file storage and monthly active users. Everything else is
+      included in the plan, so your bill moves when your product grows — not when a
+      background job goes into a loop.</p>
+  </div>
+  <div class="mk-plans">
+    <article class="mk-plan">
+      <span class="mk-plan__name">Free</span>
+      <span class="mk-plan__price">$0</span>
+      <span class="mk-plan__for">For learning and side projects</span>
+      <ul><li>500 MB database</li><li>1 GB file storage</li><li>50,000 monthly active users</li>
+        <li>7-day point-in-time recovery</li><li>Pauses when idle — data kept</li></ul>
+      <a class="cb-btn cb-btn--secondary" href="#">Start free</a>
+    </article>
+    <article class="mk-plan mk-plan--hi">
+      <span class="mk-plan__name">Pro</span>
+      <span class="mk-plan__price">$25<small> / project / month</small></span>
+      <span class="mk-plan__for">For products with users</span>
+      <ul><li>8 GB database, then usage</li><li>100 GB file storage</li>
+        <li>100,000 monthly active users</li><li>30-day point-in-time recovery</li>
+        <li>Never pauses · spend cap on by default</li></ul>
+      <a class="cb-btn" href="#">Start a Pro project</a>
+    </article>
+    <article class="mk-plan">
+      <span class="mk-plan__name">Team</span>
+      <span class="mk-plan__price">$99<small> / month</small></span>
+      <span class="mk-plan__for">For teams shipping together</span>
+      <ul><li>Everything in Pro</li><li>90-day point-in-time recovery</li>
+        <li>Organisation roles and audit log</li><li>30-day log retention</li>
+        <li>Priority support</li></ul>
+      <a class="cb-btn cb-btn--secondary" href="#">Talk to us</a>
+    </article>
+  </div>
+</div></section>
+
+<section class="mk-cta"><div class="mk-wrap">
+  <h2>Try it. Leaving is one command.</h2>
+  <p>That is the whole pitch. Create a project, build something real, and if it is not for
+    you, take your database, your users and your files with you.</p>
+  <div class="mk-cta__row">
+    <a class="cb-btn cb-btn--lg" href="#">Create a project</a>
+    <a class="cb-btn cb-btn--secondary cb-btn--lg" href="#">Read the docs</a>
+  </div>
+</div></section>
+
+<footer class="mk-foot"><div class="mk-wrap">
+  <div class="mk-foot__in">
+    <div><h4>Product</h4><a href="#">Database</a><a href="#">Auth</a><a href="#">Storage</a><a href="#">Pricing</a></div>
+    <div><h4>Developers</h4><a href="#">Docs</a><a href="#">CLI</a><a href="#">SDK</a><a href="#">Status</a></div>
+    <div><h4>Company</h4><a href="#">About</a><a href="#">Blog</a><a href="#">Contact</a></div>
+    <div><h4>Legal</h4><a href="#">Privacy</a><a href="#">Terms</a><a href="#">Security</a></div>
+  </div>
+  <div class="mk-foot__base"><a class="mk-logo" href="#"><i></i>Corebase</a>
+    <span>© 2026 Corebase</span><span style="margin-left:auto">eu-central · Falkenstein</span></div>
+</div></footer>
+
+<script>
+(function(){
+  var r=document.documentElement,K='cb-theme';
+  function label(){var t=r.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+    document.querySelectorAll('.js-theme-label').forEach(function(n){n.textContent=t==='dark'?'Dark':'Light';});}
+  try{var s=localStorage.getItem(K); if(s) r.setAttribute('data-theme',s);}catch(e){}
+  window.cbToggle=function(){var cur=r.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+    var n=cur==='dark'?'light':'dark'; r.setAttribute('data-theme',n);
+    try{localStorage.setItem(K,n);}catch(e){} label();};
+  label();
+})();
+</script>
+</body></html>
