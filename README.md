@@ -34,7 +34,9 @@ It is built on the design system that already existed in `design-exports/` rathe
 
 **How the UI stays consistent.** The first version of this shell was right in every colour and wrong in every mechanic, so the fix was not nicer screens but a written interaction contract: [docs/09-dashboard/05-ux-standards.md](docs/09-dashboard/05-ux-standards.md), ending in a 20-question gate that **runs on every UI change** (D-224) as the `ux-review` role in [.claude/skills/](.claude/skills/ux-review/SKILL.md). Its first run found two real failures in the code written to satisfy it — the palette was missing two actions a row menu already had, and the project list printed "Showing 20 of 20" while hiding a second page.
 
-**Phase 2 (the database platform) has started.** Each project now gets a private network with Postgres aliased `db` — the substrate the connection pooler and, later, PostgREST both need, since their rendered configs say `host=db`. Chasing a test failure it caused turned up something older: the worker was opening unbounded keep-alive connections to data nodes through Node's global HTTP agent, which had been breaking the Docker engine outright and reading as "Docker Desktop is flaky" for weeks.
+**Phase 2 (the database platform) has started.** Every project now gets a **connection pooler** — PgBouncer in transaction mode on its own port — so `DATABASE_URL` is a string an application can actually point at: twelve concurrent clients share one Postgres backend. The pooler resolves credentials through a `SECURITY DEFINER` lookup that allowlists exactly one role, so the pooled port cannot reach `postgres` or any other internal role even if PgBouncer is fully compromised — checked by presenting the correct superuser password and being refused. It sits on a private per-project network added in the same phase, which is also what PostgREST will need in Phase 5.
+
+Chasing a test failure along the way turned up something older: the worker was opening unbounded keep-alive connections to data nodes through Node's global HTTP agent, which had been breaking the Docker engine outright and reading as "Docker Desktop is flaky" for weeks.
 
 All three Phase-1 exit criteria are met. Above the database, the data plane is still Phase 2+: no data API (PostgREST), no end-user auth service, no storage, no realtime — and the dashboard is a shell, so there is no table editor, SQL editor, members page or billing yet.
 
@@ -46,6 +48,7 @@ All three Phase-1 exit criteria are met. Above the database, the data plane is s
 pnpm install
 ./scripts/staging.sh up && ./scripts/migrate-staging.sh && ./scripts/staging.sh kek
 docker build -t corebase/postgres:17.5 infra/docker/postgres
+docker build -t corebase/pgbouncer:1.23 infra/docker/pgbouncer
 ./scripts/staging.sh seed-images && ./scripts/staging.sh verify
 ```
 
@@ -69,7 +72,7 @@ There is no seeded password anywhere, so create an account on `/signup`; a new a
 
 The demo script creates a project, waits for it, connects to the database it made with the credentials the API handed back, runs real SQL, and deletes it — using only `curl` and `psql`, which is exactly what a customer has.
 
-The full suite is **387 tests**, integration included; they need the staging stack above and **fail rather than skip** without it:
+The full suite is **400 tests**, integration included; they need the staging stack above and **fail rather than skip** without it:
 
 ```bash
 pnpm test
@@ -121,6 +124,7 @@ Staging is Docker Compose plus Docker-in-Docker standing in for a control node a
 | `packages/jwt` | ES256 sign/verify, hand-written to support exactly one algorithm — a wrong `alg` is rejected before a signature is computed |
 | `packages/queue` `packages/migrate` `packages/types` | BullMQ wiring, the SQL migration runner, shared types and prefixed transport ids |
 | `infra/docker/postgres` | The per-project database image: extension allowlist enforced by absence, no `trust` auth anywhere, RLS on at table creation |
+| `infra/docker/pgbouncer` | The per-project pooler image: transaction mode, `auth_query` against a lookup that allowlists one role, every rule baked in |
 | `infra/docker/staging` | The local stand-in for staging, including Prometheus, Loki, Alloy and Grafana with the dashboard provisioned as code |
 | `packages/metrics` | A Prometheus registry — counters, gauges, histograms, with label sets declared up front so the cardinality budget is hard to break |
 | `apps/dashboard` | The dashboard shell: login, signup, org switcher, projects grid, create-project flow, project overview — Next.js App Router, TanStack Query, session cookies, no BFF |

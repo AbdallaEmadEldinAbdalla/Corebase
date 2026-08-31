@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-08-31 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2: P2a done**
+**Last updated:** 2026-08-31 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2: P2a–P2b done**
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -57,9 +57,13 @@ And there is a dashboard: sign in, switch organizations, see your projects, crea
 one and watch it go from `creating` to `ready` without reloading, then copy a
 connection string that works — built on the exported design system, in both themes.
 
+Every project now also gets a **connection pooler** — PgBouncer in transaction mode
+on its own port — so `DATABASE_URL` is a real string an application can point at,
+and twelve concurrent clients share one Postgres backend. The pooled port resolves
+credentials for exactly one role and cannot reach any internal one.
+
 Still nothing between a customer and their database above SQL: no data API
-(PostgREST), no end-user auth service, no storage, no realtime. That is Phase 2 and
-beyond.
+(PostgREST), no end-user auth service, no storage, no realtime.
 
 ## 2. Run it locally
 
@@ -72,7 +76,8 @@ pnpm install
 ./scripts/migrate-staging.sh       # apply migrations to the control plane
 ./scripts/staging.sh kek           # generate the local master key (gitignored)
 docker build -t corebase/postgres:17.5 infra/docker/postgres
-./scripts/staging.sh seed-images   # push the project image onto the data node
+docker build -t corebase/pgbouncer:1.23 infra/docker/pgbouncer
+./scripts/staging.sh seed-images   # push both project images onto the data node
 ./scripts/staging.sh verify        # 10 checks; all must pass
 ```
 
@@ -208,6 +213,7 @@ docs/                  the planning corpus — 66 documents, 16 sections (read I
 design-exports/        design system artefacts: tokens, 43 HTML components, 142 PNGs
 migrations/            plain SQL, applied in filename order, checksummed
 infra/docker/postgres/ the per-project database image (extension allowlist, auth hardening)
+infra/docker/pgbouncer/ the per-project pooler image (transaction mode, auth_query)
 infra/docker/staging/  the local stand-in for staging: control node + dind data node
 scripts/               staging.sh, migrate-staging.sh, dev.sh, demo.sh
 .github/workflows/     ci.yml (unit + integration on every PR), nightly.yml (the drills)
@@ -240,7 +246,7 @@ boot. Don't use them.
 
 ## 4. What is built, in detail
 
-Test counts are from `pnpm test` and are all currently green: **379 tests**, of
+Test counts are from `pnpm test` and are all currently green: **400 tests**, of
 which **216** need no infrastructure (`pnpm test:unit`).
 
 Every task below has a command that proves it; they are listed with the task.
@@ -946,6 +952,73 @@ Verified end to end after every change: create → provision → `psql` → `CRE
 TABLE` → soft-delete → purge in 18s, leaving the node holding only Docker's own
 three networks.
 
+### P2b — a connection pooler for every project · done · 12 tests
+
+The `pooled` connection string stopped being a promise. PgBouncer in transaction
+mode, one per project (D-015), on the network P2a built — its config says
+`host=db`, which is why that network came first.
+
+**How the pooler gets credentials without holding them.** `auth_query`, not a
+`userlist.txt` (D-074): the pooler asks Postgres for a connecting user's verifier
+through `corebase.pgbouncer_lookup`, so a rotation is one `ALTER ROLE` with nothing
+to ship or reload. The image creates `pgbouncer_auth` as a **passwordless** LOGIN
+role and the worker sets its password at provision time, so no credential is baked
+into an image (**D-232**).
+
+Two details in that function are load-bearing. `SET search_path = pg_catalog` stops
+a caller shadowing `pg_shadow` with their own relation and having a definer-rights
+function read it instead — a SECURITY DEFINER function without a pinned search_path
+is a privilege escalation, not a style preference. And the allowlist inside it is a
+*boundary*: only `developer` is resolvable, so the pooled port cannot reach
+`postgres`, `authenticator`, `corebase_admin` or `pgbouncer_auth` itself even if
+PgBouncer is fully compromised. Verified by presenting the correct superuser
+password to a real project's pooled port and being refused — while `developer` still
+connected, so the refusals are the allowlist and not a broken pooler.
+
+**The image is ours** (**D-233**), 23.6 MB, running as a non-root user created
+explicitly in the Dockerfile since Alpine's package provides none. Every rule in
+`pgbouncer.ini` is baked in and only values come from the environment, because here
+the configuration *is* the boundary: pool mode, the auth_query wiring and the pool
+arithmetic all have recorded rationale, and an entrypoint that accepted arbitrary
+config would let any of them change by accident. Pinned ≥1.21, where
+protocol-level prepared-statement tracking arrived — without it transaction pooling
+breaks node-postgres, psycopg and most ORMs on contact.
+
+**The gate proves the chain, not the process.** `wait_pooler_healthy` connects as
+`developer` *through* the pooler and runs a query, which is the only check that
+exercises all of it: PgBouncer accepted the client, authenticated itself as
+`pgbouncer_auth`, resolved the customer's verifier through the lookup, and proxied a
+real transaction. A TCP check on 6432 passes for a pooler that can do none of that.
+`mark_ready` refuses without a pooler recorded (**D-234**), and the delete saga
+stops the pooler *before* the database — one left answering against a stopped
+Postgres fails connections in a way that reads as "the database is broken" rather
+than "the project is deleted".
+
+**Reconciliation had a real bug the moment a project had two containers.** It keyed
+them by project ref alone, so the two overwrote each other in the map and whichever
+came last in the Engine's listing won — **a stopped database read as healthy for as
+long as its pooler was up**, which is the exact failure reconciliation exists to
+catch. A role label now discriminates them, a dead pooler is its own
+`pooler_not_running` drift class, and a pooler outliving its project is stopped like
+any other zombie (**D-235**).
+
+**Verified live**, end to end: a project through the real saga reaches ready in 3s
+with the pooled gate passing; the `DATABASE_URL` the dashboard renders was pasted
+into `psql` and created a table through PgBouncer that the direct URL then read
+back; twelve concurrent clients shared one Postgres backend; and the internal roles
+were refused on that project's pooled port.
+
+One thing trying it changed: most of what transaction pooling breaks **does not
+error**. `LISTEN` on the pooled URL returns success and then never delivers. The
+dashboard says so in those terms, because "these need the direct URL" invites the
+conclusion that the pooled one errors, and the developer finds out otherwise in
+production.
+
+Also in this step: the staging substitute publishes the pooler port range (an
+allocated-but-unpublished port is a dead `DATABASE_URL` that looks like a broken
+pooler), `seed-images` loads both images and names the build command if either is
+missing, and the compose project is now `corebase` rather than `corebase-staging`.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -985,10 +1058,10 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-Forty-eight decisions came out of running the thing rather than planning it —
-D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-231 from Phase 2.
+Fifty-two decisions came out of running the thing rather than planning it —
+D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-235 from Phase 2.
 Full text in the [decision log](docs/00-foundation/05-decision-log.md); the log holds
-D-001…D-231 and is binding when two documents disagree.
+D-001…D-235 and is binding when two documents disagree.
 
 | ID | What changed | Why it surfaced |
 |---|---|---|
@@ -1040,6 +1113,10 @@ D-001…D-231 and is binding when two documents disagree.
 | D-229 | The network is removed at soft-delete, not only at purge, and `verify_gone` asserts its absence | It holds no data and does hold a subnet from a finite node pool; 18 leaked in one afternoon, and an exhausted pool blocks the next project entirely |
 | D-230 | The Engine API client uses one pooled agent per node with `maxSockets: 8`; never the global agent | Node's global agent has had keepAlive on since v19, so ~130 operations broke a node's listener permanently — it read as "Docker Desktop is flaky" for weeks |
 | D-231 | No client may rely on the API's single-organization convenience default | `demo.sh` worked until the account had two orgs, which the test suite creates; the API is right to refuse to guess |
+| D-232 | `pgbouncer_auth` is a passwordless image role whose password the worker sets; the lookup function pins `search_path` and allowlists `developer` only | A SECURITY DEFINER function without a pinned search_path is a privilege escalation; the allowlist stops the pooled port reaching any internal role |
+| D-233 | The pooler image is ours, every `pgbouncer.ini` rule baked in, only values from the environment; PgBouncer ≥ 1.21 | The configuration is the security boundary here, and ≥1.21 is where prepared-statement tracking arrived — without it pooling breaks most ORMs |
+| D-234 | `mark_ready` requires a running pooler; the delete saga stops the pooler before the database | A ready project whose `DATABASE_URL` does not connect looks like a bug in the customer's code |
+| D-235 | Project containers carry a role label and reconciliation keys on it; a dead pooler is its own drift class | Keying by ref alone made the two containers overwrite each other, so a stopped database read as healthy while its pooler was up |
 
 ## 7. Measurements
 
@@ -1082,12 +1159,12 @@ enforces it (P1b), and CI runs both suites on every PR (P1f). The dashboard shel
 (P1g) covers login, signup, the org switcher, the projects grid, the create-project
 flow and a project overview.
 
-**Phase 2 is at P2a of seven planned steps.** Done: the per-project network the
-pooler needs. Remaining: PgBouncer itself and the
-`DATABASE_URL`/`DIRECT_DATABASE_URL` contract, pause/resume with idle detection,
-credential rotation, disk quotas and the disk-full ladder, bin-packing placement,
-and the density measurement — which D-209 already constrains, since this hardware
-cannot satisfy its conditions.
+**Phase 2 is at P2b of seven planned steps.** Done: the per-project network, and
+PgBouncer with the `DATABASE_URL`/`DIRECT_DATABASE_URL` contract through the API and
+the dashboard. Remaining: pause/resume with idle detection (exit criterion 2),
+credential rotation (criterion 4), disk quotas and the disk-full ladder
+(criterion 3), bin-packing placement, and the density measurement (criterion 1) —
+which D-209 already constrains, since this hardware cannot satisfy its conditions.
 
 The measurement that would move the cost model most is the one Phase 1/2 makes
 possible:
@@ -1123,10 +1200,13 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
 - The WAL archive writes to the container filesystem, not the volume, so it does not
   survive container replacement. Belongs with backups, not with provisioning.
 - No warm pool (D-071). Creates are the cold path; M-002 says that is fine for now.
-- The pooler port is allocated and recorded but nothing listens on it — PgBouncer is
-  P2b, and the `pooled` connection string will not connect until then. The network
-  it will attach to now exists (P2a), so what is missing is the container and its
-  `auth_query` setup, not the substrate.
+- OQ-073 is still open: the "2 direct slots" budget is advisory, not enforced by a
+  per-role `CONNECTION LIMIT` on `developer`. A customer can still point an
+  application fleet at `DIRECT_DATABASE_URL` and exhaust the direct headroom; it
+  fails visibly, which is the intended behaviour, but nothing caps it.
+- The pooler's pool sizing is one profile for every plan. The doc's "larger plans
+  scale `default_pool_size` and `max_connections` together" is a value change the
+  entrypoint is structured for and nothing sets yet.
 - `corebase_admin` exists as a role with no password; the audited dashboard path that
   needs it does not exist yet.
 - `verify-email` and `password-reset` are **absent, not stubbed** — both need the
