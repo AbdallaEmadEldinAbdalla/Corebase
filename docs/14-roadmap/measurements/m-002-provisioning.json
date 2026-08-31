@@ -1,0 +1,167 @@
+{
+  "at": "2026-08-31T07:57:21.587Z",
+  "count": 20,
+  "warmup_ms": 7439,
+  "succeeded": 20,
+  "failed": 0,
+  "budget_ms": 60000,
+  "over_budget": 0,
+  "min_ms": 2446,
+  "p50_ms": 2463,
+  "p95_ms": 3264,
+  "max_ms": 3264,
+  "mean_ms": 2624,
+  "usable_p50_ms": 23,
+  "steps": [
+    {
+      "step": "wait_healthy",
+      "n": 21,
+      "p50": 2095,
+      "max": 2763
+    },
+    {
+      "step": "start_container",
+      "n": 21,
+      "p50": 186,
+      "max": 3258
+    },
+    {
+      "step": "store_credentials",
+      "n": 21,
+      "p50": 32,
+      "max": 102
+    },
+    {
+      "step": "create_base_roles",
+      "n": 21,
+      "p50": 18,
+      "max": 63
+    },
+    {
+      "step": "allocate_node",
+      "n": 21,
+      "p50": 4,
+      "max": 35
+    },
+    {
+      "step": "create_volume",
+      "n": 21,
+      "p50": 4,
+      "max": 666
+    },
+    {
+      "step": "mark_ready",
+      "n": 21,
+      "p50": 2,
+      "max": 3
+    },
+    {
+      "step": "write_connection",
+      "n": 21,
+      "p50": 1,
+      "max": 5
+    }
+  ],
+  "per_create": [
+    {
+      "ref": "fvu244st6oy3dukpddab",
+      "ready_ms": 2463,
+      "usable_ms": 46
+    },
+    {
+      "ref": "pvnmfkjtvcv7xsjfikat",
+      "ready_ms": 2455,
+      "usable_ms": 30
+    },
+    {
+      "ref": "kug2od3b5wbedcfzs6xw",
+      "ready_ms": 2447,
+      "usable_ms": 16
+    },
+    {
+      "ref": "mck3ldhvomfxk7dzguf4",
+      "ready_ms": 2668,
+      "usable_ms": 23
+    },
+    {
+      "ref": "aqvreayb2lgauicfl5hg",
+      "ready_ms": 2457,
+      "usable_ms": 27
+    },
+    {
+      "ref": "g7gcner3dywyxp4uubpi",
+      "ready_ms": 2458,
+      "usable_ms": 32
+    },
+    {
+      "ref": "xxneulmugxpa3xrkkayn",
+      "ready_ms": 2662,
+      "usable_ms": 17
+    },
+    {
+      "ref": "w24z7kcw5b63yc4wui5f",
+      "ready_ms": 2450,
+      "usable_ms": 24
+    },
+    {
+      "ref": "nswqab6bpcqor35eomtc",
+      "ready_ms": 2446,
+      "usable_ms": 17
+    },
+    {
+      "ref": "ae4agjom43razmgvxfmm",
+      "ready_ms": 2451,
+      "usable_ms": 17
+    },
+    {
+      "ref": "b5ftkziqu3kfn5sihr2h",
+      "ready_ms": 2448,
+      "usable_ms": 16
+    },
+    {
+      "ref": "s34xq3g77apjq5rb45wo",
+      "ready_ms": 2464,
+      "usable_ms": 24
+    },
+    {
+      "ref": "kqyakk7dc2y2jw7vw4gb",
+      "ready_ms": 2449,
+      "usable_ms": 16
+    },
+    {
+      "ref": "zxxlmacblzy4iavexxyz",
+      "ready_ms": 2447,
+      "usable_ms": 19
+    },
+    {
+      "ref": "lhrrvqzt6x6zr7pzlssk",
+      "ready_ms": 2670,
+      "usable_ms": 36
+    },
+    {
+      "ref": "vaq3hqxgrorxkddfg5kz",
+      "ready_ms": 2685,
+      "usable_ms": 20
+    },
+    {
+      "ref": "gw4mebj6nljsem6ejn57",
+      "ready_ms": 2888,
+      "usable_ms": 15
+    },
+    {
+      "ref": "qqxdgypd2ny5hlci3ev6",
+      "ready_ms": 3264,
+      "usable_ms": 25
+    },
+    {
+      "ref": "r4sezqs6wrlpk3fgtvzd",
+      "ready_ms": 3118,
+      "usable_ms": 20
+    },
+    {
+      "ref": "mo5uvnkxjmwjttkf7vhj",
+      "ready_ms": 3080,
+      "usable_ms": 28
+    }
+  ]
+}

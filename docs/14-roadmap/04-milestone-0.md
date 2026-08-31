@@ -41,6 +41,32 @@ Ordered; each task lists its done-signal. (Est. sizes: S <1d, M 1–3d, L ~1wk f
 
 **T10. The demo script (S)** — a `scripts/demo.sh`: create project via curl → poll to READY → `psql "$URL" -c 'CREATE TABLE hello(...); INSERT ...; SELECT ...'` → delete. *Done: runs green end to end; this script is the seed of the golden-path e2e ([testing strategy](../13-quality/01-testing-strategy.md)).*
 
+### Progress and evidence
+
+Append-only. Each row names what actually proved the done-signal, so the milestone
+retro (D-169) reads evidence rather than recollection. Substitutions from the plan
+are stated, not glossed.
+
+| Task | State | Evidence | Substitution from the plan |
+|---|---|---|---|
+| T1 Repo scaffold | done | pnpm + Turborepo, `typecheck`/`test` green | — |
+| T2 Staging infra | done | `scripts/staging.sh all` — 10 checks pass from zero, re-apply is a no-op | Docker Compose + Docker-in-Docker instead of Terraform + two Hetzner nodes. The real interface (Engine API over mTLS, D-052) is unchanged; cloud-init, real partitions, NVMe and XFS project quotas stay unproven (OQ-165) |
+| T3 Control-plane schema | done | `migrations/20260829120000_control_plane_init.sql` + `20260831110000_t5e_credentials.sql`, applied from empty; 9 migration-runner tests | — |
+| T4 API skeleton | done | 17 API tests; error envelope and `X-Request-ID` from the first endpoint | Response envelope diverges from the documented contract on two endpoints — see OQ-175 |
+| T5a–b Worker + job runner | done | claim-by-conditional-UPDATE, heartbeats, checkpoints, orphan sweeper; 14 tests | — |
+| T5c Placement | done | transactional booking, 85% fill ceiling, port allocation; 19 tests | — |
+| T5d Container steps | done | Engine API client over mTLS, cgroup limits, TCP health gate; 16 integration tests | — |
+| T5e Credentials + ready | done | envelope encryption, base roles, connection details, `mark_ready` refusals; 42 tests | — |
+| **T5 (whole)** | **done** | **[M-002](05-measurements.md#m-002--twenty-consecutive-project-creates-and-what-twenty-live-projects-actually-cost): 20/20 creates ready *and usable*, max 3.31s against the 60s budget** | Measured on the Docker substitute, ARM, Postgres only — not the triplet on x86 |
+| T6 Crash-resume proof | not started | — | — |
+| T7 Deletion saga | not started | — | — |
+| T8 Reconciliation sweep | not started | — | — |
+| T9 Observability seed | not started | — | — |
+| T10 Demo script | not started | — | — |
+
+The exit criteria below are deliberately *not* satisfied by T5 alone: the
+kill-matrix, deletion residue and reboot convergence are separate proofs.
+
 ### Exit criteria (restated from the phase plan)
 
 - 20 consecutive create→READY <60s; kill-matrix (T6) green; delete leaves no residue; node reboot converges (T8); the demo script runs clean.
