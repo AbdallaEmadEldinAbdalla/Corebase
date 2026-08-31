@@ -16,7 +16,9 @@ Deleting a project keeps its data for a 7-day recovery window and then a schedul
 
 Reboot the data node and every project is serving queries again seconds later with no human involved; whatever the control plane and the node disagree about is reported, and anything holding data is reported *without* being touched.
 
-Tasks T1–T8 of ten are done; T9 (the observability seed) is next. Nothing above the database exists yet — no data API, no auth, no storage, no dashboard.
+All of it is visible: Prometheus scrapes both services, Grafana has a provisioned dashboard, logs are in Loki and findable by project ref or request id, and the "job stuck" alert has been watched firing.
+
+Tasks T1–T9 of ten are done; T10 (the demo script) is next. Nothing above the database exists yet — no data API, no auth, no storage, no dashboard.
 
 > **[STATUS.md](STATUS.md) is the handover document**: what works, how to run it locally, what every rule in the code is defending against, and what is not built yet. Read it before the corpus if you are here to contribute.
 
@@ -29,7 +31,7 @@ docker build -t corebase/postgres:17.5 infra/docker/postgres
 ./scripts/staging.sh seed-images && ./scripts/staging.sh verify
 ```
 
-Then the full suite (180 tests, integration included — they need the staging stack above and **fail rather than skip** without it):
+Then the full suite (197 tests, integration included — they need the staging stack above and **fail rather than skip** without it):
 
 ```bash
 pnpm test
@@ -59,6 +61,8 @@ Or reboot the data node and watch it converge on its own:
 pnpm --filter @corebase/worker node-reboot
 ```
 
+To watch it work, `./scripts/dev.sh` starts both services with the right environment and ships their logs to Loki; Grafana is then at <http://127.0.0.1:3001/d/corebase-provisioning>.
+
 Staging is Docker Compose plus Docker-in-Docker standing in for a control node and a data node. The interface the worker drives is the real one — the Docker Engine API over mutual TLS, no per-node agent (D-052) — so no step of the plan is skipped and nothing is paid for. [STATUS.md §2](STATUS.md) has the details and the environment variables.
 
 ## What is built
@@ -71,7 +75,8 @@ Staging is Docker Compose plus Docker-in-Docker standing in for a control node a
 | `packages/secrets` | Credential persistence; enforces store-then-apply so a crash cannot lose a password |
 | `packages/queue` `packages/migrate` `packages/types` | BullMQ wiring, the SQL migration runner, shared types |
 | `infra/docker/postgres` | The per-project database image: extension allowlist enforced by absence, no `trust` auth anywhere, RLS on at table creation |
-| `infra/docker/staging` | The local stand-in for staging |
+| `infra/docker/staging` | The local stand-in for staging, including Prometheus, Loki, Alloy and Grafana with the dashboard provisioned as code |
+| `packages/metrics` | A Prometheus registry — counters, gauges, histograms, with label sets declared up front so the cardinality budget is hard to break |
 
 ## The planning corpus
 

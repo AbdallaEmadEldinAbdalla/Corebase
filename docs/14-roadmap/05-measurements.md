@@ -189,6 +189,40 @@ The orphan pair is the more important half of the result. Both were reported and
 
 **Next measurement to take:** the same drill against a real VM reboot once a real node exists (OQ-165), and the kill matrix against the deletion and purge sagas.
 
+## M-006 — What the monitoring stack itself costs, and the series it produces
+
+**Date:** 2026-08-31 · **Task:** Milestone 0, T9 (observability seed) · **Answers:** partially the single-node-Prometheus premise in D-146
+
+**Environment:** the T9 staging stack — Prometheus 3.1, Loki 3.3 (single binary, filesystem chunks), Grafana 11.5, Alloy 1.5 — beside the control node on the same Docker VM. Production puts these on a separate mon-1 with R2-backed storage. Scrape interval 5 s here against production's 15 s, so per-series sample rates are 3× higher than they will be.
+
+**Resident cost, all four containers, with 20 projects' worth of history:**
+
+| | memory | disk |
+|---|---|---|
+| Prometheus | 54.5 MiB | 1.4 MB |
+| Loki | 124.5 MiB | 0.6 MB |
+| Grafana | 92.5 MiB | 25.1 MB |
+| Alloy | 48.1 MiB | <1 KB |
+| **total** | **~320 MiB** | ~27 MB |
+
+**Series produced:**
+
+| | |
+|---|---|
+| Prometheus head series, everything | 912 |
+| `corebase_*` series | **156** |
+| largest family: `corebase_provisioning_step_seconds_bucket` | 80 (8 steps × 10 buckets) |
+| `corebase_api_requests_total` | 2 (method × route pattern × status class) |
+| series carrying `project_ref` | **0** |
+
+**Reading it honestly.** 320 MiB for the whole monitoring stack supports D-146's premise that a single Prometheus is enough for a long time — this is a fraction of one project's RAM booking. The number that matters more is the last row: **zero** platform series carry `project_ref`. D-146 projects ~25 series per project at 10k projects ≈ 250k series, and every one of those comes from cAdvisor and postgres_exporter, neither of which exists yet. So this measurement says the *platform* half of the budget is nearly free; it says nothing yet about the per-project half, which is the half that can sink a single node.
+
+The step histogram is already the largest family at 80 series, from 8 steps × 10 buckets. That is fine at one node and stays fine — the labels are `job_type` and `step`, neither of which grows with tenants. It is worth noticing anyway, because it is the shape that becomes 600k series the moment someone adds `project_ref` to it, which is exactly why the harness asserts nobody has.
+
+**What it does not license.** Any conclusion about Prometheus at scale. There are 20 projects here and no exporters; the interesting question is 10k projects with cAdvisor and postgres_exporter attached, and this measures neither. It also runs at a 3× higher scrape rate than production, which inflates disk per series and deflates nothing.
+
+**Next measurement to take:** head series and Prometheus RSS with cAdvisor plus one multi-target postgres_exporter attached, at 50 and 500 projects — the point where D-146's per-project budget is actually tested.
+
 ## How to add an entry
 
 1. Number sequentially (`M-002`, …). Never renumber.

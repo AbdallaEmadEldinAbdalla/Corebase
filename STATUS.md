@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-08-31 · **Phase:** Milestone 0 (the provisioning spine) · **T1–T8 done, T9 next**
+**Last updated:** 2026-08-31 · **Phase:** Milestone 0 (the provisioning spine) · **T1–T9 done, T10 next**
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -29,8 +29,11 @@ returns the capacity — 20 create+delete cycles leave nothing behind
 project is serving queries again a few seconds later with no human involved, while
 anything the control plane and the node disagree about is reported — and anything
 holding data is reported *without* being touched
-([M-005](docs/14-roadmap/05-measurements.md)). Nothing above the database exists
-yet: no data API, no auth, no storage, no dashboard.
+([M-005](docs/14-roadmap/05-measurements.md)). All of it is visible: Prometheus
+scrapes both services, Grafana has a provisioned dashboard, logs are in Loki and
+findable by project ref or request id, and the "job stuck" alert has been watched
+firing. Nothing above the database exists yet: no data API, no auth, no storage,
+no customer-facing dashboard.
 
 ## 2. Run it locally
 
@@ -81,6 +84,28 @@ orphan planted to prove the sweep reports rather than deletes:
 pnpm --filter @corebase/worker node-reboot
 ```
 
+### Watching it work
+
+`scripts/dev.sh` starts the API and worker with the right eleven environment
+variables and tees their output to the files Alloy tails, so logs reach Loki:
+
+```bash
+./scripts/dev.sh
+```
+
+Then Grafana is at <http://127.0.0.1:3001/d/corebase-provisioning> (anonymous
+admin, local only) and `./scripts/staging.sh monitoring` prints the URLs plus a
+health check. To verify the whole observability path end to end — scrape targets,
+20 runs on the panel, logs queryable by ref, the alert actually firing:
+
+```bash
+pnpm --filter @corebase/worker observability
+```
+
+**Note:** stop `dev.sh` before running `pnpm test`. A second worker on the same
+Redis consumes the deliveries the queue tests assert on; the suite now detects a
+rival consumer and says so rather than failing cryptically.
+
 Tear down with `./scripts/staging.sh down` (keeps volumes) or `nuke` (destroys
 everything including the local master key — every stored credential becomes
 unreadable, which is the property being rehearsed).
@@ -124,6 +149,7 @@ packages/
   crypto/              envelope encryption (per-secret DEK under a file-resident KEK)
   secrets/             credential persistence — the store-then-apply rule lives here
   queue/               BullMQ + ioredis wiring, idempotency-keyed enqueue
+  metrics/             a Prometheus registry: counters, gauges, histograms
   migrate/             the migration runner (advisory lock, per-file transaction, drift check)
 services/
   api/                 Fastify control-plane API
@@ -140,7 +166,7 @@ boot. Don't use them.
 
 ## 4. What is built, in detail
 
-Test counts are from `pnpm test` and are all currently green: **180 tests**.
+Test counts are from `pnpm test` and are all currently green: **197 tests**.
 
 ### T1 — Repo scaffold · done
 pnpm workspaces + Turborepo. `typecheck` and `test` across every package.
@@ -343,6 +369,39 @@ restarts them, and a container that is *gone* is reconciliation's job. Both are
 asserted, and every project is finally checked by running a query through the
 connection string the API hands out.
 
+### T9 — Observability seed · done · [M-006](docs/14-roadmap/05-measurements.md) · 17 tests
+
+Prometheus + Loki + Alloy + Grafana in the staging stack, `/metrics` on both
+services, one provisioned dashboard and three alert rules.
+
+`@corebase/metrics` is a hand-written registry — three metric types and one
+well-specified text format, the same reasoning that put the Docker client here
+rather than a Docker SDK. What it buys beyond avoiding a dependency is control
+over label sets, which is the thing that actually matters: **D-146's cardinality
+budget is a design constraint**, and a registry that demands the label set at
+construction makes an accidental per-project histogram hard to write. The
+verification harness queries `{__name__=~"corebase_.*", project_ref!=""}` and
+fails if anything matches, so a regression breaks a check rather than a
+Prometheus.
+
+Metrics: provisioning job duration (histogram, `job_type` × `outcome`), per-step
+duration, jobs finished by outcome, node RAM booked as ratio and absolute, jobs by
+state, oldest non-terminal job age, and the reconcile trio. Gauges derived from
+control-plane rows are read at scrape time, never cached — a cached copy is a
+second source of truth whose failure mode is a dashboard that looks healthy
+because the process that would have updated it is the one that died.
+
+Logs carry `ref` and `request_id` **in the line, never as labels** (D-147), so one
+query follows a project's whole history and another shows exactly the work a
+single API call caused. A `request_id` label would be a new Loki stream per
+request.
+
+The alert the plan names — job stuck >10 min — reads a purpose-built gauge
+(**D-204**) so the rule is one comparison, and the harness plants an hour-old
+non-terminal job and waits for the rule to reach `firing`, not merely `pending`: a
+rule whose `for` window never elapses would satisfy "pending" forever, which is
+exactly the bug an alert test should catch.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -382,7 +441,7 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-Eighteen decisions came out of running the thing rather than planning it. Full text in
+Twenty-one decisions came out of running the thing rather than planning it. Full text in
 the [decision log](docs/00-foundation/05-decision-log.md); the log holds
 D-001…D-192 and is binding when two documents disagree.
 
@@ -406,6 +465,9 @@ D-001…D-192 and is binding when two documents disagree.
 | D-199 | A soft-deleted project stays visible; only a purged one is gone | `deleted_at IS NULL` hid the project the moment it was deleted, making the recovery window unusable |
 | D-200 | Reconciliation repairs by enqueueing the provisioning saga, bounded at 3/hour | One convergence path, already idempotent; a bespoke restart would be a second, less-tested one |
 | D-201 | Each sweep persists its report to `nodes.last_reconcile` | "Is reconciliation running at all" should survive log retention and be one SELECT |
+| D-202 | Hand-written metrics registry; no `corebase_*` metric carries `project_ref`, asserted by a check | D-146's budget is a constraint: one per-project histogram would be 600k series |
+| D-203 | The worker re-asserts its node row on every reconcile, not just at startup | A vanished node row leaves the worker up while placement is blind to it |
+| D-204 | The stuck-job alert reads a purpose-built gauge, not a PromQL reconstruction | One comparison is reviewable; a stale series is itself an alert |
 
 ## 7. Measurements
 
@@ -428,6 +490,10 @@ reality is itself the finding.
 - **M-005** — node reboot: Engine API back in 4.7s, the one container that could
   not self-restart rebuilt and serving queries 5.2s after the reboot, 4/4 projects
   answering, and the planted orphan reported without being touched.
+- **M-006** — the monitoring stack costs ~320 MiB across four containers and
+  produces 156 `corebase_*` series, **none carrying `project_ref`**. Says the
+  platform half of D-146's budget is nearly free; says nothing yet about the
+  per-project half, which is the half that can sink a node.
 
 Both were taken on an ARM Docker VM with Postgres only — no PgBouncer, no
 PostgREST. Neither licenses raising the planned density (D-091's 150 projects/node).
@@ -438,8 +504,7 @@ PostgREST. Neither licenses raising the planned density (D-091's 150 projects/no
 
 | Task | What it needs to prove |
 |---|---|
-| **T9 Observability seed** | Structured logs to Loki, three metrics, one Grafana panel, one alert |
-| T10 Demo script | create → poll → `psql` → delete, green end to end |
+| **T10 Demo script** | create → poll → `psql` → delete, green end to end |
 
 Then a **Milestone-0 retro** (D-169) that corrects the cost model and density
 assumptions with the measured numbers — part of the milestone, not an afterthought.
@@ -458,6 +523,14 @@ storage, realtime, the dashboard, the CLI, the SDK. All planned in detail under
 - Reconciliation has no gateway-route drift class, because there is no gateway. It
   also has no way to *resolve* an orphan: it reports them forever until a human
   acts, and there is no operator tooling for that yet.
+- No Alertmanager. Alerts are verified as `firing` in Prometheus; routing to a
+  human (page / warn / ticket) is undecided (OQ-146), so nothing wakes anyone up.
+- No per-project metrics. cAdvisor and postgres_exporter are the per-project half
+  of D-146's inventory and neither is deployed, so the noisy-neighbour view and
+  the disk ladder have no data behind them yet.
+- Local log shipping tails files because the API and worker are host processes
+  here. Production discovers Docker json-file logs instead — same shipper, but the
+  discovery path is untested locally.
 
 - The WAL archive writes to the container filesystem, not the volume, so it does not
   survive container replacement. Belongs with backups, not with provisioning.
