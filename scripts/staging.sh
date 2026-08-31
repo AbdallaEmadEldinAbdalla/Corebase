@@ -22,9 +22,20 @@ node_docker() {
 
 pull_certs() {
   mkdir -p "$CERTS"
+  # `cat` through a host redirection rather than `docker cp`, so the *host* shell
+  # creates each file under the invoking user and umask.
+  #
+  # `docker cp` carries the container's ownership and mode out with the archive.
+  # Docker Desktop remaps that to the local user, so this worked on macOS for
+  # months; on a Linux runner the files landed as root-owned and the Docker CLI
+  # then failed with `open .../ca.pem: permission denied` on its own --tlscacert.
+  # Redirection has no ownership to preserve, which removes the difference rather
+  # than papering over it with sudo.
   for f in ca.pem cert.pem key.pem; do
-    docker cp "cb-data-node:/certs/client/$f" "$CERTS/$f" >/dev/null
+    docker exec cb-data-node cat "/certs/client/$f" > "$CERTS/$f"
+    [ -s "$CERTS/$f" ] || { echo "  ✗ $f came back empty from the data node"; exit 1; }
   done
+  chmod 644 "$CERTS/ca.pem" "$CERTS/cert.pem"
   chmod 600 "$CERTS/key.pem"
 }
 
