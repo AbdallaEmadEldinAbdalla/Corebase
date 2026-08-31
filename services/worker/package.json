@@ -9,7 +9,8 @@
     "test": "vitest run --passWithNoTests",
     "bench": "node --experimental-strip-types bench/provision.mts",
     "kill-matrix": "node --experimental-strip-types kill-matrix/run.mts",
-    "lifecycle": "node --experimental-strip-types bench/lifecycle.mts"
+    "lifecycle": "node --experimental-strip-types bench/lifecycle.mts",
+    "node-reboot": "node --experimental-strip-types bench/node-reboot.mts"
   },
   "dependencies": {
     "@corebase/types": "workspace:*",
