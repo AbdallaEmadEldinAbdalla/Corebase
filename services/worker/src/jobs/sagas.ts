@@ -2,7 +2,15 @@ import type { Pool } from 'pg';
 import type { SagaStep, SagaContext } from './runner.ts';
 import { allocateNode, releaseNode } from '../placement.ts';
 import type { Docker } from '../docker.ts';
-import { buildContainerSpec, containerName, IMAGE, LABEL_MANAGED, LABEL_REF } from '../container-spec.ts';
+import {
+  buildContainerSpec, bootstrapPassword, containerName, IMAGE, LABEL_MANAGED, LABEL_REF,
+} from '../container-spec.ts';
+import type { SecretStore } from '@corebase/secrets';
+import { SECRET_NAMES } from '@corebase/secrets';
+import {
+  auditImageRoles, connectAsSuperuser, ensureDeveloperRole, setRolePassword,
+  DEVELOPER_ROLE,
+} from '../project-admin.ts';
 
 export interface SagaDeps {
   pool: Pool;
@@ -10,16 +18,44 @@ export interface SagaDeps {
   bootstrapSecret?: string;
   region?: string;
   healthTimeoutMs?: number;
+  /** Credential persistence (D-035). Absent means the T5e steps cannot run. */
+  secrets?: SecretStore;
+  /** Domain the customer's connection host is built from. */
+  projectDomain?: string;
 }
 
 /** Placement row for a project — every Docker step needs it. */
 async function loadPlacement(pool: Pool, projectId: string) {
   const { rows } = await pool.query<{
-    volume_name: string; port: number; ram_limit_mb: number; container_id: string | null;
-  }>(`SELECT volume_name, port, ram_limit_mb, container_id
-        FROM project_databases WHERE project_id = $1`, [projectId]);
+    volume_name: string; port: number; pooler_port: number; ram_limit_mb: number;
+    container_id: string | null; node_address: string | null; node_hostname: string;
+  }>(`SELECT d.volume_name, d.port, d.pooler_port, d.ram_limit_mb, d.container_id,
+             n.address AS node_address, n.hostname AS node_hostname
+        FROM project_databases d JOIN nodes n ON n.id = d.node_id
+       WHERE d.project_id = $1`, [projectId]);
   if (!rows[0]) throw new Error('no placement row — allocate_node must run first');
   return rows[0];
+}
+
+function requireSecrets(deps: SagaDeps): SecretStore {
+  if (!deps.secrets) {
+    throw new Error('no secret store configured — the control plane needs its KEK (CB_KEK_DIR)');
+  }
+  return deps.secrets;
+}
+
+/**
+ * Where the control plane reaches this project's database. `address` is the
+ * route; `hostname` is only an identity, and using it as a route works right up
+ * until an environment where it does not resolve.
+ */
+function adminEndpoint(place: { node_address: string | null; node_hostname: string; port: number }) {
+  if (!place.node_address) {
+    throw new Error(
+      `node ${place.node_hostname} has no address recorded — the control plane ` +
+      'cannot open an admin connection to a node it does not know how to reach');
+  }
+  return { host: place.node_address, port: place.port };
 }
 
 function requireDocker(deps: SagaDeps): Docker {
@@ -44,6 +80,20 @@ async function loadProject(pool: Pool, projectId: string) {
     [projectId]);
   if (!rows[0]) throw new Error(`project ${projectId} no longer exists`);
   return rows[0];
+}
+
+/**
+ * The superuser passwords that could be live right now, newest first: the stored
+ * random one if store_credentials has already run, then the derived bootstrap
+ * password the container was created with.
+ */
+async function superuserCandidates(deps: SagaDeps, projectId: string): Promise<string[]> {
+  const out: string[] = [];
+  const stored = await deps.secrets?.get(projectId, SECRET_NAMES.postgres);
+  if (stored) out.push(stored);
+  if (deps.bootstrapSecret) out.push(bootstrapPassword(deps.bootstrapSecret, projectId));
+  if (out.length === 0) throw new Error('no candidate superuser password available');
+  return out;
 }
 
 export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>[]> {
@@ -154,8 +204,13 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
         // exitCode null means the container cannot exec yet (still running
         // initdb, restarting, or stopped); inspect is the authority on whether
         // that is temporary.
+        //
+        // -h forces a TCP probe (D-190). Without it pg_isready uses the unix
+        // socket, which the entrypoint's init-phase server also answers on — so
+        // the gate passed while the real server had not started listening, and
+        // the next step got ECONNRESET on the published port.
         const { exitCode } = await docker.exec(id,
-          ['pg_isready', '-U', 'postgres', '-d', 'postgres', '-q']);
+          ['pg_isready', '-h', '127.0.0.1', '-p', '5432', '-U', 'postgres', '-d', 'postgres', '-q']);
         if (exitCode === 0) {
           // Only now is a restart policy safe to attach (D-184).
           await docker.setRestartPolicy(id, 'unless-stopped');
@@ -185,16 +240,154 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
     },
   };
 
+
+  /**
+   * The role model runs at provision time so it is never retrofitted (T5 in
+   * milestone 0). The NOLOGIN trio and `authenticator` come from the image's
+   * init scripts; this step verifies them and adds the customer's role, which
+   * the control plane owns because its password is a control-plane secret.
+   */
+  const createBaseRoles: SagaStep<SagaContext> = {
+    name: 'create_base_roles',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const place = await loadPlacement(deps.pool, projectId);
+      const endpoint = adminEndpoint(place);
+      const client = await connectAsSuperuser({
+        ...endpoint,
+        passwords: await superuserCandidates(deps, projectId),
+      });
+      try {
+        const audit = await auditImageRoles(client);
+        if (audit.missing.length > 0) {
+          // Not recoverable by retrying: the node is running an image without
+          // the role model, and a project created against it would have no
+          // API-facing privilege levels at all.
+          throw new Error(
+            `project image is missing roles ${audit.missing.join(', ')} — the node ` +
+            'is running an image that predates the role model (init/10-roles.sql)');
+        }
+        const { created } = await ensureDeveloperRole(client);
+        ctx.log(created ? 'created the developer role' : 'developer role already present',
+          { roles_verified: audit.present.length });
+      } finally {
+        await client.end().catch(() => {});
+      }
+    },
+  };
+
+  /**
+   * Generate and store every credential, then apply it.
+   *
+   * Store-then-apply is the whole design (see secrets.ts): a crash after storing
+   * leaves a password that is not yet in effect and the retry applies it; a crash
+   * after applying but before storing would leave a database whose password does
+   * not exist anywhere. The bootstrap password from T5d is replaced here — until
+   * this step runs, every project's superuser password is derivable from one
+   * fleet-wide secret, which is exactly as bad as it sounds.
+   */
+  const storeCredentials: SagaStep<SagaContext> = {
+    name: 'store_credentials',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const secrets = requireSecrets(deps);
+      const place = await loadPlacement(deps.pool, projectId);
+      const endpoint = adminEndpoint(place);
+
+      // Control plane first, in a fixed order so a partial run is always a
+      // prefix of a complete one.
+      const wanted = [
+        { name: SECRET_NAMES.postgres, role: 'postgres' },
+        { name: SECRET_NAMES.developer, role: DEVELOPER_ROLE },
+        { name: SECRET_NAMES.authenticator, role: 'authenticator' },
+      ];
+      const stored: Array<{ role: string; value: string; created: boolean }> = [];
+      for (const w of wanted) {
+        const { value, created } = await secrets.ensure(projectId, w.name);
+        stored.push({ role: w.role, value, created });
+      }
+      ctx.log('credentials persisted', {
+        generated: stored.filter((s) => s.created).map((s) => s.role),
+        reused: stored.filter((s) => !s.created).map((s) => s.role),
+      });
+
+      const client = await connectAsSuperuser({
+        ...endpoint,
+        passwords: await superuserCandidates(deps, projectId),
+      });
+      try {
+        for (const s of stored) await setRolePassword(client, s.role, s.value);
+        ctx.log('credentials applied to the project database', { roles: stored.map((s) => s.role) });
+      } finally {
+        await client.end().catch(() => {});
+      }
+    },
+  };
+
+  /**
+   * The customer-facing address. Stored rather than derived because the naming
+   * scheme is region- and generation-dependent, and a project must keep
+   * answering on the name it was handed.
+   */
+  const writeConnection: SagaStep<SagaContext> = {
+    name: 'write_connection',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const project = await loadProject(deps.pool, projectId);
+      const host = `${project.ref}.${deps.projectDomain ?? 'corebase.co'}`;
+      const { rows } = await deps.pool.query<{ connection_host: string | null }>(
+        `UPDATE project_databases
+            SET connection_host = COALESCE(connection_host, $2)
+          WHERE project_id = $1
+        RETURNING connection_host`, [projectId, host]);
+      ctx.log('connection details written', { host: rows[0]?.connection_host });
+    },
+  };
+
+  /**
+   * The only step that makes the project visible as usable. It runs last, and it
+   * refuses to run if anything it depends on is not actually true — a project
+   * marked ready without credentials is a support ticket that looks like a bug
+   * in the customer's code.
+   */
+  const markReady: SagaStep<SagaContext> = {
+    name: 'mark_ready',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const { rows } = await deps.pool.query<{
+        db_status: string; connection_host: string | null; container_id: string | null;
+        secret_count: number;
+      }>(`SELECT d.status::text AS db_status, d.connection_host, d.container_id,
+                 (SELECT count(*)::int FROM project_secrets s
+                   WHERE s.project_id = d.project_id AND s.state = 'active') AS secret_count
+            FROM project_databases d WHERE d.project_id = $1`, [projectId]);
+      const row = rows[0];
+      if (!row) throw new Error('no placement row — cannot mark a project ready');
+      const problems: string[] = [];
+      if (row.db_status !== 'running') problems.push(`database status is ${row.db_status}`);
+      if (!row.container_id) problems.push('no container recorded');
+      if (!row.connection_host) problems.push('no connection host');
+      if (row.secret_count < 3) problems.push(`only ${row.secret_count} credentials stored`);
+      if (problems.length > 0) {
+        throw new Error(`refusing to mark ready: ${problems.join('; ')}`);
+      }
+
+      await deps.pool.query(
+        `UPDATE projects SET status = 'ready' WHERE id = $1 AND status <> 'ready'`, [projectId]);
+      ctx.log('project is ready');
+    },
+  };
+
   return {
     provision_project: [
       allocate,                      // T5c
       createVolume,                  // T5d
       startContainer,                // T5d
       waitHealthy,                   // T5d
-      pending('create_base_roles'),  // T5e
-      pending('store_credentials'),  // T5e
-      pending('write_connection'),   // T5e
-      pending('mark_ready'),         // T5e
+      createBaseRoles,               // T5e
+      storeCredentials,              // T5e
+      writeConnection,               // T5e
+      markReady,                     // T5e
     ],
     delete_project: [
       pending('stop_container'),     // T7

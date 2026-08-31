@@ -5,6 +5,8 @@ import { createRunner } from './jobs/runner.ts';
 import { buildSagas } from './jobs/sagas.ts';
 import { registerNode } from './placement.ts';
 import { createDocker } from './docker.ts';
+import { createEnvelope } from '@corebase/crypto';
+import { createSecretStore } from '@corebase/secrets';
 import { createSweeper } from './sweeper.ts';
 
 const dbUrl = process.env.CB_CONTROL_DATABASE_URL;
@@ -29,6 +31,10 @@ const nodeId = await registerNode(pool, {
   hostname: process.env.CB_NODE_HOSTNAME ?? 'data-node-local',
   ramTotalMb: Number(process.env.CB_NODE_RAM_MB ?? 4096),
   diskTotalGb: Number(process.env.CB_NODE_DISK_GB ?? 100),
+  // How the control plane reaches this node's project ports. Defaults to the
+  // Docker host because in every current topology the Engine API and the project
+  // ports live on the same address.
+  address: process.env.CB_NODE_ADDRESS ?? process.env.CB_DOCKER_HOST ?? '127.0.0.1',
   labels: { managed_by: 'worker', environment: process.env.CB_ENV ?? 'staging' },
 });
 log('info', 'node registered', { nodeId, hostname: process.env.CB_NODE_HOSTNAME ?? 'data-node-local' });
@@ -49,8 +55,25 @@ if (docker) {
   log('warn', 'no Docker client configured — container steps will fail', {});
 }
 
+// The KEK is not optional: without it, credentials cannot be stored, and a
+// project provisioned without credentials is a project nobody can connect to.
+const kekDir = process.env.CB_KEK_DIR;
+if (!kekDir) {
+  throw new Error(
+    'CB_KEK_DIR is required — the control plane cannot store project credentials ' +
+    'without its master key (D-035/D-075)');
+}
+const envelope = createEnvelope({
+  kekDir,
+  ...(process.env.CB_KEK_ID ? { kekId: process.env.CB_KEK_ID } : {}),
+});
+log('info', 'master key loaded', { kek_id: envelope.kekId });
+const secrets = createSecretStore(pool, envelope);
+
 const sagas = buildSagas({
   pool,
+  secrets,
+  ...(process.env.CB_PROJECT_DOMAIN ? { projectDomain: process.env.CB_PROJECT_DOMAIN } : {}),
   ...(docker ? { docker } : {}),
   bootstrapSecret: process.env.CB_BOOTSTRAP_SECRET ?? '',
   healthTimeoutMs: Number(process.env.CB_HEALTH_TIMEOUT_MS ?? 60_000),

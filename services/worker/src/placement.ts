@@ -54,26 +54,42 @@ export function pickPort(used: readonly number[], range: readonly [number, numbe
 export class NoCapacityError extends Error {}
 export class NoPortsError extends Error {}
 
-export const PG_PORT_RANGE: [number, number] = [5433, 6432];
-export const POOLER_PORT_RANGE: [number, number] = [6433, 7432];
+/**
+ * Fleet port ranges. Narrowable by env because a local data node republishes the
+ * range through a proxy, and 1000 published ports is seconds of startup for no
+ * extra coverage — the allocator has to agree with what is actually reachable.
+ */
+const envRange = (min: string, max: string, dflt: [number, number]): [number, number] =>
+  [Number(process.env[min] ?? dflt[0]), Number(process.env[max] ?? dflt[1])];
+
+export const PG_PORT_RANGE = envRange('CB_PG_PORT_MIN', 'CB_PG_PORT_MAX', [5433, 6432]);
+export const POOLER_PORT_RANGE = envRange('CB_POOLER_PORT_MIN', 'CB_POOLER_PORT_MAX', [6433, 7432]);
 
 export interface NodeRegistration {
   hostname: string; region?: string; ramTotalMb: number; diskTotalGb: number;
   labels?: Record<string, unknown>;
+  /**
+   * Address the control plane uses to reach this node's project ports. Separate
+   * from `hostname`, which is what the node calls itself: the two differ in
+   * every environment where the control plane is not on the node's own DNS.
+   */
+  address?: string;
 }
 
 /** Idempotent: a worker restart re-registers the same node, it does not duplicate it. */
 export async function registerNode(pool: Pool, n: NodeRegistration): Promise<string> {
   const { rows } = await pool.query<{ id: string }>(
-    `INSERT INTO nodes (hostname, region, ram_total_mb, disk_total_gb, labels, last_seen_at, status)
-     VALUES ($1, $2, $3, $4, $5::jsonb, now(), 'active')
+    `INSERT INTO nodes (hostname, region, ram_total_mb, disk_total_gb, labels, address, last_seen_at, status)
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6, now(), 'active')
      ON CONFLICT (hostname) DO UPDATE
        SET last_seen_at = now(),
            ram_total_mb = EXCLUDED.ram_total_mb,
            disk_total_gb = EXCLUDED.disk_total_gb,
-           labels = EXCLUDED.labels
+           labels = EXCLUDED.labels,
+           address = COALESCE(EXCLUDED.address, nodes.address)
      RETURNING id`,
-    [n.hostname, n.region ?? 'eu-central', n.ramTotalMb, n.diskTotalGb, JSON.stringify(n.labels ?? {})],
+    [n.hostname, n.region ?? 'eu-central', n.ramTotalMb, n.diskTotalGb,
+     JSON.stringify(n.labels ?? {}), n.address ?? null],
   );
   return rows[0]!.id;
 }
