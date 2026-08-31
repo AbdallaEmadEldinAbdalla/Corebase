@@ -10,6 +10,8 @@ export const IMAGE = process.env.CB_PG_IMAGE ?? 'corebase/postgres:17.5';
 export const CONTAINER_PREFIX = 'cb-';
 export const LABEL_REF = 'com.corebase.project.ref';
 export const LABEL_MANAGED = 'com.corebase.managed';
+/** Which of a project's containers this is: absent means the database (P2b). */
+export const LABEL_ROLE = 'com.corebase.role';
 
 export const containerName = (ref: string) => `${CONTAINER_PREFIX}${ref}`;
 
@@ -27,6 +29,65 @@ export const containerName = (ref: string) => `${CONTAINER_PREFIX}${ref}`;
  */
 export const networkName = (ref: string) => `${CONTAINER_PREFIX}${ref}-net`;
 export const DB_ALIAS = 'db';
+
+/** The pooler's container and the name it answers to on the project network. */
+export const poolerName = (ref: string) => `${CONTAINER_PREFIX}${ref}-pooler`;
+export const POOLER_ALIAS = 'pooler';
+export const POOLER_IMAGE = process.env.CB_POOLER_IMAGE ?? 'corebase/pgbouncer:1.23';
+/** PgBouncer's listen port inside the container. The host port is allocated. */
+export const POOLER_PORT = 6432;
+
+export interface PoolerSpecArgs {
+  ref: string;
+  networkName: string;
+  /** Host port from placement (`project_databases.pooler_port`). */
+  hostPort: number;
+  /** `pgbouncer_auth`'s password — the only secret the pooler holds (D-074). */
+  authPassword: string;
+  image?: string;
+  restartPolicy?: string;
+  /** Whole cores; the pooler is single-threaded so more than one buys nothing. */
+  cpuLimit?: number;
+  ramLimitMb?: number;
+}
+
+/**
+ * The pooler sidecar.
+ *
+ * Sized small on purpose: the doc budgets ~10–20 MiB RSS per pooler and PgBouncer
+ * is single-threaded, so a generous CPU allowance would only reserve capacity
+ * nothing can use. These are the numbers the cost model books per project, and a
+ * pooler that exceeds them is a signal worth an OOM rather than a silent tenant
+ * that quietly costs three times its booking.
+ *
+ * No restart policy at create time, promoted after the health gate — the same rule
+ * as the database (D-184), and for the same reason: a pooler that cannot reach its
+ * database would otherwise flap forever behind a permanent "restarting" state.
+ */
+export function buildPoolerSpec(a: PoolerSpecArgs): ContainerSpec {
+  const memBytes = (a.ramLimitMb ?? 64) * 1024 * 1024;
+  return {
+    Image: a.image ?? POOLER_IMAGE,
+    Env: [`PGBOUNCER_AUTH_PASSWORD=${a.authPassword}`],
+    Labels: {
+      [LABEL_REF]: a.ref,
+      [LABEL_MANAGED]: 'true',
+      // Distinguishes the two containers a project now has, so reconciliation and
+      // the purge can reason about them separately without parsing names.
+      [LABEL_ROLE]: 'pooler',
+    },
+    HostConfig: {
+      Memory: memBytes,
+      MemorySwap: memBytes,
+      NanoCpus: Math.round((a.cpuLimit ?? 0.25) * 1e9),
+      RestartPolicy: { Name: a.restartPolicy ?? 'no' },
+      Mounts: [],
+      PortBindings: { [`${POOLER_PORT}/tcp`]: [{ HostPort: String(a.hostPort) }] },
+    },
+    ExposedPorts: { [`${POOLER_PORT}/tcp`]: {} },
+    NetworkingConfig: { EndpointsConfig: { [a.networkName]: { Aliases: [POOLER_ALIAS] } } },
+  };
+}
 
 /**
  * Bootstrap superuser password: HMAC(secret, project_id).
@@ -72,6 +133,7 @@ export function buildContainerSpec(a: SpecArgs): ContainerSpec {
     Labels: {
       [LABEL_REF]: a.ref,
       [LABEL_MANAGED]: 'true',
+      [LABEL_ROLE]: 'database',
     },
     HostConfig: {
       // cgroup limits from day one (D-055). MemorySwap == Memory disables swap:

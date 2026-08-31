@@ -10,7 +10,7 @@ import { createRedis, createQueue, type Redis, type Queue, type ProvisioningJobD
 import { createDocker, type Docker } from './docker.ts';
 import { buildSagas } from './jobs/sagas.ts';
 import { registerNode, volumeNameFor } from './placement.ts';
-import { buildContainerSpec, containerName, IMAGE, LABEL_MANAGED, LABEL_REF } from './container-spec.ts';
+import { buildContainerSpec, containerName, poolerName, IMAGE, LABEL_MANAGED, LABEL_REF } from './container-spec.ts';
 import { createReconciler, REPAIR_LIMIT_PER_HOUR } from './reconcile.ts';
 import type { JobRecord } from './jobs/repo.ts';
 import type { SagaStep, SagaContext } from './jobs/runner.ts';
@@ -84,6 +84,11 @@ afterAll(async () => {
   if (up) { await wipeNode(); await queue?.close(); await redis?.quit(); }
   await pool?.end();
   rmSync(kekDir, { recursive: true, force: true });
+  // Release the client's keep-alive sockets. Each test file builds its own Docker
+  // client, so without this every file leaves up to maxSockets parked connections
+  // to the node for the rest of the run — which is how the node's listener ended
+  // up wedged even after the agent was bounded (D-230).
+  docker?.close?.();
 }, 90_000);
 
 beforeEach(async () => {
@@ -105,10 +110,16 @@ const t = (n: string, fn: () => Promise<void>, ms = 120_000) =>
 let seq = 0;
 const mkRef = () => 'r' + String(Date.now() % 100000) + String(++seq).padStart(14, 'x');
 
-const PROVISION = [
-  'allocate_node', 'create_volume', 'start_container', 'wait_healthy',
-  'create_base_roles', 'store_credentials', 'generate_api_keys', 'write_connection', 'mark_ready',
-];
+/**
+ * Read from the saga, not written out again — fourth time a hand-kept copy of this
+ * list has broken on a step insertion. `start_pooler` was the last one: every test
+ * here then failed with "refusing to mark ready: no pooler recorded", which is
+ * mark_ready doing exactly its job against a provision that skipped a step.
+ */
+const PROVISION: string[] = buildSagas({
+  pool: undefined as never, docker: undefined as never, secrets: undefined as never,
+  bootstrapSecret: SECRET, projectDomain: 'corebase.test',
+}).provision_project!.map((s: SagaStep<SagaContext>) => s.name);
 
 async function runSteps(jobType: string, projectId: string, names: string[]) {
   const sagas = buildSagas({
@@ -150,7 +161,8 @@ describe('T8 — a converged node reports no drift', () => {
     expect(report.clean).toBe(true);
     expect(report.drift).toEqual([]);
     expect(report.projects_checked).toBe(1);
-    expect(report.containers_seen).toBe(1);
+    // Two: a project is a database *and* a pooler since P2b.
+    expect(report.containers_seen).toBe(2);
   });
 
   t('records the report on the node so "is it running" is one SELECT', async () => {
@@ -164,6 +176,28 @@ describe('T8 — a converged node reports no drift', () => {
 });
 
 describe('T8 — drift it repairs', () => {
+  t('a stopped pooler under a ready project is drift, even though the database is fine', async () => {
+    // The direction of this bug is what makes it worth a test. Before P2b's role
+    // label, reconciliation keyed containers by project ref alone, so a project's
+    // two containers overwrote each other in the map — and a *stopped database*
+    // read as healthy for as long as its pooler was up. The inverse, this case,
+    // was invisible entirely: DATABASE_URL is the string the docs tell every
+    // application to use, and a project whose pooler is down is broken from the
+    // customer's side while every control-plane row says ready.
+    const p = await provisioned();
+    await docker.setRestartPolicy(poolerName(p.ref), 'no');
+    await docker.stopContainer(poolerName(p.ref));
+
+    const report = await reconciler().reconcileOnce();
+    expect(report.clean).toBe(false);
+    const d = report.drift.find((x) => x.class === 'pooler_not_running');
+    expect(d, 'a dead pooler was not reported as drift').toBeDefined();
+    expect(d!.action).toBe('repair_enqueued');
+    // And the database is NOT reported, because it is genuinely running — the two
+    // containers are now distinguished rather than conflated.
+    expect(report.drift.map((x) => x.class)).not.toContain('container_not_running');
+  });
+
   t('a stopped container under a ready project is repaired', async () => {
     const p = await provisioned();
     await docker.setRestartPolicy(containerName(p.ref), 'no');

@@ -2,7 +2,7 @@ import type { Pool } from 'pg';
 import type { Queue, ProvisioningJobData } from '@corebase/queue';
 import { enqueueProvisioning } from '@corebase/queue';
 import type { Docker } from './docker.ts';
-import { containerName, LABEL_MANAGED, LABEL_REF } from './container-spec.ts';
+import { containerName, LABEL_MANAGED, LABEL_REF, LABEL_ROLE } from './container-spec.ts';
 import { PLAN_RAM_MB, volumeNameFor } from './placement.ts';
 
 /**
@@ -40,6 +40,7 @@ export interface ReconcileOptions {
 
 export interface Drift {
   class: 'container_not_running' | 'zombie_container' | 'orphan_container'
+    | 'pooler_not_running'
     | 'orphan_volume' | 'orphan_network' | 'reservation_drift';
   ref?: string;
   detail: string;
@@ -124,11 +125,24 @@ export function createReconciler(opts: ReconcileOptions) {
            WHERE p.status <> 'deleted' OR d.project_id IS NOT NULL`);
 
       // ── actual state ─────────────────────────────────────────────────────
+      //
+      // A project has *two* containers now: its database and its pooler (P2b).
+      // Keying only on the ref, as this did, silently conflated them — whichever
+      // came last in the listing won, so a stopped database read as healthy for as
+      // long as its pooler was up. That is the worst possible direction for this
+      // bug: reconciliation exists to notice exactly that.
+      //
+      // The role label is the discriminator. Containers created before P2b carry
+      // no role label, and those are databases — the pooler did not exist then.
       const containers = await opts.docker.listContainers(`${LABEL_MANAGED}=true`);
       const byRef = new Map<string, { running: boolean; id: string }>();
+      const poolerByRef = new Map<string, { running: boolean; id: string }>();
       for (const c of containers) {
         const ref = c.Labels?.[LABEL_REF];
-        if (ref) byRef.set(ref, { running: c.State === 'running', id: c.Id });
+        if (!ref) continue;
+        const entry = { running: c.State === 'running', id: c.Id };
+        if (c.Labels?.[LABEL_ROLE] === 'pooler') poolerByRef.set(ref, entry);
+        else byRef.set(ref, entry);
       }
 
       // ── diff, project by project ─────────────────────────────────────────
@@ -142,6 +156,38 @@ export function createReconciler(opts: ReconcileOptions) {
             detail: actual
               ? `project is ${p.status} but its container is not running`
               : `project is ${p.status} and has no container on the node`,
+          });
+        }
+
+        // The pooler is not optional: DATABASE_URL is the string the docs tell
+        // every application to use, so a ready project with a dead pooler is a
+        // broken project even though its database is fine. Repaired the same way
+        // as a missing database — by re-running the provisioning saga, which is
+        // idempotent and already knows how to start a pooler (D-200).
+        if (SHOULD_RUN.has(p.status) && actual?.running) {
+          const pooler = poolerByRef.get(p.ref);
+          if (!pooler || !pooler.running) {
+            const action = await enqueueRepair(p.id, p.ref);
+            drift.push({
+              class: 'pooler_not_running', ref: p.ref, action,
+              detail: pooler
+                ? `project is ${p.status} but its pooler is not running — DATABASE_URL is dead`
+                : `project is ${p.status} and has no pooler on the node — DATABASE_URL is dead`,
+            });
+          }
+        }
+
+        if (SHOULD_NOT_RUN.has(p.status) && poolerByRef.get(p.ref)?.running) {
+          // A pooler outliving its project answers connections and then fails
+          // them, which reads as "the database is broken" rather than "the project
+          // is gone". Stopping is reversible, so it is automatic.
+          const pooler = poolerByRef.get(p.ref)!;
+          await opts.docker.setRestartPolicy(pooler.id, 'no').catch(() => {});
+          await opts.docker.stopContainer(pooler.id);
+          log('warn', 'drift repaired: zombie pooler stopped', { ref: p.ref, status: p.status });
+          drift.push({
+            class: 'zombie_container', ref: p.ref, action: 'stopped',
+            detail: `pooler was running while the project is ${p.status}`,
           });
         }
 
@@ -160,7 +206,7 @@ export function createReconciler(opts: ReconcileOptions) {
 
       // ── things on the node the control plane knows nothing about ──────────
       const knownRefs = new Set(desired.map((d) => d.ref));
-      for (const [ref, actual] of byRef) {
+      for (const [ref, actual] of [...byRef, ...poolerByRef]) {
         if (knownRefs.has(ref)) continue;
         // Alert only. A container with no row might be the visible half of a
         // project row that a bad migration dropped, and removing it would turn a

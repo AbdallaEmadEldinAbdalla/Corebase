@@ -1,10 +1,10 @@
-import type { Pool } from 'pg';
+import { Client as PgClient, type Pool } from 'pg';
 import type { SagaStep, SagaContext } from './runner.ts';
 import { allocateNode, releaseNode, volumeNameFor } from '../placement.ts';
 import type { Docker } from '../docker.ts';
 import {
-  buildContainerSpec, bootstrapPassword, containerName, networkName,
-  IMAGE, LABEL_MANAGED, LABEL_REF,
+  buildContainerSpec, buildPoolerSpec, bootstrapPassword, containerName, networkName,
+  poolerName, IMAGE, POOLER_IMAGE, LABEL_MANAGED, LABEL_REF,
 } from '../container-spec.ts';
 import type { SecretStore } from '@corebase/secrets';
 import { SECRET_NAMES } from '@corebase/secrets';
@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import { generateKeypair, sign as signJwt, projectKeyClaims } from '@corebase/jwt';
 import {
   auditImageRoles, connectAsSuperuser, ensureDeveloperRole, setRolePassword,
-  DEVELOPER_ROLE,
+  DEVELOPER_ROLE, POOLER_AUTH_ROLE,
 } from '../project-admin.ts';
 
 export interface SagaDeps {
@@ -41,8 +41,10 @@ export interface SagaDeps {
 async function loadPlacement(pool: Pool, projectId: string) {
   const { rows } = await pool.query<{
     volume_name: string; port: number; pooler_port: number; ram_limit_mb: number;
-    container_id: string | null; node_address: string | null; node_hostname: string;
+    container_id: string | null; pooler_container_id: string | null;
+    node_address: string | null; node_hostname: string;
   }>(`SELECT d.volume_name, d.port, d.pooler_port, d.ram_limit_mb, d.container_id,
+             d.pooler_container_id,
              n.address AS node_address, n.hostname AS node_hostname
         FROM project_databases d JOIN nodes n ON n.id = d.node_id
        WHERE d.project_id = $1`, [projectId]);
@@ -69,6 +71,18 @@ function adminEndpoint(place: { node_address: string | null; node_hostname: stri
       'cannot open an admin connection to a node it does not know how to reach');
   }
   return { host: place.node_address, port: place.port };
+}
+
+/** The same rule for the pooled port (P2b): the node's address, never its name. */
+function poolerEndpoint(
+  place: { node_address: string | null; node_hostname: string; pooler_port: number },
+) {
+  if (!place.node_address) {
+    throw new Error(
+      `node ${place.node_hostname} has no address recorded — the control plane ` +
+      'cannot reach the pooler on a node it does not know how to reach');
+  }
+  return { host: place.node_address, port: place.pooler_port };
 }
 
 function requireDocker(deps: SagaDeps): Docker {
@@ -359,6 +373,10 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
         { name: SECRET_NAMES.postgres, role: 'postgres' },
         { name: SECRET_NAMES.developer, role: DEVELOPER_ROLE },
         { name: SECRET_NAMES.authenticator, role: 'authenticator' },
+        // P2b: the pooler authenticates to Postgres as this role to run the
+        // auth_query lookup. Generated here like every other credential so the
+        // pooler's config is rendered from the store, never from a literal.
+        { name: SECRET_NAMES.poolerAuth, role: POOLER_AUTH_ROLE },
       ];
       const stored: Array<{ role: string; value: string; created: boolean }> = [];
       for (const w of wanted) {
@@ -404,6 +422,134 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
   };
 
   /**
+   * The project's connection pooler (P2b, D-015).
+   *
+   * It comes after `store_credentials` because the pooler's own credential has to
+   * exist and be *applied* to `pgbouncer_auth` before PgBouncer can authenticate
+   * to Postgres to run its lookup query. Starting it earlier produces a pooler
+   * that is listening and unable to serve anyone, which is the worst of the two
+   * failure modes because it looks healthy.
+   */
+  const startPooler: SagaStep<SagaContext> = {
+    name: 'start_pooler',
+    async run(ctx) {
+      const docker = requireDocker(deps);
+      const projectId = ctx.job.project_id!;
+      const project = await loadProject(deps.pool, projectId);
+      const place = await loadPlacement(deps.pool, projectId);
+      const name = poolerName(project.ref);
+
+      if (!(await docker.imageExists(POOLER_IMAGE))) {
+        // Same reasoning as the database image: a missing image discovered here is
+        // a clear sentence, discovered later it is a container that will not start.
+        throw new Error(
+          `pooler image ${POOLER_IMAGE} is not present on the node — pre-pull it (D-071)`);
+      }
+
+      const secrets = requireSecrets(deps);
+      const authPassword = await secrets.get(projectId, SECRET_NAMES.poolerAuth);
+      if (!authPassword) {
+        // Not a retry-and-hope case: the credential is created by
+        // store_credentials, so its absence means that step has not run. Starting
+        // a pooler without it would produce one that listens and can serve nobody.
+        throw new Error(
+          'the pooler credential is not stored yet — store_credentials must run first');
+      }
+
+      let inspect = await docker.inspectContainer(name);
+      if (!inspect) {
+        const id = await docker.createContainer(name, buildPoolerSpec({
+          ref: project.ref,
+          networkName: await ensureNetwork(ctx, project.ref),
+          hostPort: place.pooler_port,
+          authPassword,
+        }));
+        ctx.log('pooler created', { name, container: id.slice(0, 12), port: place.pooler_port });
+        inspect = await docker.inspectContainer(name);
+      } else {
+        ctx.log('pooler already exists — reusing', { name, state: inspect.State.Status });
+      }
+
+      if (!inspect!.State.Running) {
+        await docker.startContainer(inspect!.Id);
+        ctx.log('pooler started', { name });
+      }
+
+      await deps.pool.query(
+        `UPDATE project_databases SET pooler_container_id = $2 WHERE project_id = $1`,
+        [projectId, inspect!.Id]);
+    },
+  };
+
+  /**
+   * Prove the pooled path end to end before calling the project ready.
+   *
+   * The probe connects as `developer` *through* the pooler and runs a query, which
+   * is the only check that exercises the whole chain: PgBouncer accepted the
+   * client, authenticated itself to Postgres as `pgbouncer_auth`, resolved the
+   * customer's verifier through `corebase.pgbouncer_lookup`, and proxied a real
+   * transaction. A TCP check on 6432 would pass for a pooler that can do none of
+   * that, and "listening" is the least interesting half of working.
+   */
+  const waitPoolerHealthy: SagaStep<SagaContext> = {
+    name: 'wait_pooler_healthy',
+    async run(ctx) {
+      const docker = requireDocker(deps);
+      const projectId = ctx.job.project_id!;
+      const project = await loadProject(deps.pool, projectId);
+      const place = await loadPlacement(deps.pool, projectId);
+      const secrets = requireSecrets(deps);
+      const password = await secrets.get(projectId, SECRET_NAMES.developer);
+      if (!password) {
+        throw new Error(
+          'the developer credential is not stored yet — the pooled path cannot be probed');
+      }
+      const deadline = Date.now() + (deps.healthTimeoutMs ?? 60_000);
+
+      let lastError = 'never attempted';
+      while (Date.now() < deadline) {
+        // Fatal-vs-transient, same discipline as the database gate: a pooler that
+        // has exited will never answer, so waiting out the timeout only delays the
+        // real message.
+        const inspect = await docker.inspectContainer(poolerName(project.ref));
+        if (inspect && !inspect.State.Running && !inspect.State.Restarting) {
+          throw new Error(
+            `pooler exited (${inspect.State.ExitCode}) before it answered: ` +
+            `${inspect.State.Error || 'no error recorded'}`);
+        }
+
+        const endpoint = poolerEndpoint(place);
+        const client = new PgClient({
+          host: endpoint.host,
+          port: endpoint.port,
+          user: DEVELOPER_ROLE,
+          password,
+          database: 'postgres',
+          connectionTimeoutMillis: 3_000,
+          // PgBouncer terminates the client connection itself; TLS to the pooler
+          // is the gateway's job in a later phase, not the pooler's.
+          ssl: false,
+        });
+        try {
+          await client.connect();
+          const { rows } = await client.query<{ ok: string }>(
+            `SELECT current_user || '@' || inet_server_port() AS ok`);
+          ctx.log('pooled path verified', {
+            via: `${endpoint.host}:${endpoint.port}`, reached: rows[0]?.ok,
+          });
+          return;
+        } catch (err) {
+          lastError = (err as Error).message;
+        } finally {
+          await client.end().catch(() => {});
+        }
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      throw new Error(`pooler never served a connection: ${lastError}`);
+    },
+  };
+
+  /**
    * The only step that makes the project visible as usable. It runs last, and it
    * refuses to run if anything it depends on is not actually true — a project
    * marked ready without credentials is a support ticket that looks like a bug
@@ -415,8 +561,10 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       const projectId = ctx.job.project_id!;
       const { rows } = await deps.pool.query<{
         db_status: string; connection_host: string | null; container_id: string | null;
+        pooler_container_id: string | null;
         secret_count: number; api_key_count: number;
       }>(`SELECT d.status::text AS db_status, d.connection_host, d.container_id,
+                 d.pooler_container_id,
                  (SELECT count(*)::int FROM project_secrets s
                    WHERE s.project_id = d.project_id AND s.state = 'active') AS secret_count,
                  (SELECT count(*)::int FROM project_api_keys k
@@ -428,7 +576,13 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       if (row.db_status !== 'running') problems.push(`database status is ${row.db_status}`);
       if (!row.container_id) problems.push('no container recorded');
       if (!row.connection_host) problems.push('no connection host');
-      if (row.secret_count < 3) problems.push(`only ${row.secret_count} credentials stored`);
+      // Four now, not three: the pooler's own credential joined the set in P2b.
+      if (row.secret_count < 4) problems.push(`only ${row.secret_count} credentials stored`);
+      if (!row.pooler_container_id) {
+        // A ready project without a pooler is one whose DATABASE_URL — the string
+        // the docs tell every application to use — does not connect.
+        problems.push('no pooler recorded');
+      }
       if (row.api_key_count < 2) {
         // A ready project with no keys is one the data API cannot serve.
         problems.push(`only ${row.api_key_count} api key(s) minted`);
@@ -519,6 +673,34 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
     },
   };
 
+  /**
+   * Stop the pooler as well (P2b).
+   *
+   * Its own step rather than a second half of `stop_container`, so a crash between
+   * the two is a resumable checkpoint rather than an ambiguous partial. It runs
+   * *before* the database stops in the delete saga: a pooler left running against
+   * a stopped Postgres answers connections and then fails them, which reads to a
+   * customer as "the database is broken" rather than "the project is deleted".
+   */
+  const stopPooler: SagaStep<SagaContext> = {
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const project = await loadProject(deps.pool, projectId);
+      const place = await loadPlacement(deps.pool, projectId).catch(() => undefined);
+      const docker = requireDocker(deps);
+      // Recorded id first, derived name as the fallback — the row may be missing
+      // on a retry, and "no row so nothing to stop" would leave it serving.
+      const target = place?.pooler_container_id ?? poolerName(project.ref);
+      const state = await docker.inspectContainer(target);
+      if (!state) { ctx.log('no pooler to stop'); return; }
+      if (!state.State.Running) { ctx.log('pooler already stopped'); return; }
+      await docker.setRestartPolicy(state.Id, 'no');
+      await docker.stopContainer(state.Id);
+      ctx.log('pooler stopped');
+    },
+    name: 'stop_pooler',
+  };
+
   const markSoftDeleted: SagaStep<SagaContext> = {
     name: 'mark_soft_deleted',
     async run(ctx) {
@@ -583,14 +765,21 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       // By name as well as by id: a container created just before a crash may
       // exist with no id recorded, and leaving it behind would be a resource
       // leak invisible to the control plane.
-      for (const target of [place?.container_id, containerName(project.ref)].filter(Boolean)) {
+      // Both of the project's containers (P2b), by id and by derived name.
+      const targets = [
+        place?.container_id, containerName(project.ref),
+        place?.pooler_container_id, poolerName(project.ref),
+      ].filter(Boolean);
+      for (const target of targets) {
         await docker.removeContainer(target as string);
       }
       if (place) {
         await deps.pool.query(
-          `UPDATE project_databases SET container_id = NULL WHERE project_id = $1`, [projectId]);
+          `UPDATE project_databases
+              SET container_id = NULL, pooler_container_id = NULL
+            WHERE project_id = $1`, [projectId]);
       }
-      ctx.log('container removed');
+      ctx.log('containers removed', { database: true, pooler: true });
     },
   };
 
@@ -769,6 +958,8 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       createBaseRoles,               // T5e
       storeCredentials,              // T5e
       generateApiKeys,               // P1e
+      startPooler,                   // P2b
+      waitPoolerHealthy,             // P2b — proves the whole pooled chain
       writeConnection,               // T5e
       markReady,                     // T5e
     ],
@@ -777,6 +968,7 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       disableApi,                    // T7
       disableWrites,                 // T7
       finalBackup,                   // T7 (gate, unimplemented in M0 — D-066)
+      stopPooler,                    // P2b — before the database, see the step
       stopContainer,                 // T7
       removeNetwork,                 // P2a — holds no data; frees the subnet
       markSoftDeleted,               // T7

@@ -79,6 +79,11 @@ afterAll(async () => {
   }
   await pool?.end();
   rmSync(kekDir, { recursive: true, force: true });
+  // Release the client's keep-alive sockets. Each test file builds its own Docker
+  // client, so without this every file leaves up to maxSockets parked connections
+  // to the node for the rest of the run — which is how the node's listener ended
+  // up wedged even after the agent was bounded (D-230).
+  docker?.close?.();
 }, 90_000);
 
 beforeEach(async () => {
@@ -338,13 +343,16 @@ describe('T5e — credentials', () => {
     const { rows } = await pool.query<{ name: string; state: string; version: number }>(
       `select name, state, version from project_secrets where project_id = $1 order by name`,
       [project.id]);
-    // Three role passwords (T5e) plus the signing keypair and the two minted API
-    // keys (P1e). The keys are stored under envelope encryption rather than
-    // re-derived, per D-214.
+    // Four role passwords — postgres, developer, authenticator and the pooler's
+    // own (P2b) — plus the signing keypair and the two minted API keys (P1e). The
+    // keys are stored under envelope encryption rather than re-derived, per D-214.
+    //
+    // Listed exactly rather than counted, so adding a credential is a deliberate
+    // change to this line and not a number that quietly drifts.
     expect(rows.map((r) => r.name)).toEqual([
       'ANON_KEY', 'AUTHENTICATOR_PASSWORD', 'DEVELOPER_PASSWORD',
       'JWT_KID', 'JWT_PRIVATE_KEY', 'JWT_PUBLIC_KEY',
-      'POSTGRES_PASSWORD', 'SERVICE_ROLE_KEY',
+      'PGBOUNCER_AUTH_PASSWORD', 'POSTGRES_PASSWORD', 'SERVICE_ROLE_KEY',
     ]);
     expect(rows.every((r) => r.state === 'active' && r.version === 1)).toBe(true);
   });

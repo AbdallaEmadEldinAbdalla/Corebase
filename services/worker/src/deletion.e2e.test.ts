@@ -77,6 +77,11 @@ afterAll(async () => {
   }
   await pool?.end();
   rmSync(kekDir, { recursive: true, force: true });
+  // Release the client's keep-alive sockets. Each test file builds its own Docker
+  // client, so without this every file leaves up to maxSockets parked connections
+  // to the node for the rest of the run — which is how the node's listener ended
+  // up wedged even after the agent was bounded (D-230).
+  docker?.close?.();
 }, 90_000);
 
 beforeEach(async () => {
@@ -206,9 +211,9 @@ describe('T7 — soft delete keeps the data', () => {
     // The whole point of D-038: the data is still there.
     expect(await docker.volumeExists(volumeNameFor(p.ref))).toBe(true);
     expect(after.placements).toBe(1);
-    // Three passwords + keypair (3 rows) + two minted keys: all kept, because a
-    // soft delete destroys nothing.
-    expect(after.secrets).toBe(8);
+    // Four passwords (the pooler's joined in P2b) + keypair (3 rows) + two minted
+    // keys: all kept, because a soft delete destroys nothing.
+    expect(after.secrets).toBe(9);
     expect(after.booked).toBe(350);      // capacity still booked; nothing reclaimed yet
 
     const inspect = await docker.inspectContainer(containerName(p.ref));

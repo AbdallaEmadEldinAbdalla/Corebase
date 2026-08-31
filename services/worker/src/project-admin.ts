@@ -14,10 +14,18 @@ import { Client } from 'pg';
  * image that predates the role model, and provisioning a project against it
  * would produce a database that quietly has no API-facing privilege levels.
  */
-export const IMAGE_ROLES = ['anon', 'authenticated', 'service_role', 'authenticator', 'corebase_admin'];
+export const IMAGE_ROLES = [
+  'anon', 'authenticated', 'service_role', 'authenticator', 'corebase_admin',
+  // P2b: the pooler's identity. Present as a passwordless LOGIN role in the
+  // image; the worker sets its password at provision time (D-074).
+  'pgbouncer_auth',
+];
 
 /** Roles the control plane owns and creates at provision time. */
 export const DEVELOPER_ROLE = 'developer';
+
+/** The pooler's own login role (D-074). Created by the image, password set here. */
+export const POOLER_AUTH_ROLE = 'pgbouncer_auth';
 
 export interface AdminTarget {
   host: string;

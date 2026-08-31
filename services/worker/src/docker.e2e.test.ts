@@ -59,6 +59,11 @@ afterAll(async () => {
     for (const v of created.volumes) await docker.removeVolume(v).catch(() => {});
   }
   await pool?.end();
+  // Release the client's keep-alive sockets. Each test file builds its own Docker
+  // client, so without this every file leaves up to maxSockets parked connections
+  // to the node for the rest of the run — which is how the node's listener ended
+  // up wedged even after the agent was bounded (D-230).
+  docker?.close?.();
 }, 60_000);
 
 async function wipeNode() {

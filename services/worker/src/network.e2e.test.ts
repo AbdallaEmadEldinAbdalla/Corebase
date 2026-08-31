@@ -39,6 +39,11 @@ afterAll(async () => {
     if (c) await docker.removeContainer(c.Id, true).catch(() => {});
   }
   await docker.removeNetwork(NET).catch(() => {});
+  // Release the client's keep-alive sockets. Each test file builds its own Docker
+  // client, so without this every file leaves up to maxSockets parked connections
+  // to the node for the rest of the run — which is how the node's listener ended
+  // up wedged even after the agent was bounded (D-230).
+  docker?.close?.();
 });
 
 const t = (name: string, fn: () => Promise<void>, ms = 30_000) =>

@@ -18,6 +18,12 @@ export const SECRET_NAMES = {
   postgres: 'POSTGRES_PASSWORD',
   developer: 'DEVELOPER_PASSWORD',
   authenticator: 'AUTHENTICATOR_PASSWORD',
+  /**
+   * The pooler's own login credential (D-074). The *only* secret material the
+   * pooler container holds, and it resolves nothing by itself — the lookup
+   * function it is allowed to call returns `developer` and nothing else.
+   */
+  poolerAuth: 'PGBOUNCER_AUTH_PASSWORD',
   /** The project's ES256 signing key (D-014). Never leaves the control plane. */
   jwtPrivateKey: 'JWT_PRIVATE_KEY',
   /** Public half. Stored beside its pair so JWKS is one lookup, not two. */
