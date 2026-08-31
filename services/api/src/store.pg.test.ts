@@ -79,17 +79,25 @@ describe('pg control-plane store', () => {
     expect(await store.findByIdempotencyKey('never-used')).toBeUndefined();
   });
 
-  t('persists status transitions and hides soft-deleted projects', async () => {
+  t('keeps a soft-deleted project visible and hides only a purged one', async () => {
     const { project } = await store.createProject({
       ref: generateProjectRef(), name: 'status-app', region: 'eu-central', plan: 'free',
       idempotencyKey: 'pg-key-status',
     });
     expect((await store.markStatus(project.ref, 'deleting'))?.status).toBe('deleting');
     expect((await store.getProject(project.ref))?.status).toBe('deleting');
-    // the DDL CHECK ties deleted_at to the soft_deleted/deleted states
+
+    // Soft-deleted is the 7-day recovery window (D-038). Hiding the project here
+    // makes the window unusable — the customer cannot see the thing they are
+    // meant to be able to restore.
     await pool.query(
       `update projects set status='soft_deleted', deleted_at=now(), purge_after=now()+interval '7 days' where ref=$1`,
       [project.ref]);
+    expect((await store.getProject(project.ref))?.status).toBe('soft_deleted');
+    expect(await store.listProjects()).toHaveLength(1);
+
+    // Purged is gone, and only then does it disappear.
+    await pool.query(`update projects set status='deleted' where ref=$1`, [project.ref]);
     expect(await store.getProject(project.ref)).toBeUndefined();
     expect(await store.listProjects()).toHaveLength(0);
   });
@@ -118,7 +126,10 @@ describe('pg control-plane store', () => {
     expect(got.json().database).toBeUndefined();
 
     const del = await app.inject({ method: 'DELETE', url: `/v1/projects/${ref}`, headers: auth });
-    expect(del.json().status).toBe('deleting');
-    expect((await store.jobs())).toHaveLength(1);   // still exactly one job
+    expect(del.json().project.status).toBe('deleting');
+    // Two jobs now: the provision from the create, and the teardown from the
+    // delete. The point of the assertion is that the replayed create added none.
+    const kinds = (await store.jobs()).map((j) => j.kind).sort();
+    expect(kinds).toEqual(['delete_project', 'provision_project']);
   });
 });

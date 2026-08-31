@@ -50,6 +50,17 @@ export interface ControlPlaneStore {
   getProjectDetail(ref: string): Promise<ProjectDetail | undefined>;
   listProjects(): Promise<Project[]>;
   markStatus(ref: string, status: ProjectStatus): Promise<Project | undefined>;
+  /**
+   * Move a project to `deleting` and write its deletion job in ONE transaction,
+   * for the same reason createProject does (D-067): a project marked deleting
+   * with no job never gets torn down, and its resources bill forever.
+   *
+   * The job's idempotency key is derived from the project, so two DELETEs
+   * collapse onto one job by construction rather than by the caller remembering
+   * to send a key.
+   */
+  requestDelete(ref: string): Promise<
+    { project: Project; job: JobRow; alreadyRequested: boolean } | undefined>;
   findByName(name: string): Promise<Project | undefined>;
   jobs(): Promise<JobRow[]>;
 }
@@ -99,6 +110,22 @@ export function createMemoryStore(): ControlPlaneStore {
       return project ? { project } : undefined;
     },
     async listProjects() { return [...projects.values()]; },
+    async requestDelete(ref) {
+      const project = projects.get(ref);
+      if (!project) return undefined;
+      const key = `delete_${project.id}`;
+      const existing = jobs.find((j) => j.idempotency_key === key);
+      if (existing) return { project, job: existing, alreadyRequested: true };
+      const next = { ...project, status: 'deleting' as ProjectStatus };
+      projects.set(ref, next);
+      const job: JobRow = {
+        id: crypto.randomUUID(), kind: 'delete_project',
+        project_id: project.id, idempotency_key: key, state: 'queued',
+      };
+      jobs.push(job);
+      return { project: next, job, alreadyRequested: false };
+    },
+
     async markStatus(ref, status) {
       const p = projects.get(ref);
       if (!p) return undefined;

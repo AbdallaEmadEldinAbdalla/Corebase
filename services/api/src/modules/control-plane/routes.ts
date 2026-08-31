@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { CreateProjectRequest, ERROR_CODES } from '@corebase/types';
+import { DELIVERY_ID_PATTERN } from '@corebase/queue';
 import { ApiError } from '../../kernel/errors.ts';
 import { generateProjectRef } from '../../kernel/ref.ts';
 import type { ControlPlaneStore } from './store.ts';
@@ -37,6 +38,15 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
     if (typeof key !== 'string' || key.length < 8) {
       throw new ApiError(400, ERROR_CODES.IDEMPOTENCY_KEY_REQUIRED,
         'Provide an Idempotency-Key header (min 8 chars) so retries cannot create duplicate projects.');
+    }
+    // The key becomes the job's delivery id (D-067), and the queue rejects some
+    // characters — notably ':'. Refusing it here turns an accepted-but-silently-
+    // undelivered project into a clear 400, and stops one client's creative key
+    // from breaking orphan recovery for every project on the fleet.
+    if (!DELIVERY_ID_PATTERN.test(key)) {
+      throw new ApiError(400, ERROR_CODES.IDEMPOTENCY_KEY_REQUIRED,
+        'Idempotency-Key must be 8-255 characters of [A-Za-z0-9_.=#@-] — it is used ' +
+        'as the job delivery id, which cannot contain ":".');
     }
 
     // A replay of a seen key returns the original outcome and must short-circuit
@@ -102,9 +112,29 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
   app.delete('/v1/projects/:ref', async (req, reply) => {
     requireAuth(req.headers.authorization);
     const { ref } = req.params as { ref: string };
-    const project = await deps.store.getProject(ref);
-    if (!project) throw ApiError.notFound('Project');
-    const next = await deps.store.markStatus(ref, 'deleting');
-    return reply.status(202).send(next);
+
+    // No Idempotency-Key required here, unlike create: the job's key is derived
+    // from the project, so a retried DELETE cannot produce a second teardown.
+    const result = await deps.store.requestDelete(ref);
+    if (!result) throw ApiError.notFound('Project');
+    const { project, job, alreadyRequested } = result;
+
+    if (!alreadyRequested && deps.enqueue) {
+      try {
+        await deps.enqueue({
+          job_row_id: job.id,
+          idempotency_key: job.idempotency_key,
+          job_type: job.kind,
+          project_id: project.id,
+        });
+      } catch (err) {
+        // Same reasoning as create: the row of record exists and the sweeper
+        // will deliver it. Telling the caller their delete failed when the
+        // project is already marked deleting would be a lie.
+        req.log.warn({ err, project: project.ref }, 'enqueue failed; sweeper will recover');
+        deps.onEnqueueError?.(err as Error);
+      }
+    }
+    return reply.status(202).send({ project, job });
   });
 }

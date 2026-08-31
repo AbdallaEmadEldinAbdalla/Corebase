@@ -113,7 +113,7 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
 
     async getProject(ref) {
       const { rows } = await pool.query<ProjectRowDb>(
-        `SELECT ${PROJECT_COLUMNS} FROM projects p WHERE p.ref = $1 AND p.deleted_at IS NULL`,
+        `SELECT ${PROJECT_COLUMNS} FROM projects p WHERE p.ref = $1 AND p.status <> 'deleted'`,
         [ref],
       );
       return rows[0] ? toProject(rows[0]) : undefined;
@@ -128,7 +128,7 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
                  d.pooler_port AS db_pooler_port, d.pg_version AS db_version
             FROM projects p
             LEFT JOIN project_databases d ON d.project_id = p.id
-           WHERE p.ref = $1 AND p.deleted_at IS NULL`, [ref]);
+           WHERE p.ref = $1 AND p.status <> 'deleted'`, [ref]);
       const row = rows[0];
       if (!row) return undefined;
       const project = toProject(row);
@@ -161,10 +161,60 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
       return { project, database };
     },
 
+    async requestDelete(ref) {
+      const client: PoolClient = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        // Lock the row: two concurrent DELETEs must not both insert a job, and
+        // the unique idempotency key would turn the loser into a 500 rather than
+        // the no-op it should be.
+        const found = await client.query<ProjectRowDb>(
+          `SELECT ${PROJECT_COLUMNS.replace(/p\./g, '')} FROM projects
+            WHERE ref = $1 AND status <> 'deleted' FOR UPDATE`, [ref]);
+        if (!found.rows[0]) { await client.query('ROLLBACK'); return undefined; }
+
+        const key = `delete_${found.rows[0].id}`;
+        const existing = await client.query(
+          `SELECT id, job_type, project_id, idempotency_key, state::text AS state
+             FROM provisioning_jobs WHERE idempotency_key = $1`, [key]);
+        if (existing.rows[0]) {
+          // Already requested. Return the original outcome, exactly as a replayed
+          // create does — a second DELETE is not an error.
+          await client.query('COMMIT');
+          return {
+            project: toProject(found.rows[0]),
+            job: jobFromDb(existing.rows[0] as never),
+            alreadyRequested: true,
+          };
+        }
+
+        const updated = await client.query<ProjectRowDb>(
+          `UPDATE projects SET status = 'deleting' WHERE ref = $1
+        RETURNING ${PROJECT_COLUMNS.replace(/p\./g, '')}`, [ref]);
+        const job = await client.query(
+          `INSERT INTO provisioning_jobs (project_id, job_type, idempotency_key, payload, state)
+           VALUES ($1, 'delete_project', $2, $3::jsonb, 'pending')
+           RETURNING id, job_type, project_id, idempotency_key, state::text AS state`,
+          [found.rows[0].id, key,
+           JSON.stringify({ project_id: found.rows[0].id, ref })]);
+        await client.query('COMMIT');
+        return {
+          project: toProject(updated.rows[0]!),
+          job: jobFromDb(job.rows[0] as never),
+          alreadyRequested: false,
+        };
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+    },
+
     async listProjects() {
       const { rows } = await pool.query<ProjectRowDb>(
         `SELECT ${PROJECT_COLUMNS} FROM projects p
-          WHERE p.deleted_at IS NULL ORDER BY p.created_at DESC`,
+          WHERE p.status <> 'deleted' ORDER BY p.created_at DESC`,
       );
       return rows.map(toProject);
     },
@@ -172,7 +222,7 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
     async markStatus(ref, status) {
       const { rows } = await pool.query<ProjectRowDb>(
         `UPDATE projects p SET status = $2::project_status
-          WHERE p.ref = $1 AND p.deleted_at IS NULL
+          WHERE p.ref = $1 AND p.status <> 'deleted'
         RETURNING ${PROJECT_COLUMNS.replace(/p\./g, '')}`,
         [ref, status],
       );
@@ -182,7 +232,7 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
     async findByName(name) {
       const { rows } = await pool.query<ProjectRowDb>(
         `SELECT ${PROJECT_COLUMNS} FROM projects p
-          WHERE p.name = $1 AND p.deleted_at IS NULL`,
+          WHERE p.name = $1 AND p.status <> 'deleted'`,
         [name],
       );
       return rows[0] ? toProject(rows[0]) : undefined;
