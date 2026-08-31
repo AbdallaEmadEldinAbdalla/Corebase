@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createRunner, UnknownJobTypeError, type SagaStep, type SagaContext } from './runner.ts';
+import { createRunner, STALE_HEARTBEAT_MULTIPLE, UnknownJobTypeError, type SagaStep, type SagaContext } from './runner.ts';
 import type { JobRecord, JobRepo } from './repo.ts';
 
 /** In-memory repo double: the runner's contract is what is under test here. */
@@ -119,3 +119,21 @@ describe('saga runner', () => {
     vi.useRealTimers();
   });
 });
+
+describe('the stale-heartbeat threshold (D-193)', () => {
+  it('defaults to three missed heartbeats', () => {
+    // Derived, not chosen independently. T6: a 90s threshold against a 10s beat
+    // meant a crashed job's re-delivery arrived while the row still looked
+    // healthy, the restarted worker declined the claim, BullMQ marked the
+    // delivery complete, and the project never converged.
+    expect(STALE_HEARTBEAT_MULTIPLE).toBe(3);
+  });
+
+  it('refuses a threshold a live worker could trip over', () => {
+    expect(() => createRunner({ repo: {} as never, sagas: {}, heartbeatMs: 10_000, staleAfterMs: 15_000 }))
+      .toThrow(/must exceed two heartbeat intervals/);
+    expect(() => createRunner({ repo: {} as never, sagas: {}, heartbeatMs: 10_000, staleAfterMs: 30_001 }))
+      .not.toThrow();
+  });
+});
+

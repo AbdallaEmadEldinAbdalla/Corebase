@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
-import { createRedis, createQueue, enqueueProvisioning, type Redis, type Queue, type ProvisioningJobData } from '@corebase/queue';
+import {
+  createRedis, createQueue, enqueueProvisioning, enqueueRecovery, recoveryJobId,
+  type Redis, type Queue, type ProvisioningJobData,
+} from '@corebase/queue';
 import { createJobRepo } from './jobs/repo.ts';
 import { createRunner } from './jobs/runner.ts';
 import { createSweeper } from './sweeper.ts';
@@ -126,3 +129,67 @@ describe('T5b — worker on real Postgres + Redis', () => {
     expect(await queue.getJobCountByTypes('waiting')).toBe(1);
   });
 });
+
+describe('T6 — crash recovery delivery (D-194)', () => {
+  t('a recovery delivery does not collide with the dead worker\'s job', async () => {
+    const { jobId } = await seedJob('e2e-key-recover');
+    const d = { job_row_id: jobId, idempotency_key: 'e2e-key-recover',
+      job_type: 'provision_project', project_id: null };
+
+    // The original delivery, as the API would create it.
+    expect((await enqueueProvisioning(queue, d)).enqueued).toBe(true);
+    // A plain re-enqueue is a no-op — correct for the producer, and exactly what
+    // left crashed provisions stuck forever when the sweeper used it.
+    expect((await enqueueProvisioning(queue, d)).enqueued).toBe(false);
+
+    // The sweeper's recovery delivery lands regardless, under its own id.
+    const r = await enqueueRecovery(queue, d, 1);
+    expect(r.enqueued).toBe(true);
+    expect(r.jobId).toBe('e2e-key-recover#recover-1');
+    expect(await queue.getJobCountByTypes('waiting')).toBe(2);
+  });
+
+  t('a row that was never delivered gets the plain key, not a recovery id', async () => {
+    // The API-died-after-COMMIT class. Nothing crashed mid-flight, so this is
+    // the first delivery and should look like one.
+    const { jobId } = await seedJob('e2e-key-first-delivery');
+    const r = await enqueueRecovery(queue, {
+      job_row_id: jobId, idempotency_key: 'e2e-key-first-delivery',
+      job_type: 'provision_project', project_id: null }, 0);
+    expect(r.jobId).toBe('e2e-key-first-delivery');
+    expect(await queue.getJob('e2e-key-first-delivery')).toBeTruthy();
+  });
+
+  t('two sweeps before pickup produce one recovery delivery, not two', async () => {
+    const { jobId } = await seedJob('e2e-key-recover-twice');
+    const d = { job_row_id: jobId, idempotency_key: 'e2e-key-recover-twice',
+      job_type: 'provision_project', project_id: null };
+    await enqueueProvisioning(queue, d);                    // the dead worker's delivery
+    expect((await enqueueRecovery(queue, d, 1)).jobId).toBe('e2e-key-recover-twice#recover-1');
+    expect((await enqueueRecovery(queue, d, 1)).enqueued).toBe(false);
+    // A second crash advances the attempt, so it gets its own delivery rather
+    // than colliding with the first recovery.
+    expect((await enqueueRecovery(queue, d, 2)).enqueued).toBe(true);
+    expect(await queue.getJobCountByTypes('waiting')).toBe(3);
+  });
+
+  t('the sweeper re-delivers a row a dead worker left running', async () => {
+    // The T6 scenario in miniature: a claimed row whose heartbeat stopped, with
+    // Redis still holding the original delivery.
+    const { jobId } = await seedJob('e2e-key-orphan-running');
+    const d = { job_row_id: jobId, idempotency_key: 'e2e-key-orphan-running',
+      job_type: 'provision_project', project_id: null };
+    await enqueueProvisioning(queue, d);
+    await pool.query(
+      `update provisioning_jobs
+          set state = 'running', attempts = 1, heartbeat_at = now() - interval '5 minutes'
+        where id = $1`, [jobId]);
+
+    const sweeper = createSweeper({ repo, queue, staleAfterMs: 30_000 });
+    const swept = await sweeper.sweepOnce();
+    expect(swept.found).toBe(1);
+    expect(swept.reEnqueued).toBe(1);
+    expect(await queue.getJob(recoveryJobId('e2e-key-orphan-running', 1))).toBeTruthy();
+  });
+});
+
