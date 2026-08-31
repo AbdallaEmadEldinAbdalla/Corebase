@@ -66,6 +66,13 @@ afterAll(async () => {
     for (const c of await docker.listContainers(`${LABEL_MANAGED}=true`)) {
       await docker.removeContainer(c.Id).catch(() => {});
     }
+    // Networks too (P2a). Containers and volumes were already cleaned here;
+    // a leaked network is quieter and worse in one specific way — each bridge
+    // network holds a subnet from Docker's address pool, and eighteen leaked ones
+    // from failed runs is how a node stops being able to create the next project.
+    for (const n of await docker.listNetworks(`${LABEL_MANAGED}=true`)) {
+      await docker.removeNetwork(n.Name).catch(() => {});
+    }
     await queue?.close(); await redis?.quit();
   }
   await pool?.end();
@@ -123,13 +130,24 @@ async function mkProject(plan = 'free') {
   return rows[0]!;
 }
 
-const PROVISION = [
-  'allocate_node', 'create_volume', 'start_container', 'wait_healthy',
-  'create_base_roles', 'store_credentials', 'generate_api_keys', 'write_connection', 'mark_ready',
-];
-const DELETE = ['disable_api', 'disable_writes', 'final_backup', 'stop_container', 'mark_soft_deleted'];
-const PURGE = ['verify_purgeable', 'remove_container', 'remove_volume',
-  'delete_credentials', 'release_capacity', 'verify_gone', 'mark_deleted'];
+/**
+ * Step names read from the sagas, not written out again.
+ *
+ * These were three hand-kept lists, and adding `create_network` and
+ * `remove_network` broke them — the purge list silently stopped removing the
+ * network, and `verify_gone` reported it, which is exactly what that step is for.
+ * A test that duplicates the thing it tests only tests the duplicate, and this is
+ * the third time that has cost time in this repo.
+ */
+const names = (kind: 'provision_project' | 'delete_project' | 'purge_project'): string[] =>
+  buildSagas({
+    pool: undefined as never, docker: undefined as never, secrets: undefined as never,
+    bootstrapSecret: SECRET, projectDomain: 'corebase.test',
+  })[kind]!.map((s: SagaStep<SagaContext>) => s.name);
+
+const PROVISION = names('provision_project');
+const DELETE = names('delete_project');
+const PURGE = names('purge_project');
 
 async function runSteps(
   jobType: 'provision_project' | 'delete_project' | 'purge_project',
@@ -299,7 +317,7 @@ describe('T7 — purge destroys it', () => {
     expect(after.secrets).toBe(0);
     expect(after.placements).toBe(0);   // the port is reusable again
     expect(after.booked).toBe(0);       // capacity returned to the node
-    expect(logs.join('\n')).toContain('no container, no volume, no credentials');
+    expect(logs.join('\n')).toContain('no container, no network, no volume, no credentials');
   });
 
   t('verify_gone fails rather than reporting a clean purge', async () => {

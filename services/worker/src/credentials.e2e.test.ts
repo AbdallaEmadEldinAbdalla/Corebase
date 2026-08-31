@@ -68,6 +68,13 @@ afterAll(async () => {
     for (const c of await docker.listContainers(`${LABEL_MANAGED}=true`)) {
       await docker.removeContainer(c.Id).catch(() => {});
     }
+    // Networks too (P2a). Containers and volumes were already cleaned here;
+    // a leaked network is quieter and worse in one specific way — each bridge
+    // network holds a subnet from Docker's address pool, and eighteen leaked ones
+    // from failed runs is how a node stops being able to create the next project.
+    for (const n of await docker.listNetworks(`${LABEL_MANAGED}=true`)) {
+      await docker.removeNetwork(n.Name).catch(() => {});
+    }
     for (const v of createdVolumes) await docker.removeVolume(v).catch(() => {});
   }
   await pool?.end();
@@ -103,10 +110,25 @@ async function mkProject(plan = 'free') {
   return rows[0]!;
 }
 
-const ALL_STEPS = [
-  'allocate_node', 'create_volume', 'start_container', 'wait_healthy',
-  'create_base_roles', 'store_credentials', 'generate_api_keys', 'write_connection', 'mark_ready',
-];
+/**
+ * The provisioning steps, read from the saga rather than written out again.
+ *
+ * This was a hand-kept list, and inserting `create_network` in the middle broke
+ * every positional `slice()` below at once — 55 failures whose message was a
+ * Docker 404 about a missing network. A test that duplicates the thing it tests
+ * only tests the duplicate.
+ */
+const ALL_STEPS: string[] = buildSagas({
+  pool: undefined as never, docker: undefined as never, secrets: undefined as never,
+  bootstrapSecret: SECRET, projectDomain: 'corebase.test',
+}).provision_project!.map((s: SagaStep<SagaContext>) => s.name);
+
+/** Steps up to and including `name` — positional slices are what just broke. */
+const upTo = (name: string) => {
+  const at = ALL_STEPS.indexOf(name);
+  if (at === -1) throw new Error(`no step named ${name}`);
+  return ALL_STEPS.slice(0, at + 1);
+};
 
 async function runSteps(projectId: string, names: string[], extra: Record<string, unknown> = {}) {
   const sagas = buildSagas({
@@ -125,12 +147,12 @@ async function runSteps(projectId: string, names: string[], extra: Record<string
 }
 
 /** Provision far enough that a database is up, and remember its volume. */
-async function provision(upTo = ALL_STEPS) {
+async function provision(steps = ALL_STEPS) {
   await registerNode(pool, {
     hostname: 'data-1', ramTotalMb: 8192, diskTotalGb: 200, address: HOST,
   });
   const p = await mkProject();
-  const logs = await runSteps(p.id, upTo);
+  const logs = await runSteps(p.id, steps);
   const row = await placement(p.id);
   if (row) createdVolumes.add(row.volume_name);
   return { project: p, logs };
@@ -154,7 +176,7 @@ async function connectAs(port: number, user: string, password: string, database 
 
 describe('T5e — the role model', () => {
   t('verifies the image roles and creates the developer role', async () => {
-    const { project, logs } = await provision(ALL_STEPS.slice(0, 5));
+    const { project, logs } = await provision(upTo('create_base_roles'));
     const row = (await placement(project.id))!;
     const su = await connectAsSuperuser({
       host: HOST, port: row.port, passwords: [bootstrapPassword(SECRET, project.id)],
@@ -180,7 +202,7 @@ describe('T5e — the role model', () => {
   });
 
   t('re-running create_base_roles is a no-op', async () => {
-    const { project } = await provision(ALL_STEPS.slice(0, 5));
+    const { project } = await provision(upTo('create_base_roles'));
     const logs = await runSteps(project.id, ['create_base_roles']);
     expect(logs.join('\n')).toContain('developer role already present');
   });
@@ -349,7 +371,7 @@ describe('T5e — credentials', () => {
     // The window that store-then-apply exists to make safe: the row is written,
     // the ALTER never ran. The next attempt must apply the stored value, not
     // generate a new one.
-    const { project } = await provision(ALL_STEPS.slice(0, 5));
+    const { project } = await provision(upTo('create_base_roles'));
     const row = (await placement(project.id))!;
     const preStored = generateSecret();
     const sealed = envelope.encrypt(preStored, {
@@ -380,7 +402,7 @@ describe('T5e — credentials', () => {
   });
 
   t('refuses to run without a KEK-backed secret store', async () => {
-    const { project } = await provision(ALL_STEPS.slice(0, 5));
+    const { project } = await provision(upTo('create_base_roles'));
     await expect(runSteps(project.id, ['store_credentials'], { secrets: undefined }))
       .rejects.toThrow(/needs its KEK/);
   });
@@ -420,13 +442,13 @@ describe('T5e — connection details and readiness', () => {
 
   t('mark_ready refuses when credentials are missing', async () => {
     const { project } = await provision(
-      [...ALL_STEPS.slice(0, 5), 'write_connection']);          // no store_credentials
+      [...upTo('create_base_roles'), 'write_connection']);          // no store_credentials
     await expect(runSteps(project.id, ['mark_ready'])).rejects.toThrow(/only 0 credentials/);
     expect(await projectStatus(project.id)).not.toBe('ready');
   });
 
   t('mark_ready refuses when the database is not running', async () => {
-    const { project } = await provision(ALL_STEPS.slice(0, 7));  // everything but mark_ready
+    const { project } = await provision(upTo('generate_api_keys'));  // everything but mark_ready
     await pool.query(
       `update project_databases set status = 'failed' where project_id = $1`, [project.id]);
     await expect(runSteps(project.id, ['mark_ready'])).rejects.toThrow(/database status is failed/);
@@ -434,7 +456,7 @@ describe('T5e — connection details and readiness', () => {
   });
 
   t('mark_ready refuses when no connection host was written', async () => {
-    const { project } = await provision(ALL_STEPS.slice(0, 6));  // no write_connection
+    const { project } = await provision(upTo('store_credentials'));  // no write_connection
     await expect(runSteps(project.id, ['mark_ready'])).rejects.toThrow(/no connection host/);
   });
 

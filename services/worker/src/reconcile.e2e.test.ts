@@ -64,6 +64,13 @@ async function wipeNode() {
   for (const c of await docker.listContainers(`${LABEL_MANAGED}=true`)) {
     await docker.removeContainer(c.Id).catch(() => {});
   }
+    // Networks too (P2a). Containers and volumes were already cleaned here;
+    // a leaked network is quieter and worse in one specific way — each bridge
+    // network holds a subnet from Docker's address pool, and eighteen leaked ones
+    // from failed runs is how a node stops being able to create the next project.
+    for (const n of await docker.listNetworks(`${LABEL_MANAGED}=true`)) {
+      await docker.removeNetwork(n.Name).catch(() => {});
+    }
   // Every volume, not just the labelled ones: the reconciler reports unlabelled
   // volumes too (a container started without a mount leaves one behind), so a
   // fixture that only clears labelled volumes leaves drift the "clean report"

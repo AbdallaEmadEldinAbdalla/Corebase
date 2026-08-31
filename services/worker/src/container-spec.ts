@@ -14,6 +14,21 @@ export const LABEL_MANAGED = 'com.corebase.managed';
 export const containerName = (ref: string) => `${CONTAINER_PREFIX}${ref}`;
 
 /**
+ * The project's private network, and the name Postgres answers to on it.
+ *
+ * Derived from the ref rather than stored, like the container name and unlike the
+ * volume: there is exactly one network per project and nothing allocates it, so a
+ * column would be a second place for the same fact to be wrong.
+ *
+ * `db` is the alias because that is what the rendered configs say — the pooler's
+ * `pgbouncer.ini` uses `host=db` and PostgREST's `db-uri` will too
+ * ([pooling §3–§5](../../../docs/03-database-platform/02-connection-pooling.md)).
+ * Keeping the alias stable means those templates never learn a project's ref.
+ */
+export const networkName = (ref: string) => `${CONTAINER_PREFIX}${ref}-net`;
+export const DB_ALIAS = 'db';
+
+/**
  * Bootstrap superuser password: HMAC(secret, project_id).
  *
  * Deterministic on purpose. The container is created in T5d but real
@@ -41,6 +56,8 @@ export interface SpecArgs {
   bootstrapSecret: string;
   image?: string;
   restartPolicy?: string;
+  /** Absent keeps the pre-Phase-2 behaviour: published port, no private network. */
+  networkName?: string;
 }
 
 export function buildContainerSpec(a: SpecArgs): ContainerSpec {
@@ -71,5 +88,11 @@ export function buildContainerSpec(a: SpecArgs): ContainerSpec {
       PortBindings: { '5432/tcp': [{ HostPort: String(a.hostPort) }] },
     },
     ExposedPorts: { '5432/tcp': {} },
+    // The published host port stays. The private network is how the pooler and
+    // later PostgREST reach Postgres; the published port is how a *customer*
+    // reaches it directly, and D-015's DIRECT_DATABASE_URL depends on it.
+    ...(a.networkName
+      ? { NetworkingConfig: { EndpointsConfig: { [a.networkName]: { Aliases: [DB_ALIAS] } } } }
+      : {}),
   };
 }

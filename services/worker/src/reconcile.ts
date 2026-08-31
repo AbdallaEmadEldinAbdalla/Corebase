@@ -40,7 +40,7 @@ export interface ReconcileOptions {
 
 export interface Drift {
   class: 'container_not_running' | 'zombie_container' | 'orphan_container'
-    | 'orphan_volume' | 'reservation_drift';
+    | 'orphan_volume' | 'orphan_network' | 'reservation_drift';
   ref?: string;
   detail: string;
   action: 'repair_enqueued' | 'stopped' | 'alert_only' | 'recomputed' | 'repair_limit_reached';
@@ -208,6 +208,29 @@ export function createReconciler(opts: ReconcileOptions) {
         drift.push({
           class: 'orphan_volume', ...(ref ? { ref } : {}), action: 'alert_only',
           detail: `volume ${v.Name} has no placement row — contains data, removal is a human decision`,
+        });
+      }
+
+      // ── orphan networks (P2a) ─────────────────────────────────────────────
+      // Unlike a volume, a leaked network holds no data — so unlike a volume, it
+      // is safe to say so plainly and it is *not* a human decision in the same
+      // sense. It is still reported rather than removed, for one reason: a network
+      // that outlives its project is usually a purge that stopped half-way, and
+      // deleting the evidence makes the underlying failure harder to find. What
+      // makes it worth reporting at all is exhaustion — each bridge network takes
+      // a subnet from Docker's address pool, and a node that has run out cannot
+      // create the next project's network at all.
+      const networks = await opts.docker.listNetworks(`${LABEL_MANAGED}=true`);
+      for (const n of networks) {
+        const ref = n.Labels?.[LABEL_REF];
+        if (ref && placedRefs.has(ref)) continue;
+        log('error', 'drift found: orphan network — NOT removed, needs an operator', {
+          network: n.Name, ref: ref ?? 'unlabelled',
+        });
+        drift.push({
+          class: 'orphan_network', ...(ref ? { ref } : {}), action: 'alert_only',
+          detail: `network ${n.Name} has no placement row — usually a purge that ` +
+            'stopped half-way; each bridge network consumes a subnet from the node pool',
         });
       }
 

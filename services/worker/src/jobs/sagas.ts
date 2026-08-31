@@ -3,7 +3,8 @@ import type { SagaStep, SagaContext } from './runner.ts';
 import { allocateNode, releaseNode, volumeNameFor } from '../placement.ts';
 import type { Docker } from '../docker.ts';
 import {
-  buildContainerSpec, bootstrapPassword, containerName, IMAGE, LABEL_MANAGED, LABEL_REF,
+  buildContainerSpec, bootstrapPassword, containerName, networkName,
+  IMAGE, LABEL_MANAGED, LABEL_REF,
 } from '../container-spec.ts';
 import type { SecretStore } from '@corebase/secrets';
 import { SECRET_NAMES } from '@corebase/secrets';
@@ -155,6 +156,48 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
     },
   };
 
+  /**
+   * Idempotently ensure the project's network exists, returning its name.
+   *
+   * Shared by `create_network` and `start_container` on purpose. Every other step
+   * in these sagas is safe to run on its own — `create_volume` checks first,
+   * `start_container` checks for an existing container — and `start_container`
+   * briefly broke that pattern by depending on a precondition it did not verify.
+   * The symptom was a Docker 404 from deep inside container start ("network
+   * cb-…-net not found"), which reads as an infrastructure fault rather than as a
+   * missing step, and which is exactly what an operator would waste an hour on.
+   */
+  async function ensureNetwork(ctx: SagaContext, ref: string): Promise<string> {
+    const docker = requireDocker(deps);
+    const name = networkName(ref);
+    if (await docker.networkExists(name)) return name;
+    await docker.createNetwork(name, { [LABEL_REF]: ref, [LABEL_MANAGED]: 'true' });
+    ctx.log('network created', { network: name });
+    return name;
+  }
+
+  /**
+   * The project's private network (P2a).
+   *
+   * It exists before the container so the container can join it at create time
+   * rather than being attached afterwards — a container that starts unattached
+   * resolves nothing for the first moments of its life, and for the pooler that
+   * window is exactly when it first reaches for `db`.
+   *
+   * Postgres does not need a network to serve its published port, so this step is
+   * strictly substrate for what comes next: the pooler
+   * ([pooling §5](../../../docs/03-database-platform/02-connection-pooling.md)
+   * configures `host=db`) and, in Phase 5, PostgREST.
+   */
+  const createNetwork: SagaStep<SagaContext> = {
+    name: 'create_network',
+    async run(ctx) {
+      const project = await loadProject(deps.pool, ctx.job.project_id!);
+      const name = await ensureNetwork(ctx, project.ref);
+      ctx.log('network ready', { network: name });
+    },
+  };
+
   const startContainer: SagaStep<SagaContext> = {
     name: 'start_container',
     async run(ctx) {
@@ -176,6 +219,10 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
           ref: project.ref, projectId, volumeName: place.volume_name,
           hostPort: place.port, ramLimitMb: place.ram_limit_mb,
           bootstrapSecret: deps.bootstrapSecret ?? '',
+          // Ensured rather than assumed — a container create that names a missing
+          // network fails with a Docker 404 that looks nothing like "a step was
+          // skipped".
+          networkName: await ensureNetwork(ctx, project.ref),
         });
         const id = await docker.createContainer(name, spec);
         ctx.log('container created', { name, container: id.slice(0, 12) });
@@ -563,6 +610,25 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
     },
   };
 
+  /**
+   * The project's network, after its container is gone.
+   *
+   * Order matters: Docker refuses to remove a network with containers attached,
+   * so this cannot precede remove_container. It is separate from remove_volume
+   * because it destroys no data — a network is routing, not storage — and lumping
+   * a reversible step in with the irreversible one blurs which is which.
+   */
+  const removeNetwork: SagaStep<SagaContext> = {
+    name: 'remove_network',
+    async run(ctx) {
+      const project = await loadProject(deps.pool, ctx.job.project_id!);
+      const name = networkName(project.ref);
+      const docker = requireDocker(deps);
+      await docker.removeNetwork(name);
+      ctx.log('network removed', { network: name });
+    },
+  };
+
   const deleteCredentials: SagaStep<SagaContext> = {
     name: 'delete_credentials',
     async run(ctx) {
@@ -592,6 +658,11 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       // missing would pass without checking anything.
       const volume = volumeNameFor(project.ref);
       if (await docker.volumeExists(volume)) leftovers.push(`volume ${volume} still present`);
+      // A leaked network is not a data leak, but it is a leak: bridge networks
+      // each consume a subnet from Docker's address pool, and a node that has
+      // exhausted it cannot create the next project's network at all.
+      const network = networkName(project.ref);
+      if (await docker.networkExists(network)) leftovers.push(`network ${network} still present`);
       const secrets = await deps.pool.query(
         `SELECT 1 FROM project_secrets WHERE project_id = $1`, [projectId]);
       if (secrets.rowCount) leftovers.push(`${secrets.rowCount} credential row(s) still present`);
@@ -602,7 +673,7 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       if (leftovers.length > 0) {
         throw new Error(`purge incomplete: ${leftovers.join('; ')}`);
       }
-      ctx.log('verified: no container, no volume, no credentials');
+      ctx.log('verified: no container, no network, no volume, no credentials');
     },
   };
 
@@ -692,6 +763,7 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
     provision_project: [
       allocate,                      // T5c
       createVolume,                  // T5d
+      createNetwork,                 // P2a
       startContainer,                // T5d
       waitHealthy,                   // T5d
       createBaseRoles,               // T5e
@@ -712,6 +784,7 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
     purge_project: [
       verifyPurgeable,               // T7
       removeContainer,               // T7
+      removeNetwork,                 // P2a — after the container, which pins it
       removeVolume,                  // T7
       deleteCredentials,             // T7
       release,                       // T5c's idempotent inverse
