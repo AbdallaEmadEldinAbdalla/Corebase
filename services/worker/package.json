@@ -7,7 +7,8 @@
     "start": "node --experimental-strip-types src/main.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
-    "bench": "node --experimental-strip-types bench/provision.mts"
+    "bench": "node --experimental-strip-types bench/provision.mts",
+    "kill-matrix": "node --experimental-strip-types kill-matrix/run.mts"
   },
   "dependencies": {
     "@corebase/types": "workspace:*",
