@@ -1,6 +1,6 @@
 import type { Pool } from 'pg';
 import type { SagaStep, SagaContext } from './runner.ts';
-import { allocateNode, releaseNode } from '../placement.ts';
+import { allocateNode, releaseNode, volumeNameFor } from '../placement.ts';
 import type { Docker } from '../docker.ts';
 import {
   buildContainerSpec, bootstrapPassword, containerName, IMAGE, LABEL_MANAGED, LABEL_REF,
@@ -22,6 +22,14 @@ export interface SagaDeps {
   secrets?: SecretStore;
   /** Domain the customer's connection host is built from. */
   projectDomain?: string;
+  /** Recovery window before a purge may run (D-038 default: 7 days). */
+  softDeleteWindow?: string;
+  /**
+   * Refuse to delete without a verified final backup (D-066). Off in Milestone 0
+   * because no backup system exists yet; turning it on with none available makes
+   * deletion fail loudly rather than quietly skip the safeguard.
+   */
+  requireFinalBackup?: boolean;
 }
 
 /** Placement row for a project — every Docker step needs it. */
@@ -378,6 +386,231 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
     },
   };
 
+
+  // ── deletion, phase one: reversible (D-038) ──────────────────────────────
+  //
+  // Nothing here destroys data. The container stops, the volume stays, and the
+  // project spends 7 days in soft_deleted where a restore is a status flip.
+
+  const disableApi: SagaStep<SagaContext> = {
+    name: 'disable_api',
+    async run(ctx) {
+      // The gateway does not exist yet, so there is no route to darken. Said out
+      // loud rather than silently skipped: when the gateway lands, this step
+      // becomes real, and a reader of these logs should be able to tell the
+      // difference between "done" and "nothing to do yet".
+      ctx.log('no gateway route to disable yet — data-plane routing is a later phase');
+    },
+  };
+
+  const disableWrites: SagaStep<SagaContext> = {
+    name: 'disable_writes',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const place = await loadPlacement(deps.pool, projectId);
+      if (!place.container_id) { ctx.log('no container — nothing to make read-only'); return; }
+      const docker = requireDocker(deps);
+      const state = await docker.inspectContainer(place.container_id);
+      if (!state?.State.Running) { ctx.log('container is not running — nothing to do'); return; }
+
+      // Defence in depth, not the primary control: the route is already dark.
+      // This stops a client holding a direct connection from writing data that
+      // the final backup, taken next, would not contain.
+      const client = await connectAsSuperuser({
+        ...adminEndpoint(place), passwords: await superuserCandidates(deps, projectId),
+      });
+      try {
+        await client.query('ALTER DATABASE postgres SET default_transaction_read_only = on');
+        ctx.log('database set read-only');
+      } finally {
+        await client.end().catch(() => {});
+      }
+    },
+  };
+
+  const finalBackup: SagaStep<SagaContext> = {
+    name: 'final_backup',
+    async run(ctx) {
+      if (deps.requireFinalBackup) {
+        // D-066: the one moment a backup absolutely must work is when everything
+        // else is about to be deleted. Fail closed.
+        throw new Error(
+          'a verified final backup is required before deletion (D-066) and no ' +
+          'backup system exists yet — unset CB_REQUIRE_FINAL_BACKUP to delete ' +
+          'without one, knowingly');
+      }
+      ctx.log('final backup skipped — no backup system in Milestone 0 (D-066 gate is off)');
+    },
+  };
+
+  const stopContainer: SagaStep<SagaContext> = {
+    name: 'stop_container',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const place = await loadPlacement(deps.pool, projectId);
+      if (!place.container_id) { ctx.log('no container recorded — nothing to stop'); return; }
+      const docker = requireDocker(deps);
+      const state = await docker.inspectContainer(place.container_id);
+      if (!state) { ctx.log('container already gone'); return; }
+      if (!state.State.Running) { ctx.log('container already stopped'); return; }
+
+      // Clear the restart policy first, or unless-stopped (D-184) brings it
+      // straight back and the "stopped" state we just asserted is a fiction.
+      await docker.setRestartPolicy(place.container_id, 'no');
+      await docker.stopContainer(place.container_id);
+      ctx.log('container stopped, volume kept');
+    },
+  };
+
+  const markSoftDeleted: SagaStep<SagaContext> = {
+    name: 'mark_soft_deleted',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const window = deps.softDeleteWindow ?? '7 days';
+      // COALESCE so a re-run does not slide the window forward: the clock starts
+      // when the customer asked, not when the retry happened.
+      const { rows } = await deps.pool.query<{ purge_after: string }>(
+        `UPDATE projects
+            SET status = 'soft_deleted',
+                deleted_at = COALESCE(deleted_at, now()),
+                purge_after = COALESCE(purge_after, now() + $2::interval)
+          WHERE id = $1
+        RETURNING to_char(purge_after, 'YYYY-MM-DD"T"HH24:MI:SSZ') AS purge_after`,
+        [projectId, window]);
+      await deps.pool.query(
+        `UPDATE project_databases SET status = 'deleting' WHERE project_id = $1`, [projectId]);
+      ctx.log('project soft-deleted — restorable until the purge', {
+        purge_after: rows[0]?.purge_after, window,
+      });
+    },
+  };
+
+  // ── deletion, phase two: irreversible ────────────────────────────────────
+
+  const verifyPurgeable: SagaStep<SagaContext> = {
+    name: 'verify_purgeable',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const { rows } = await deps.pool.query<{
+        status: string; due: boolean; purge_after: string | null;
+      }>(`SELECT status::text AS status,
+                 (purge_after IS NOT NULL AND purge_after <= now()) AS due,
+                 to_char(purge_after, 'YYYY-MM-DD"T"HH24:MI:SSZ') AS purge_after
+            FROM projects WHERE id = $1`, [projectId]);
+      const row = rows[0];
+      if (!row) throw new Error('project no longer exists');
+      if (row.status === 'deleted') { ctx.log('already purged'); return; }
+
+      // The guard that makes the recovery window mean something. Everything
+      // after this step destroys data, so a purge that arrives early — a
+      // mis-scheduled job, a clock skew, an operator with a stale queue — must
+      // be refused, not obeyed.
+      if (row.status !== 'soft_deleted') {
+        throw new Error(`refusing to purge a project in status ${row.status} — only soft_deleted may be purged`);
+      }
+      if (!row.due) {
+        throw new Error(
+          `refusing to purge before the recovery window closes (purge_after ${row.purge_after})`);
+      }
+      ctx.log('purge is due', { purge_after: row.purge_after });
+    },
+  };
+
+  const removeContainer: SagaStep<SagaContext> = {
+    name: 'remove_container',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const project = await loadProject(deps.pool, projectId);
+      const place = await loadPlacement(deps.pool, projectId).catch(() => undefined);
+      const docker = requireDocker(deps);
+      // By name as well as by id: a container created just before a crash may
+      // exist with no id recorded, and leaving it behind would be a resource
+      // leak invisible to the control plane.
+      for (const target of [place?.container_id, containerName(project.ref)].filter(Boolean)) {
+        await docker.removeContainer(target as string);
+      }
+      if (place) {
+        await deps.pool.query(
+          `UPDATE project_databases SET container_id = NULL WHERE project_id = $1`, [projectId]);
+      }
+      ctx.log('container removed');
+    },
+  };
+
+  const removeVolume: SagaStep<SagaContext> = {
+    name: 'remove_volume',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const project = await loadProject(deps.pool, projectId);
+      const place = await loadPlacement(deps.pool, projectId).catch(() => undefined);
+      // Prefer the recorded name, fall back to the derived one: the row may
+      // already be gone on a retry, and "no row so nothing to remove" would
+      // leave the customer's data on the node forever.
+      const volume = place?.volume_name ?? volumeNameFor(project.ref);
+      const docker = requireDocker(deps);
+      await docker.removeVolume(volume);
+      ctx.log('volume removed — this is the irreversible step', { volume });
+    },
+  };
+
+  const deleteCredentials: SagaStep<SagaContext> = {
+    name: 'delete_credentials',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const { rowCount } = await deps.pool.query(
+        `DELETE FROM project_secrets WHERE project_id = $1`, [projectId]);
+      ctx.log('credentials deleted', { rows: rowCount ?? 0 });
+    },
+  };
+
+  const verifyGone: SagaStep<SagaContext> = {
+    name: 'verify_gone',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const project = await loadProject(deps.pool, projectId);
+      const docker = requireDocker(deps);
+      // List-and-assert, not trust-the-previous-step. "Delete leaves no residue"
+      // is a claim about the node, and the only way to make it a property of the
+      // code rather than of a test is to check the node here.
+      const leftovers: string[] = [];
+      const containers = await docker.listContainers(`${LABEL_REF}=${project.ref}`);
+      if (containers.length > 0) {
+        leftovers.push(`${containers.length} container(s) still present`);
+      }
+      // By derived name, not by reading the placement row: release_capacity has
+      // already deleted that row by now, and a check that skips when the row is
+      // missing would pass without checking anything.
+      const volume = volumeNameFor(project.ref);
+      if (await docker.volumeExists(volume)) leftovers.push(`volume ${volume} still present`);
+      const secrets = await deps.pool.query(
+        `SELECT 1 FROM project_secrets WHERE project_id = $1`, [projectId]);
+      if (secrets.rowCount) leftovers.push(`${secrets.rowCount} credential row(s) still present`);
+      const placement = await deps.pool.query(
+        `SELECT 1 FROM project_databases WHERE project_id = $1`, [projectId]);
+      if (placement.rowCount) leftovers.push('placement row still present — capacity was not released');
+
+      if (leftovers.length > 0) {
+        throw new Error(`purge incomplete: ${leftovers.join('; ')}`);
+      }
+      ctx.log('verified: no container, no volume, no credentials');
+    },
+  };
+
+  const markDeleted: SagaStep<SagaContext> = {
+    name: 'mark_deleted',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      // The placement row is already gone: release_capacity deletes it, and it
+      // must, because `UNIQUE (node_id, port)` means a retained row holds that
+      // port forever against a range of a thousand. The projects row stays — the
+      // ref is never reused (D-061), so a stale client can never be pointed at
+      // someone else's project.
+      await deps.pool.query(
+        `UPDATE projects SET status = 'deleted' WHERE id = $1 AND status <> 'deleted'`, [projectId]);
+      ctx.log('project deleted');
+    },
+  };
+
   return {
     provision_project: [
       allocate,                      // T5c
@@ -389,12 +622,23 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       writeConnection,               // T5e
       markReady,                     // T5e
     ],
+    // Phase one — reversible. Nothing here destroys data (D-038).
     delete_project: [
-      pending('stop_container'),     // T7
-      pending('remove_container'),
-      pending('remove_volume'),
-      release,
-      pending('mark_deleted'),
+      disableApi,                    // T7
+      disableWrites,                 // T7
+      finalBackup,                   // T7 (gate, unimplemented in M0 — D-066)
+      stopContainer,                 // T7
+      markSoftDeleted,               // T7
+    ],
+    // Phase two — irreversible, and gated on the window having closed.
+    purge_project: [
+      verifyPurgeable,               // T7
+      removeContainer,               // T7
+      removeVolume,                  // T7
+      deleteCredentials,             // T7
+      release,                       // T5c's idempotent inverse
+      verifyGone,                    // T7 — asserts against the node, last
+      markDeleted,                   // T7
     ],
   };
 }

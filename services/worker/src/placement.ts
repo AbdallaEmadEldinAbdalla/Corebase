@@ -51,6 +51,14 @@ export function pickPort(used: readonly number[], range: readonly [number, numbe
   throw new NoPortsError(`no free port in ${range[0]}-${range[1]}`);
 }
 
+/**
+ * A project's volume name is derived from its ref, never stored-only. The purge
+ * has to verify the volume is gone *after* the placement row that recorded its
+ * name has been deleted — and a check that silently skips when the row is
+ * missing is a check that passes vacuously.
+ */
+export const volumeNameFor = (ref: string) => `cb-${ref}-pgdata`;
+
 export class NoCapacityError extends Error {}
 export class NoPortsError extends Error {}
 
@@ -156,7 +164,7 @@ export async function allocateNode(
       `SELECT port, pooler_port FROM project_databases WHERE node_id = $1`, [n.id]);
     const port = pickPort(ports.rows.map((r) => r.port), PG_PORT_RANGE);
     const poolerPort = pickPort(ports.rows.map((r) => r.pooler_port), POOLER_PORT_RANGE);
-    const volumeName = `cb-${args.ref}-pgdata`;
+    const volumeName = volumeNameFor(args.ref);
 
     await client.query(
       `INSERT INTO project_databases

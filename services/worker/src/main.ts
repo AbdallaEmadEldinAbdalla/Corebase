@@ -8,6 +8,7 @@ import { createDocker } from './docker.ts';
 import { createEnvelope } from '@corebase/crypto';
 import { createSecretStore } from '@corebase/secrets';
 import { createSweeper } from './sweeper.ts';
+import { createPurgeScan } from './purge-scan.ts';
 
 const dbUrl = process.env.CB_CONTROL_DATABASE_URL;
 const redisUrl = process.env.CB_REDIS_URL;
@@ -80,6 +81,10 @@ const sagas = buildSagas({
   ...(docker ? { docker } : {}),
   bootstrapSecret: process.env.CB_BOOTSTRAP_SECRET ?? '',
   healthTimeoutMs: Number(process.env.CB_HEALTH_TIMEOUT_MS ?? 60_000),
+  // D-038's recovery window. Shortened only in tests; a production value that
+  // drifts short quietly removes the customer's ability to undo a deletion.
+  softDeleteWindow: process.env.CB_SOFT_DELETE_WINDOW ?? '7 days',
+  requireFinalBackup: process.env.CB_REQUIRE_FINAL_BACKUP === 'true',
 });
 const runner = createRunner({
   repo, sagas,
@@ -104,11 +109,20 @@ const sweepMs = Number(process.env.CB_SWEEP_INTERVAL_MS ?? 10_000);
 const sweepTimer = setInterval(() => { void sweeper.sweepOnce().catch((e) =>
   log('error', 'sweep failed', { error: (e as Error).message })); }, sweepMs);
 
-log('info', 'worker started', { sweepMs });
+// The purge scan closes expired recovery windows (D-038). Hourly in production:
+// the window is measured in days, so scanning faster buys nothing and a slow
+// scan only delays reclaiming disk.
+const purgeScan = createPurgeScan({ pool, queue, log: (m, e) => log('info', m, e) });
+const purgeMs = Number(process.env.CB_PURGE_SCAN_MS ?? 3_600_000);
+const purgeTimer = setInterval(() => { void purgeScan.scanOnce().catch((e) =>
+  log('error', 'purge scan failed', { error: (e as Error).message })); }, purgeMs);
+
+log('info', 'worker started', { sweepMs, purgeMs });
 
 const shutdown = async (signal: string) => {
   log('info', 'shutting down', { signal });
   clearInterval(sweepTimer);
+  clearInterval(purgeTimer);
   await worker.close();          // finishes in-flight work before exiting
   await redis.quit();
   await pool.end();
