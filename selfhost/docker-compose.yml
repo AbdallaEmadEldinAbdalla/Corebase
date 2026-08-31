@@ -1,0 +1,232 @@
+# Corebase — single-node self-host stack (D-099).
+#
+# This is the local-dev stack (D-027) plus production hardening: real keys, real
+# TLS termination in front, real SMTP, and a backup sidecar. It runs ONE project.
+# Deliberately absent: provisioner, pause/resume orchestration, billing, metering,
+# multi-region routing — the fleet machinery that only makes sense for the cloud.
+#
+# Images below are placeholders until the first public release publishes them.
+name: corebase
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+services:
+  # ── data ────────────────────────────────────────────────────────────────
+  db:
+    image: corebase/postgres:17.5
+    restart: unless-stopped
+    <<: *logging
+    # postgres wants `-c` and `name=value` as separate argv entries; `-c=name=value`
+    # parses as an empty parameter name and the server refuses to boot
+    command:
+      - postgres
+      - -c
+      - max_connections=${DB_MAX_CONNECTIONS:-100}
+      - -c
+      - shared_buffers=${DB_SHARED_BUFFERS:-256MB}
+      - -c
+      - wal_level=logical
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_timeout=60
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: postgres
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro     # roles, schemas, RLS defaults
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    # not published by default — reach Postgres through the pooler
+    expose: ["5432"]
+
+  pooler:
+    image: corebase/pgbouncer:1.23
+    restart: unless-stopped
+    <<: *logging
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      # transaction mode is required for multiplexing (D-015); it is also why
+      # named prepared statements and session SET do not survive this hop
+      POOL_MODE: transaction
+      DEFAULT_POOL_SIZE: ${POOL_SIZE:-20}
+      MAX_CLIENT_CONN: ${POOL_MAX_CLIENTS:-200}
+      AUTH_TYPE: scram-sha-256
+      DB_HOST: db
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${POOLER_PORT:-6543}:6432"      # app traffic
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432 -U postgres"]
+      interval: 10s
+      retries: 10
+
+  # ── data plane services ─────────────────────────────────────────────────
+  rest:
+    image: postgrest/postgrest:v12.2.3
+    restart: unless-stopped
+    <<: *logging
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      # PostgREST connects DIRECT, never through the pooler: it needs LISTEN for
+      # schema-cache reload and is itself a pool (D-101)
+      PGRST_DB_URI: postgres://authenticator:${AUTHENTICATOR_PASSWORD:?}@db:5432/postgres
+      PGRST_DB_SCHEMAS: ${API_SCHEMAS:-public}
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_PUBLIC_KEY:?}
+      PGRST_JWT_SECRET_IS_BASE64: "false"
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+      PGRST_OPENAPI_MODE: follow-privileges
+    expose: ["3000"]
+
+  auth:
+    image: corebase/auth:0.1
+    restart: unless-stopped
+    <<: *logging
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      CB_DATABASE_URL: postgres://corebase_auth:${AUTH_DB_PASSWORD:?}@pooler:6432/postgres
+      CB_JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:?}   # ES256 keypair (D-014)
+      CB_JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:?}
+      CB_ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-3600}
+      CB_SITE_URL: ${SITE_URL:?}
+      CB_REDIRECT_ALLOWLIST: ${REDIRECT_ALLOWLIST:-}
+      CB_SMTP_HOST: ${SMTP_HOST:-mail}
+      CB_SMTP_PORT: ${SMTP_PORT:-1025}
+      CB_SMTP_USER: ${SMTP_USER:-}
+      CB_SMTP_PASS: ${SMTP_PASS:-}
+      CB_SMTP_FROM: ${SMTP_FROM:-auth@localhost}
+      CB_SIGNUPS_ENABLED: ${SIGNUPS_ENABLED:-true}
+    expose: ["9999"]
+
+  storage:
+    image: corebase/storage:0.1
+    restart: unless-stopped
+    <<: *logging
+    depends_on:
+      db: { condition: service_healthy }
+      objects: { condition: service_healthy }
+    environment:
+      CB_DATABASE_URL: postgres://corebase_storage:${STORAGE_DB_PASSWORD:?}@pooler:6432/postgres
+      CB_S3_ENDPOINT: http://objects:9000
+      CB_S3_REGION: ${S3_REGION:-local}
+      CB_S3_BUCKET: ${S3_BUCKET:-corebase}
+      CB_S3_ACCESS_KEY: ${S3_ACCESS_KEY:?}
+      CB_S3_SECRET_KEY: ${S3_SECRET_KEY:?}
+      CB_JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:?}
+      CB_MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-50}
+    expose: ["5000"]
+
+  objects:
+    image: minio/minio:RELEASE.2026-04-18T19-09-19Z
+    restart: unless-stopped
+    <<: *logging
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:?}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:?}
+    volumes:
+      - object-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      retries: 10
+    expose: ["9000", "9001"]
+
+  # ── edge ────────────────────────────────────────────────────────────────
+  gateway:
+    image: corebase/gateway:0.1
+    restart: unless-stopped
+    <<: *logging
+    depends_on:
+      rest: { condition: service_started }
+      auth: { condition: service_started }
+      storage: { condition: service_started }
+    environment:
+      # reproduces the cloud path dispatch so the SDK needs only a URL swap
+      CB_MODE: selfhost
+      CB_ANON_KEY: ${ANON_KEY:?}
+      CB_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:?}
+      CB_JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:?}
+      CB_RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-100}
+    ports:
+      - "${API_PORT:-8000}:8000"        # /rest/v1  /auth/v1  /storage/v1
+    healthcheck:
+      test: ["CMD", "cb-healthcheck", "http://127.0.0.1:8000/health"]
+      interval: 10s
+      retries: 10
+
+  # ── dashboard (single-project mode) ─────────────────────────────────────
+  meta:
+    # schema introspection + DDL execution for the dashboard. Runs as the audited
+    # corebase_admin role — the dashboard never holds service_role (D-132).
+    image: corebase/meta:0.1
+    restart: unless-stopped
+    <<: *logging
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      CB_DATABASE_URL: postgres://corebase_admin:${ADMIN_DB_PASSWORD:?}@db:5432/postgres
+    expose: ["8080"]
+
+  studio:
+    # the same dashboard build as the cloud, pointed at a single-project control
+    # plane shim instead of the multi-tenant platform API (D-181)
+    image: corebase/studio:0.1
+    restart: unless-stopped
+    <<: *logging
+    depends_on:
+      meta: { condition: service_started }
+      gateway: { condition: service_healthy }
+    environment:
+      CB_SELFHOST: "true"
+      CB_PROJECT_NAME: ${PROJECT_NAME:-local}
+      CB_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
+      CB_META_URL: http://meta:8080
+      CB_ANON_KEY: ${ANON_KEY:?}
+      CB_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:?}
+      CB_DASHBOARD_USER: ${DASHBOARD_USER:-admin}
+      CB_DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:?set DASHBOARD_PASSWORD}
+    ports:
+      - "${STUDIO_PORT:-3000}:3000"
+
+  # ── operations ──────────────────────────────────────────────────────────
+  backups:
+    # same tool as the cloud (D-019): base backups + WAL archiving, restore-to-new
+    image: corebase/pgbackrest:0.1
+    restart: unless-stopped
+    <<: *logging
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      PGBACKREST_STANZA: ${PROJECT_NAME:-local}
+      PGBACKREST_REPO1_PATH: /var/lib/pgbackrest
+      PGBACKREST_REPO1_RETENTION_FULL: ${BACKUP_RETENTION_FULL:-7}
+      PGBACKREST_SCHEDULE_FULL: ${BACKUP_SCHEDULE_FULL:-0 2 * * 0}
+      PGBACKREST_SCHEDULE_DIFF: ${BACKUP_SCHEDULE_DIFF:-0 2 * * 1-6}
+    volumes:
+      - backup-data:/var/lib/pgbackrest
+      - db-data:/var/lib/postgresql/data:ro
+
+  mail:
+    # dev/staging convenience only — set SMTP_* and drop this in production
+    image: axllent/mailpit:v1.21
+    restart: unless-stopped
+    profiles: ["dev"]
+    ports:
+      - "${MAIL_UI_PORT:-8025}:8025"
+
+volumes:
+  db-data:
+  object-data:
+  backup-data:
