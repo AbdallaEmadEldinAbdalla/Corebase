@@ -1,0 +1,16 @@
+{
+  "name": "@corebase/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --experimental-strip-types src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": { "@corebase/types": "workspace:*" },
+  "devDependencies": {
+    "@corebase/config": "workspace:*", "@types/node": "^22.7.5",
+    "typescript": "^5.6.3", "vitest": "^2.1.3"
+  }
+}

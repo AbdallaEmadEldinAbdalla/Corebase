@@ -3,3 +3,13 @@
 
 # Derived: regenerate from design-exports/ with `zip -r design-exports.zip design-exports`
 design-exports.zip
+
+# node / build
+node_modules/
+dist/
+.turbo/
+*.tsbuildinfo
+
+# local env
+.env
+selfhost/.env
