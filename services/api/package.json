@@ -7,7 +7,8 @@
     "dev": "node --watch --experimental-strip-types src/main.ts",
     "start": "node --experimental-strip-types src/main.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:unit": "vitest run --exclude '**/*.e2e.test.ts' --passWithNoTests"
   },
   "dependencies": {
     "@corebase/types": "workspace:*",

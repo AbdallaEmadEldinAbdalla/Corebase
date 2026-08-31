@@ -4,12 +4,17 @@
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
-  "bin": { "cb-migrate": "./src/cli.ts" },
+  "bin": {
+    "cb-migrate": "./src/cli.ts"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:unit": "vitest run --exclude '**/*.e2e.test.ts' --passWithNoTests"
   },
-  "dependencies": { "pg": "^8.13.1" },
+  "dependencies": {
+    "pg": "^8.13.1"
+  },
   "devDependencies": {
     "@corebase/config": "workspace:*",
     "@types/node": "^22.7.5",

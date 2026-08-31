@@ -10,7 +10,8 @@
     "typecheck": "turbo run typecheck",
     "test": "turbo run test --concurrency=1",
     "lint": "turbo run lint",
-    "dev": "turbo run dev --parallel"
+    "dev": "turbo run dev --parallel",
+    "test:unit": "turbo run test:unit"
   },
   "devDependencies": {
     "turbo": "^2.1.3",

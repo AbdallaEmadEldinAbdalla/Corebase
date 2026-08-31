@@ -11,7 +11,8 @@
     "kill-matrix": "node --experimental-strip-types kill-matrix/run.mts",
     "lifecycle": "node --experimental-strip-types bench/lifecycle.mts",
     "node-reboot": "node --experimental-strip-types bench/node-reboot.mts",
-    "observability": "node --experimental-strip-types bench/observability.mts"
+    "observability": "node --experimental-strip-types bench/observability.mts",
+    "test:unit": "vitest run --exclude '**/*.e2e.test.ts' --passWithNoTests"
   },
   "dependencies": {
     "@corebase/types": "workspace:*",
