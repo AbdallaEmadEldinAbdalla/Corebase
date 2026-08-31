@@ -1,0 +1,84 @@
+# Milestone 0 · T2 — staging infrastructure, Docker edition.
+#
+# The plan calls for Terraform + two Hetzner nodes. We reproduce the same
+# TOPOLOGY locally so no step is skipped and nothing is paid for:
+#
+#   control node  →  control-db (control-plane Postgres, D-012)
+#                    control-redis (BullMQ queue + rate limits, D-018)
+#   data node     →  data-node: Docker-in-Docker exposing the Engine API over
+#                    TLS on :2376. This is the real interface the worker will
+#                    drive in production — the worker manages nodes via the
+#                    Docker Engine API over mTLS, with no per-node agent (D-052).
+#
+# What this substitution does NOT prove: cloud-init, real network partitions,
+# NVMe behaviour, XFS project quotas, or Hetzner-specific failure modes. Those
+# stay open until a real node exists (OQ-165).
+name: corebase-staging
+
+services:
+  control-db:
+    image: postgres:17.5-bookworm
+    container_name: cb-control-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${CONTROL_DB_PASSWORD:-controlpass}
+      POSTGRES_DB: corebase_control
+      POSTGRES_USER: corebase
+    command:
+      - postgres
+      - -c
+      - max_connections=100
+      - -c
+      - log_min_duration_statement=500
+    ports:
+      - "${CONTROL_DB_PORT:-55433}:5432"
+    volumes:
+      - control-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U corebase -d corebase_control"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  control-redis:
+    image: redis:7.4-alpine
+    container_name: cb-control-redis
+    restart: unless-stopped
+    # appendonly so a restart does not silently lose queued jobs; the job row in
+    # Postgres is still the source of truth (D-018/D-067), this is belt and braces
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    ports:
+      - "${CONTROL_REDIS_PORT:-56379}:6379"
+    volumes:
+      - control-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  data-node:
+    # stands in for a Hetzner data node running project containers
+    image: docker:29-dind
+    container_name: cb-data-node
+    restart: unless-stopped
+    privileged: true                     # required for dind; the real node runs dockerd natively
+    environment:
+      DOCKER_TLS_CERTDIR: /certs         # dockerd generates CA + server + client certs here
+    ports:
+      - "${DATA_NODE_PORT:-2376}:2376"   # Engine API, TLS only — never 2375
+    volumes:
+      - data-node-certs:/certs
+      - data-node-docker:/var/lib/docker
+      - ./certs:/certs/client-out        # certs copied out for the worker/host to use
+    healthcheck:
+      test: ["CMD-SHELL", "docker -H tcp://127.0.0.1:2376 --tlsverify --tlscacert /certs/server/ca.pem --tlscert /certs/server/cert.pem --tlskey /certs/server/key.pem info >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  control-db-data:
+  control-redis-data:
+  data-node-certs:
+  data-node-docker:
