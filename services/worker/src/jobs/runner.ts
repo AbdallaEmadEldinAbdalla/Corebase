@@ -32,6 +32,7 @@ export function createRunner(opts: RunnerOptions) {
   const staleAfterMs = opts.staleAfterMs ?? 90_000;
   const heartbeatMs = opts.heartbeatMs ?? 10_000;
   const log = opts.log ?? (() => {});
+  const now = opts.now ?? Date.now;
 
   return {
     /** Returns what happened, so callers and tests can assert without log scraping. */
@@ -69,10 +70,16 @@ export function createRunner(opts: RunnerOptions) {
       try {
         for (const step of steps) {
           if (done.has(step.name)) { log('info', 'step already done — skipping', { step: step.name }); continue; }
+          const startedAt = now();
           await step.run({
             job: claimed,
             log: (msg, extra) => log('info', msg, { step: step.name, id: claimed.id, ...extra }),
           });
+          // Per-step duration on every run, not just when someone is measuring.
+          // A saga whose total time is known but whose distribution across steps
+          // is not is a saga you cannot tune; this is also the raw material for
+          // T9's provisioning-duration histogram.
+          log('info', 'step complete', { step: step.name, id: claimed.id, ms: now() - startedAt });
           done.add(step.name);
           stepsRun.push(step.name);
           // checkpoint AFTER the step, so an interrupted step is retried
