@@ -38,6 +38,13 @@ export interface JobRow {
 export interface ControlPlaneStore {
   createProject(input: {
     ref: string; name: string; region: string; plan: string; idempotencyKey: string;
+    /**
+     * The request that asked for this project. Stored in the job payload so the
+     * worker's log lines can carry it — one field joins the API request to every
+     * saga step it caused, which is what makes "why is project X stuck" a single
+     * Loki query (D-147: request_id lives in the line, never in a label).
+     */
+    requestId?: string;
   }): Promise<{ project: Project; job: JobRow; replayed: boolean }>;
   /** Replay lookup: a seen key must return the original outcome (D-063). */
   findByIdempotencyKey(key: string): Promise<Project | undefined>;

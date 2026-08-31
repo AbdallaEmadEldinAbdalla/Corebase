@@ -72,7 +72,7 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
   });
 
   return {
-    async createProject({ ref, name, region, plan, idempotencyKey }) {
+    async createProject({ ref, name, region, plan, idempotencyKey, requestId }) {
       const client: PoolClient = await pool.connect();
       try {
         await client.query('BEGIN');
@@ -89,7 +89,8 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
           `INSERT INTO provisioning_jobs (project_id, job_type, idempotency_key, payload, state)
            VALUES ($1, 'provision_project', $2, $3::jsonb, 'pending')
            RETURNING id, job_type, project_id, idempotency_key, state::text AS state`,
-          [project.id, idempotencyKey, JSON.stringify({ project_id: project.id, ref })],
+          [project.id, idempotencyKey,
+           JSON.stringify({ project_id: project.id, ref, ...(requestId ? { request_id: requestId } : {}) })],
         );
         await client.query('COMMIT');
         return { project, job: jobFromDb(job.rows[0]!), replayed: false };

@@ -16,7 +16,8 @@
     "pg": "^8.13.1",
     "@corebase/queue": "workspace:*",
     "@corebase/secrets": "workspace:*",
-    "@corebase/crypto": "workspace:*"
+    "@corebase/crypto": "workspace:*",
+    "@corebase/metrics": "workspace:*"
   },
   "devDependencies": {
     "@corebase/config": "workspace:*",

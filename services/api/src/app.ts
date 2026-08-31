@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { registerErrorHandling } from './kernel/errors.ts';
 import { registerControlPlane, type Enqueue } from './modules/control-plane/routes.ts';
 import { createMemoryStore, type ControlPlaneStore } from './modules/control-plane/store.ts';
+import { registerMetrics } from './kernel/metrics.ts';
 
 export interface BuildOptions {
   store?: ControlPlaneStore;
@@ -15,6 +16,7 @@ export interface BuildOptions {
 export function buildApp(opts: BuildOptions = {}): FastifyInstance {
   const app = Fastify({ logger: opts.logger ?? false, genReqId: () => `req_${crypto.randomUUID()}` });
   registerErrorHandling(app);
+  registerMetrics(app);
 
   app.get('/health', async () => ({ status: 'ok', service: 'api' }));
   app.get('/ready', async () => ({ status: 'ready' }));

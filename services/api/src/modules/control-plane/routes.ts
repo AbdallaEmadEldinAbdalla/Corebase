@@ -72,6 +72,7 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
       region: parsed.data.region,
       plan: parsed.data.plan,
       idempotencyKey: key,
+      requestId: String(reply.getHeader('x-request-id') ?? req.id),
     });
 
     if (deps.enqueue) {
