@@ -11,7 +11,8 @@
     "test": "turbo run test --concurrency=1",
     "lint": "turbo run lint",
     "dev": "turbo run dev --parallel",
-    "test:unit": "turbo run test:unit"
+    "test:unit": "turbo run test:unit",
+    "dev:dashboard": "pnpm --filter @corebase/dashboard dev"
   },
   "devDependencies": {
     "turbo": "^2.1.3",
