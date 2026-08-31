@@ -293,6 +293,14 @@ The single authoritative register of every locked decision in the corpus, ADR-st
 | D-182 | Postgres is not published to the host by default (pooler on 6543 is the only DB entry point); dashboard protected by basic auth with docs mandating a reverse proxy | [self-hosting](../10-cli-and-sdk/04-self-hosting.md) |
 | D-183 | Every self-host secret is a required variable with no default — the stack refuses to boot rather than run on a known-weak credential | [self-hosting](../10-cli-and-sdk/04-self-hosting.md) |
 
+## Provisioning hardening (from M0/T5d, found by running it)
+
+| ID | Decision | Detail |
+|---|---|---|
+| D-184 | Project containers are **created with no restart policy**; `wait_healthy` promotes them to `unless-stopped` only after the database answers `pg_isready` | A container that cannot initialise (bad config, corrupt volume, exhausted disk) flaps forever under `unless-stopped`, burning node CPU and hiding the failure behind a permanent `restarting` state — the health gate never sees a dead container to report. Attaching the policy after the first successful probe keeps node-reboot recovery while making first-boot failures fail once, loudly, in seconds. [postgres provisioning](../03-database-platform/01-postgres-provisioning.md) |
+| D-185 | No `trust` authentication anywhere in a project database: the image builds with `--auth-local=peer --auth-host=scram-sha-256`, and an init script fails the boot if any `trust` rule or non-scram host rule survives | `initdb` defaults leave `trust` on the local socket and on loopback, so any code execution inside the container is an unauthenticated superuser login — a privilege escalation that needs no container escape, which is exactly the class D-078 exists to close. `peer` keeps in-container maintenance (OS `postgres` → db `postgres`) working without granting it to any other process. Verified by [tenant isolation tests](../06-security/03-tenant-isolation-tests.md). [postgres provisioning](../03-database-platform/01-postgres-provisioning.md) |
+| D-186 | The shared `postgresql.base.conf` pins **no** `data_directory`; the data directory comes from `PGDATA` in the container spec | The volume is mounted at `/var/lib/postgresql/data` and `PGDATA` is a subdirectory of it (the mount root can hold `lost+found`, which `initdb` refuses). A path pinned in a fleet-wide config file therefore contradicts the spec on every first boot — the server initialises the subdirectory and then refuses to start on the parent's permissions. One source of truth, and it is the spec. [postgres provisioning](../03-database-platform/01-postgres-provisioning.md) |
+
 ## How to add a decision
 
 1. Propose it in the owning doc's **Decisions** section with rationale.
