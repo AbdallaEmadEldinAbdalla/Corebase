@@ -74,7 +74,7 @@ kill-matrix, deletion residue and reboot convergence are separate proofs.
 
 ### What Milestone 0 decides by building
 
-Building this settles, with running code instead of debate: real idle RSS per project triplet-precursor (feeds OQ-056/OQ-090 back into the [cost model](../12-business/01-cost-model.md)), actual provisioning latency vs the <60s/<30s targets, and whether Docker-Engine-API-over-mTLS control (D-052) feels operationally sound. **A Milestone-0 retro updating the cost model and decision log with measured numbers is part of the milestone.**
+Building this settles, with running code instead of debate: real idle RSS per project triplet-precursor (feeds OQ-056/OQ-090 back into the [cost model](../12-business/01-cost-model.md)), actual provisioning latency vs the <60s/<30s targets, and whether Docker-Engine-API-over-mTLS control (D-052) feels operationally sound. **A Milestone-0 retro updating the cost model and decision log with measured numbers is part of the milestone.** → **[done: the retro](06-milestone-0-retro.md)** (D-207…D-210).
 
 ## Decisions
 

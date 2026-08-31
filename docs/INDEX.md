@@ -6,7 +6,7 @@ The complete A-to-Z plan for Corebase. Every doc follows the template **Purpose 
 
 **First pass (strategy & shape):** 00-foundation (all) → 01-architecture/01–03 → 14-roadmap/01–02 → 15-risks/01
 **Second pass (the systems):** 02 → 03 → 04 → 05 → 06 → 07
-**Third pass (the rest):** 08 → 09 → 10 → 11 → 12 → 13 → 14-roadmap/03–04 → 15-risks/02
+**Third pass (the rest):** 08 → 09 → 10 → 11 → 12 → 13 → 14-roadmap/03–06 → 15-risks/02
 
 ## 00 — Foundation
 
@@ -142,6 +142,7 @@ The complete A-to-Z plan for Corebase. Every doc follows the template **Purpose 
 | [03 Post-V1 roadmap](14-roadmap/03-post-v1-roadmap.md) | V1.1 → V3: OAuth, realtime, functions, multi-region, enterprise |
 | [04 Milestone 0](14-roadmap/04-milestone-0.md) | The very first milestone, task-by-task, ready to execute |
 | [05 Measurement log](14-roadmap/05-measurements.md) | Assumed vs measured numbers; the evidence the M0 retro reads |
+| [06 Milestone-0 retro](14-roadmap/06-milestone-0-retro.md) | What the build measured, what changed, and what the numbers deliberately do **not** license |
 
 ## 15 — Risks
 
