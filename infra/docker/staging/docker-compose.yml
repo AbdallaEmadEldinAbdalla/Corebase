@@ -72,11 +72,12 @@ services:
       # them in its own namespace, so the range has to be republished to be
       # reachable from the control plane running on the host.
       #
-      # Ten ports, not the fleet's thousand (PG_PORT_RANGE): publishing 1000
-      # ports through Docker Desktop's proxy costs seconds of startup and a
+      # Thirty ports, not the fleet's thousand (PG_PORT_RANGE): enough to hold
+      # T5f's twenty simultaneous projects with headroom, while publishing 1000
+      # through Docker Desktop's proxy would cost seconds of startup and a
       # process per port for no extra coverage. CB_PG_PORT_MIN/MAX narrow the
       # allocator to match — see placement.ts.
-      - "${PROJECT_PORT_MIN:-5433}-${PROJECT_PORT_MAX:-5442}:5433-5442"
+      - "${PROJECT_PORT_MIN:-5433}-${PROJECT_PORT_MAX:-5462}:5433-5462"
     volumes:
       - data-node-certs:/certs
       - data-node-docker:/var/lib/docker

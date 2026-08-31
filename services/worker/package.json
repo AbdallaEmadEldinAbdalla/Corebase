@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node --experimental-strip-types src/main.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "bench": "node --experimental-strip-types bench/provision.mts"
   },
   "dependencies": {
     "@corebase/types": "workspace:*",
