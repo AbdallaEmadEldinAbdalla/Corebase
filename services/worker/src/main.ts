@@ -10,6 +10,10 @@ import { createSecretStore } from '@corebase/secrets';
 import { createSweeper } from './sweeper.ts';
 import { createPurgeScan } from './purge-scan.ts';
 import { createReconciler } from './reconcile.ts';
+import {
+  startMetricsServer, registerControlPlaneCollectors,
+  jobSeconds, stepSeconds, jobsTotal, reconcileDriftTotal, reconcilePassSeconds,
+} from './metrics.ts';
 
 const dbUrl = process.env.CB_CONTROL_DATABASE_URL;
 const redisUrl = process.env.CB_REDIS_URL;
@@ -32,7 +36,7 @@ const repo = createJobRepo(pool);
  * M0 runs one worker managing one data node, so the worker registers it at
  * startup. P2 moves registration to the node's own bootstrap.
  */
-const nodeId = await registerNode(pool, {
+const nodeRegistration = {
   hostname: process.env.CB_NODE_HOSTNAME ?? 'data-node-local',
   ramTotalMb: Number(process.env.CB_NODE_RAM_MB ?? 4096),
   diskTotalGb: Number(process.env.CB_NODE_DISK_GB ?? 100),
@@ -41,7 +45,8 @@ const nodeId = await registerNode(pool, {
   // ports live on the same address.
   address: process.env.CB_NODE_ADDRESS ?? process.env.CB_DOCKER_HOST ?? '127.0.0.1',
   labels: { managed_by: 'worker', environment: process.env.CB_ENV ?? 'staging' },
-});
+};
+const nodeId = await registerNode(pool, nodeRegistration);
 log('info', 'node registered', { nodeId, hostname: process.env.CB_NODE_HOSTNAME ?? 'data-node-local' });
 
 const dockerHost = process.env.CB_DOCKER_HOST;
@@ -91,6 +96,11 @@ const runner = createRunner({
   repo, sagas,
   staleAfterMs: Number(process.env.CB_STALE_AFTER_MS ?? 30_000),
   log: (l, m, e) => log(l, m, e),
+  onStep: (jobType, step, seconds) => stepSeconds.observe({ job_type: jobType, step }, seconds),
+  onJob: (jobType, outcome, seconds) => {
+    jobSeconds.observe({ job_type: jobType, outcome }, seconds);
+    jobsTotal.inc({ job_type: jobType, outcome });
+  },
 });
 // The sweeper's stale threshold must match the runner's, or the two disagree
 // about whether a row is orphaned: a sweeper that sweeps sooner re-delivers work
@@ -133,7 +143,21 @@ if (docker) {
   const jitter = () => reconcileMs * (0.85 + Math.random() * 0.3);
   const schedule = () => {
     reconcileTimer = setTimeout(() => {
-      void reconciler.reconcileOnce()
+      const started = Date.now();
+      // Re-assert the node's own row first. registerNode is an upsert, so this is
+      // one cheap statement — and without it a worker whose node row disappears
+      // (a bad restore, an operator's DELETE, a truncated control plane) stays up
+      // while placement is blind to it forever, which looks like "provisioning
+      // hangs" and reads like anything but the cause.
+      void registerNode(pool, nodeRegistration)
+        .catch((e) => log('error', 're-registration failed', { error: (e as Error).message }))
+        .then(() => reconciler.reconcileOnce())
+        .then((report) => {
+          reconcilePassSeconds.observe({ node: report.node }, (Date.now() - started) / 1000);
+          for (const d of report.drift) {
+            reconcileDriftTotal.inc({ class: d.class, action: d.action });
+          }
+        })
         .catch((e) => log('error', 'reconcile failed', { error: (e as Error).message }))
         .finally(schedule);
     }, jitter());
@@ -143,13 +167,18 @@ if (docker) {
   log('warn', 'no Docker client — node reconciliation disabled', {});
 }
 
-log('info', 'worker started', { sweepMs, purgeMs, reconcileMs });
+registerControlPlaneCollectors(pool);
+const metricsPort = Number(process.env.CB_METRICS_PORT ?? 9101);
+const metricsServer = startMetricsServer(metricsPort);
+
+log('info', 'worker started', { sweepMs, purgeMs, reconcileMs, metricsPort });
 
 const shutdown = async (signal: string) => {
   log('info', 'shutting down', { signal });
   clearInterval(sweepTimer);
   clearInterval(purgeTimer);
   if (reconcileTimer) clearTimeout(reconcileTimer);
+  metricsServer.close();
   await worker.close();          // finishes in-flight work before exiting
   await redis.quit();
   await pool.end();

@@ -10,14 +10,16 @@
     "bench": "node --experimental-strip-types bench/provision.mts",
     "kill-matrix": "node --experimental-strip-types kill-matrix/run.mts",
     "lifecycle": "node --experimental-strip-types bench/lifecycle.mts",
-    "node-reboot": "node --experimental-strip-types bench/node-reboot.mts"
+    "node-reboot": "node --experimental-strip-types bench/node-reboot.mts",
+    "observability": "node --experimental-strip-types bench/observability.mts"
   },
   "dependencies": {
     "@corebase/types": "workspace:*",
     "@corebase/queue": "workspace:*",
     "pg": "^8.13.1",
     "@corebase/crypto": "workspace:*",
-    "@corebase/secrets": "workspace:*"
+    "@corebase/secrets": "workspace:*",
+    "@corebase/metrics": "workspace:*"
   },
   "devDependencies": {
     "@corebase/config": "workspace:*",

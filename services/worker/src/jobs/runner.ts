@@ -24,9 +24,24 @@ export interface RunnerOptions {
   heartbeatMs?: number;
   now?: () => number;
   log?: (level: 'info' | 'warn' | 'error', msg: string, extra?: Record<string, unknown>) => void;
+  /**
+   * Metrics hooks, injected rather than imported: the runner stays testable
+   * without a registry, and where the numbers go is main.ts's business.
+   */
+  onStep?: (jobType: string, step: string, seconds: number) => void;
+  onJob?: (jobType: string, outcome: 'succeeded' | 'failed' | 'dead_letter', seconds: number) => void;
 }
 
 export class UnknownJobTypeError extends Error {}
+
+/** Identity fields lifted out of the job payload for every log line. */
+function ctxLabels(job: JobRecord): Record<string, unknown> {
+  const payload = (job.payload ?? {}) as { ref?: string; request_id?: string };
+  return {
+    ...(payload.ref ? { ref: payload.ref } : {}),
+    ...(payload.request_id ? { request_id: payload.request_id } : {}),
+  };
+}
 
 /**
  * How long a claimed job may go without a heartbeat before another worker may
@@ -64,13 +79,13 @@ export function createRunner(opts: RunnerOptions) {
         return { outcome: 'skipped', stepsRun: [] };
       }
       if (row.state === 'succeeded') {
-        log('info', 'job already succeeded — duplicate delivery ignored', { id: row.id });
+        log('info', 'job already succeeded — duplicate delivery ignored', { id: row.id, ...ctxLabels(row) });
         return { outcome: 'skipped', stepsRun: [] };
       }
 
       const claimed = await opts.repo.claim(row.id, staleAfterMs);
       if (!claimed) {
-        log('info', 'job claimed by another worker', { id: row.id });
+        log('info', 'job claimed by another worker', { id: row.id, ...ctxLabels(row) });
         return { outcome: 'skipped', stepsRun: [] };
       }
 
@@ -80,6 +95,7 @@ export function createRunner(opts: RunnerOptions) {
         throw new UnknownJobTypeError(claimed.job_type);
       }
 
+      const jobStartedAt = now();
       const beat = setInterval(() => { void opts.repo.heartbeat(claimed.id); }, heartbeatMs);
       const done = new Set<string>(
         Array.isArray(claimed.checkpoint?.['completed'])
@@ -91,24 +107,35 @@ export function createRunner(opts: RunnerOptions) {
           const startedAt = now();
           await step.run({
             job: claimed,
-            log: (msg, extra) => log('info', msg, { step: step.name, id: claimed.id, ...extra }),
+            // ref and request_id travel on every line (D-147: they belong in the
+            // line, never in a Loki label). One `ref` query then shows a
+            // project's whole history, and one `request_id` shows exactly the
+            // work a single API call caused.
+            log: (msg, extra) => log('info', msg, {
+              step: step.name, id: claimed.id, ...ctxLabels(claimed), ...extra,
+            }),
           });
           // Per-step duration on every run, not just when someone is measuring.
           // A saga whose total time is known but whose distribution across steps
           // is not is a saga you cannot tune; this is also the raw material for
           // T9's provisioning-duration histogram.
-          log('info', 'step complete', { step: step.name, id: claimed.id, ms: now() - startedAt });
+          const stepMs = now() - startedAt;
+          log('info', 'step complete', { step: step.name, id: claimed.id, ms: stepMs });
+          opts.onStep?.(claimed.job_type, step.name, stepMs / 1000);
           done.add(step.name);
           stepsRun.push(step.name);
           // checkpoint AFTER the step, so an interrupted step is retried
           await opts.repo.saveCheckpoint(claimed.id, { completed: [...done] });
         }
         await opts.repo.succeed(claimed.id);
+        opts.onJob?.(claimed.job_type, 'succeeded', (now() - jobStartedAt) / 1000);
         return { outcome: 'succeeded', stepsRun };
       } catch (err) {
         const { terminal } = await opts.repo.fail(claimed.id, (err as Error).message);
         log(terminal ? 'error' : 'warn', terminal ? 'job dead-lettered' : 'job failed, will retry',
-          { id: claimed.id, error: (err as Error).message });
+          { id: claimed.id, ...ctxLabels(claimed), error: (err as Error).message });
+        opts.onJob?.(claimed.job_type, terminal ? 'dead_letter' : 'failed',
+          (now() - jobStartedAt) / 1000);
         if (terminal) return { outcome: 'dead_letter', stepsRun };
         throw err;   // let BullMQ apply its backoff
       } finally {
