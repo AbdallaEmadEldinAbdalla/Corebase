@@ -61,7 +61,7 @@ export function registerErrorHandling(app: FastifyInstance) {
           // The message is about the request, not about our internals, so it is
           // safe to pass through and far more useful than a generic string.
           code: status === 401 || status === 403 ? ERROR_CODES.UNAUTHORIZED : ERROR_CODES.VALIDATION_FAILED,
-          message: err.message,
+          message: (err as Error).message,
           request_id: requestId,
         },
       });

@@ -9,6 +9,7 @@ import { createEnvelope } from '@corebase/crypto';
 import { createSecretStore } from '@corebase/secrets';
 import { createSweeper } from './sweeper.ts';
 import { createPurgeScan } from './purge-scan.ts';
+import { createReconciler } from './reconcile.ts';
 
 const dbUrl = process.env.CB_CONTROL_DATABASE_URL;
 const redisUrl = process.env.CB_REDIS_URL;
@@ -117,12 +118,38 @@ const purgeMs = Number(process.env.CB_PURGE_SCAN_MS ?? 3_600_000);
 const purgeTimer = setInterval(() => { void purgeScan.scanOnce().catch((e) =>
   log('error', 'purge scan failed', { error: (e as Error).message })); }, purgeMs);
 
-log('info', 'worker started', { sweepMs, purgeMs });
+// Node reconciliation (D-065/D-173): 5 minutes, jittered so a fleet of workers
+// does not hit every node's Engine API at the same second. Container crashes are
+// Docker's restart policy to handle; this is the backstop that catches what the
+// policy did not, plus everything the control plane and the node disagree about.
+const reconcileMs = Number(process.env.CB_RECONCILE_INTERVAL_MS ?? 300_000);
+let reconcileTimer: NodeJS.Timeout | undefined;
+if (docker) {
+  const reconciler = createReconciler({
+    pool, docker, queue,
+    hostname: process.env.CB_NODE_HOSTNAME ?? 'data-node-local',
+    log: (l, m, e) => log(l, m, e),
+  });
+  const jitter = () => reconcileMs * (0.85 + Math.random() * 0.3);
+  const schedule = () => {
+    reconcileTimer = setTimeout(() => {
+      void reconciler.reconcileOnce()
+        .catch((e) => log('error', 'reconcile failed', { error: (e as Error).message }))
+        .finally(schedule);
+    }, jitter());
+  };
+  schedule();
+} else {
+  log('warn', 'no Docker client — node reconciliation disabled', {});
+}
+
+log('info', 'worker started', { sweepMs, purgeMs, reconcileMs });
 
 const shutdown = async (signal: string) => {
   log('info', 'shutting down', { signal });
   clearInterval(sweepTimer);
   clearInterval(purgeTimer);
+  if (reconcileTimer) clearTimeout(reconcileTimer);
   await worker.close();          // finishes in-flight work before exiting
   await redis.quit();
   await pool.end();
