@@ -21,9 +21,9 @@ import type { DatabaseInfo } from '../../../../lib/api.ts';
  * third tab" is the instruction that question exists to eliminate.
  */
 const TABS = [
+  { id: 'env', label: '.env' },
   { id: 'uri', label: 'URI' },
   { id: 'psql', label: 'psql' },
-  { id: 'env', label: '.env' },
   { id: 'node', label: 'Node.js' },
 ] as const;
 type TabId = (typeof TABS)[number]['id'];
@@ -43,7 +43,9 @@ function Connect({ projectRef }: { projectRef: string }) {
   const search = useSearchParams();
 
   const raw = search.get('as');
-  const tab: TabId = TABS.some((t) => t.id === raw) ? (raw as TabId) : 'uri';
+  // `.env` first: the question people arrive with is "what do I put in my app",
+  // and the answer is two variables, not one URI.
+  const tab: TabId = TABS.some((t) => t.id === raw) ? (raw as TabId) : 'env';
   const setTab = (id: TabId) =>
     // replace, not push: flipping between tabs is not four steps of history to
     // walk back through.
@@ -96,21 +98,39 @@ function Connect({ projectRef }: { projectRef: string }) {
 
           <section className="section" style={{ marginTop: 'var(--cb-space-8)' }}>
             <div className="section__head">
-              <h2 className="section__title">Connection pooler</h2>
-              <p className="section__note">
-                Allocated and recorded — PgBouncer itself is a later phase, so this
-                string will not connect yet.
-              </p>
+              <h2 className="section__title">Which one do I use?</h2>
             </div>
             <div className="card"><div className="card__body">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--cb-space-3)' }}>
-                <code style={{ flex: 1, minWidth: 0, font: 'var(--cb-code)', overflowWrap: 'anywhere',
-                               color: 'var(--cb-text-muted)' }}>
-                  {db.connection_strings.pooled}
-                </code>
-                <CopyButton value={db.connection_strings.pooled} what="Pooled connection string"
-                            variant="ghost" />
+              <div className="facts">
+                <div className="facts__k">DATABASE_URL</div>
+                <div className="facts__v">
+                  <strong>Your application.</strong> Goes through the connection pooler, so
+                  hundreds of clients — serverless functions especially — share a handful of
+                  database connections. This is the default and the one to reach for.
+                </div>
+                <div className="facts__k">DIRECT_DATABASE_URL</div>
+                <div className="facts__v">
+                  <strong>Migrations and tools.</strong> A direct connection, needed for the
+                  handful of things pooling cannot carry: <code>LISTEN</code>, session
+                  advisory locks, <code>WITH HOLD</code> cursors, temp tables, and SQL-level
+                  <code> PREPARE</code>.
+                  <br />
+                  Most of these do not fail on the pooled URL — they <em>appear</em> to work
+                  and then quietly misbehave, because the next statement may run on a
+                  different server connection. <code>LISTEN</code> returns success and then
+                  never delivers. That is the reason to know which URL you are holding.
+                  <br />
+                  There are only a couple of direct slots per project, so pointing an
+                  application fleet at this one will exhaust them — visibly, which is the
+                  correct failure.
+                </div>
               </div>
+              <p className="panel__note">
+                Inside a transaction, <code>SET LOCAL</code> works on both. Plain{' '}
+                <code>SET</code> does not survive the pooler and must not be used to carry
+                identity — that is what makes pooling safe for a multi-user API rather than
+                merely tolerable.
+              </p>
             </div></div>
           </section>
         </>
@@ -122,6 +142,7 @@ function Connect({ projectRef }: { projectRef: string }) {
 /** Mono, on a dark surface, with a copy affordance — design system §5 rule 7. */
 function Snippet({ tab, db, name }: { tab: TabId; db: DatabaseInfo; name: string }) {
   const uri = db.connection_strings!.direct;
+  const pooled = db.connection_strings!.pooled;
   const url = new URL(uri);
   const user = decodeURIComponent(url.username);
   const password = decodeURIComponent(url.password);
@@ -130,25 +151,31 @@ function Snippet({ tab, db, name }: { tab: TabId; db: DatabaseInfo; name: string
   const database = url.pathname.replace(/^\//, '') || 'postgres';
 
   const body: Record<TabId, { lang: string; text: string }> = {
-    uri: { lang: 'Connection URI', text: uri },
-    psql: { lang: 'shell', text: `psql "${uri}"` },
+    // Both variables, in the order an application needs them. The pooled URL is
+    // DATABASE_URL because that is the one an app should use; the direct URL is
+    // named for what it is rather than hidden, because migrations need it and a
+    // developer who cannot find it will point their app at it instead.
     env: {
       lang: '.env',
       text: [
-        `DATABASE_URL="${uri}"`,
+        '# Your application. Pooled — safe for serverless and connection-happy ORMs.',
+        `DATABASE_URL="${pooled}"`,
         '',
-        `PGHOST=${host}`,
-        `PGPORT=${port}`,
-        `PGDATABASE=${database}`,
-        `PGUSER=${user}`,
-        `PGPASSWORD=${password}`,
+        '# Migrations, LISTEN, advisory locks, psql. Only a couple of slots exist.',
+        `DIRECT_DATABASE_URL="${uri}"`,
       ].join('\n'),
     },
+    uri: { lang: 'Pooled connection URI', text: pooled },
+    // psql on the direct port: an interactive session is exactly the case
+    // transaction pooling does not serve well, and it is one connection.
+    psql: { lang: 'shell', text: `psql "${uri}"` },
     node: {
       lang: 'javascript',
       text: [
         "import { Pool } from 'pg';",
         '',
+        '// DATABASE_URL is the pooled one; the driver pools on top of it, which is',
+        '// fine — PgBouncer is what keeps the *database* from seeing every client.',
         'const pool = new Pool({',
         '  connectionString: process.env.DATABASE_URL,',
         '});',

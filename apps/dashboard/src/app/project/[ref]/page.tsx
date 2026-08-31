@@ -28,7 +28,9 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
   const p = q.data?.project;
   const db = q.data?.database;
   const settling = Boolean(p && SETTLING.has(p.status));
-  const direct = db?.connection_strings?.direct;
+  // The pooled string, because that is what an application should use (D-015).
+  // The overview answers "how do I connect my app"; Connect answers the rest.
+  const pooled = db?.connection_strings?.pooled;
 
   return (
     <div className="wrap">
@@ -108,13 +110,16 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
         </div>
         <div className="card">
           <div className="card__body">
-            {direct ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--cb-space-3)' }}>
-                <code style={{ flex: 1, minWidth: 0, font: 'var(--cb-code)', overflowWrap: 'anywhere' }}>
-                  {direct}
-                </code>
-                <CopyButton value={direct} what="Connection string" />
-              </div>
+            {pooled ? (
+              <>
+                <div className="facts__k" style={{ marginBottom: 6 }}>DATABASE_URL</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--cb-space-3)' }}>
+                  <code style={{ flex: 1, minWidth: 0, font: 'var(--cb-code)', overflowWrap: 'anywhere' }}>
+                    {pooled}
+                  </code>
+                  <CopyButton value={pooled} what="DATABASE_URL" />
+                </div>
+              </>
             ) : q.isLoading ? (
               <div className="cb-skeleton" style={{ height: 20, width: '80%' }} />
             ) : (
@@ -125,9 +130,11 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
               </p>
             )}
           </div>
-          {direct ? (
+          {pooled ? (
             <div className="card__foot">
-              This string contains the database password. Treat it like one.
+              Pooled, for your application. Migrations and <code>psql</code> want
+              <code> DIRECT_DATABASE_URL</code> — both are on Connect. Contains the
+              database password; treat it like one.
             </div>
           ) : null}
         </div>
