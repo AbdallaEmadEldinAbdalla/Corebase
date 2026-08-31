@@ -36,6 +36,13 @@ export const Project = z.object({
   plan: z.string(),
   status: ProjectStatus,
   created_at: z.string(),
+  /**
+   * Present only while a project is soft-deleted. Without them the recovery
+   * window (D-038) is a promise the customer cannot see the end of — and a
+   * deadline you cannot read is not a deadline you can act on.
+   */
+  deleted_at: z.string().nullish(),
+  purge_after: z.string().nullish(),
 });
 export type Project = z.infer<typeof Project>;
 

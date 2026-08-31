@@ -17,17 +17,24 @@ import { SECRET_NAMES } from '@corebase/secrets';
  * BullMQ is a later, retryable step the sweeper can redo (D-018).
  */
 
+const TS = (col: string) => `to_char(${col}, 'YYYY-MM-DD"T"HH24:MI:SS.MSZ')`;
 const PROJECT_COLUMNS = `
   p.id, p.ref::text AS ref, p.name, p.region, p.plan::text AS plan,
-  p.status::text AS status, to_char(p.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MSZ') AS created_at`;
+  p.status::text AS status, ${TS('p.created_at')} AS created_at,
+  ${TS('p.deleted_at')} AS deleted_at, ${TS('p.purge_after')} AS purge_after`;
 
 interface ProjectRowDb {
   id: string; ref: string; name: string; region: string;
   plan: string; status: string; created_at: string;
+  deleted_at: string | null; purge_after: string | null;
 }
 const toProject = (r: ProjectRowDb): Project => ({
   id: r.id, ref: r.ref, name: r.name, region: r.region,
   plan: r.plan, status: r.status as ProjectStatus, created_at: r.created_at,
+  // Omitted entirely for a live project rather than serialised as null: an
+  // absent field reads as "not applicable", a null reads as "we lost it".
+  ...(r.deleted_at ? { deleted_at: r.deleted_at } : {}),
+  ...(r.purge_after ? { purge_after: r.purge_after } : {}),
 });
 
 export interface PgStoreOptions {

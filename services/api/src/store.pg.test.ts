@@ -93,7 +93,14 @@ describe('pg control-plane store', () => {
     await pool.query(
       `update projects set status='soft_deleted', deleted_at=now(), purge_after=now()+interval '7 days' where ref=$1`,
       [project.ref]);
-    expect((await store.getProject(project.ref))?.status).toBe('soft_deleted');
+    const soft = await store.getProject(project.ref);
+    expect(soft?.status).toBe('soft_deleted');
+    // The deadline has to be readable, or the recovery window is a promise the
+    // customer cannot see the end of.
+    expect(soft?.deleted_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(soft?.purge_after).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(new Date(soft!.purge_after!).getTime())
+      .toBeGreaterThan(new Date(soft!.deleted_at!).getTime());
     expect(await store.listProjects()).toHaveLength(1);
 
     // Purged is gone, and only then does it disappear.
@@ -124,6 +131,9 @@ describe('pg control-plane store', () => {
     const got = await app.inject({ method: 'GET', url: `/v1/projects/${ref}`, headers: auth });
     expect(got.json().project.status).toBe('creating');
     expect(got.json().database).toBeUndefined();
+    // Absent, not null: a live project has no purge deadline, and an absent
+    // field says "not applicable" where a null says "we lost it".
+    expect('purge_after' in got.json().project).toBe(false);
 
     const del = await app.inject({ method: 'DELETE', url: `/v1/projects/${ref}`, headers: auth });
     expect(del.json().project.status).toBe('deleting');
