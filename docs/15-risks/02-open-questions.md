@@ -15,8 +15,9 @@ Everything the corpus deliberately leaves unresolved, in one place. Each OQ live
 
 | ID | Question | Why it blocks |
 |---|---|---|
-| OQ-165 | Milestone-0 staging on cloud VMs vs a prod-representative dedicated box | Blocks M0 itself; the retro's RSS/IO numbers are only as good as the hardware |
-| OQ-056 / OQ-090 | Measured idle RSS of the Postgres+PgBouncer+PostgREST triplet (the 300–350 MB planning figure is unmeasured) | R-2's economics and node purchase both hang on this; Milestone 0 exists to answer it |
+| OQ-165 | Milestone-0 staging on cloud VMs vs a prod-representative dedicated box | **Answered by doing, not deciding:** M0 ran entirely on local Docker, so every number is ARM and no number is prod-representative. The question is now "when do we buy the box", and [D-209](../14-roadmap/06-milestone-0-retro.md) makes that purchase a precondition for re-basing the density model |
+| OQ-056 / OQ-090 | Measured idle RSS of the Postgres+PgBouncer+PostgREST triplet (the 300–350 MB planning figure is unmeasured) | **Still blocking, now with first data.** Postgres alone measures 102.2 MiB cgroup peak idle ([M-001](../14-roadmap/05-measurements.md)); the other two processes are unbuilt. D-209 gates what partial data may change |
+| OQ-176 | Does the ~14:1 booked-to-used RAM ratio survive real client load, and at what load does the 350 MB booking begin to bind? | Decides whether D-174's overcommit is comfortable or merely untested — the difference between a free tier that works and one that OOM-kills under its first real traffic |
 | OQ-087 | Cloud KMS vs self-hosted sealed store on Hetzner | Risk register says resolve before Phase 1 ends; gates D-035 envelope encryption and LUKS boot keys |
 | OQ-051 | WireGuard over the Hetzner private LAN, or trust vSwitch for V1 | Network foundation laid in Phases 0–1; retrofitting encryption later touches every service |
 | OQ-080 | Egress allowlist mechanics for tenant Postgres containers (WAL push vs NAT vs per-project rules) | Must be decided during Phase 2 provisioning implementation |
@@ -107,7 +108,9 @@ Everything the corpus deliberately leaves unresolved, in one place. Each OQ live
 
 | ID | Question (one line) | Owning doc | Decide by |
 |---|---|---|---|
-| OQ-090 | Measured RSS of the tuned per-project stack under idle and light load — the 350 MB planning number needs a benchmark | [cost model](../12-business/01-cost-model.md) | Milestone 0, before node purchase |
+| OQ-090 | Measured RSS of the tuned per-project stack under idle and light load — the 350 MB planning number needs a benchmark | [cost model](../12-business/01-cost-model.md) | **first data in M-001/M-002; still open** — the triplet needs Phases 1–2, and D-209 gates re-basing |
+| OQ-176 | Does the ~14:1 booked-to-used RAM ratio ([M-002](../14-roadmap/05-measurements.md)) survive real client load, and where does the 350 MB booking begin to bind? | [cost model](../12-business/01-cost-model.md) | with the first x86 node, gated by D-209 |
+| OQ-177 | Per-project disk floor once WAL archiving writes to the volume rather than the container filesystem | [cost model](../12-business/01-cost-model.md) | when backups land (Phase 3) |
 | OQ-091 | Does sub-5-second resume require warm page-cache snapshots or pre-started shells, and at what density cost? | [cost model](../12-business/01-cost-model.md) | Milestone 0 / Phase 2 measurements |
 | OQ-092 | Hetzner fair-use reality: at what sustained per-node egress do we get throttled, forcing CDN-in-front earlier? | [cost model](../12-business/01-cost-model.md) | — (observe once beta traffic exists) |
 | OQ-093 | Annual pricing (2 months free?) and regional pricing | [pricing & plans](../12-business/02-pricing-and-plans.md) | before public launch, not before |
