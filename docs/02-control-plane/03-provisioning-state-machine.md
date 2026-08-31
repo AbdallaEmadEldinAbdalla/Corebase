@@ -130,14 +130,14 @@ A periodic `node_reconcile` job per node (every 5 minutes, jittered — D-065/D-
 
 | Drift class | Detection | Response |
 |---|---|---|
-| Container down but project READY (crashed) | Desired: running; actual: exited | **Auto-repair**: restart container (bounded: 3 restarts/hour, then mark project `failed`, alert) |
+| Container down but project READY (crashed) | Desired: running; actual: exited *or absent* | **Auto-repair**: enqueue the provisioning saga, which converges either case (D-200); bounded at 3/hour, then mark project `failed` and alert |
 | Container running but project PAUSED/DELETED (zombie) | Actual exists; desired says not | **Auto-repair**: stop container; alert (this is a billing/security leak) |
 | Orphaned volume (no `project_databases` row) | Actual volume; no desired row | **Alert only** — never auto-delete data (priority stack: durability > cost) |
 | Orphaned reservation (`ram_reserved_mb` ≠ Σ `ram_limit_mb` of rows on node) | Arithmetic check | **Auto-repair**: recompute from rows |
 | Gateway route pointing at nothing / missing route for READY project | Route store vs `project_databases` | **Auto-repair**: rewrite route |
 | Job `running` with stale heartbeat | `heartbeat_at < now() - interval '10 min'` | Handled by the [job sweeper](04-job-queue-and-workers.md), not node reconcile |
 
-Reconciliation **repairs toward desired state**; it never invents desired state. Anything it cannot classify → operator alert with full context. Results land in the reconcile job's payload and metrics ([observability](../11-infrastructure/03-observability.md)); repeated drift on one node is a cordon signal.
+Reconciliation **repairs toward desired state**; it never invents desired state. Anything it cannot classify → operator alert with full context. Every sweep's report is persisted to `nodes.last_reconcile` (D-201), so "did it run" and "what did it find" survive log retention. Results land in the reconcile job's payload and metrics ([observability](../11-infrastructure/03-observability.md)); repeated drift on one node is a cordon signal.
 
 ## Decisions
 

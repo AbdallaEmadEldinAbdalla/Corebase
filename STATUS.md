@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-08-31 · **Phase:** Milestone 0 (the provisioning spine) · **T1–T7 done, T8 next**
+**Last updated:** 2026-08-31 · **Phase:** Milestone 0 (the provisioning spine) · **T1–T8 done, T9 next**
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -25,7 +25,11 @@ eleven points in that saga to prove it resumes with no duplicate anything
 ([M-003](docs/14-roadmap/05-measurements.md)). Deleting a project stops it and
 keeps its data for a 7-day recovery window, then a scheduled purge destroys it and
 returns the capacity — 20 create+delete cycles leave nothing behind
-([M-004](docs/14-roadmap/05-measurements.md)). Nothing above the database exists
+([M-004](docs/14-roadmap/05-measurements.md)). Reboot the data node and every
+project is serving queries again a few seconds later with no human involved, while
+anything the control plane and the node disagree about is reported — and anything
+holding data is reported *without* being touched
+([M-005](docs/14-roadmap/05-measurements.md)). Nothing above the database exists
 yet: no data API, no auth, no storage, no dashboard.
 
 ## 2. Run it locally
@@ -68,6 +72,13 @@ the node and control plane are empty:
 
 ```bash
 pnpm --filter @corebase/worker lifecycle
+```
+
+The node-reboot drill — restart the data node and watch it converge, with an
+orphan planted to prove the sweep reports rather than deletes:
+
+```bash
+pnpm --filter @corebase/worker node-reboot
 ```
 
 Tear down with `./scripts/staging.sh down` (keeps volumes) or `nuke` (destroys
@@ -129,7 +140,7 @@ boot. Don't use them.
 
 ## 4. What is built, in detail
 
-Test counts are from `pnpm test` and are all currently green: **165 tests**.
+Test counts are from `pnpm test` and are all currently green: **180 tests**.
 
 ### T1 — Repo scaffold · done
 pnpm workspaces + Turborepo. `typecheck` and `test` across every package.
@@ -291,6 +302,47 @@ container back up and watching the step catch it.
 The purge scan (`purge-scan.ts`) closes expired windows on a timer — hourly in
 production, since the window is measured in days.
 
+### T8 — Reconciliation sweep · done · [M-005](docs/14-roadmap/05-measurements.md) · 15 tests
+
+`reconcile.ts` compares desired state in the control plane against what is
+actually on the node, every 5 minutes with jitter (D-065/D-173). Two rules govern
+all of it:
+
+**It repairs toward desired state; it never invents desired state.** A container
+the control plane has no row for is not evidence a project exists — it is drift to
+report.
+
+**Data-destroying repairs are never automatic** (D-002: durability above cost). A
+stray container can be stopped, because that is reversible. An orphaned volume is
+somebody's database with a missing row, and the answer is an alert, not a
+deletion. Getting this backwards once costs a customer their data, which is why
+three of the fifteen tests exist purely to prove the reconciler leaves things
+alone.
+
+| Drift | Response |
+|---|---|
+| project `ready`, container stopped or absent | enqueue the provisioning saga (**D-200**), bounded at 3/hour then mark `failed` and alert |
+| container running, project `soft_deleted`/`paused` | stop it and alert — a billing and security leak |
+| managed container with no project row | **alert only**, never removed |
+| `cb-*` volume with no placement row | **alert only**, never removed |
+| `nodes.ram_reserved_mb` ≠ Σ plan bookings on that node | recompute from the rows |
+
+Repair goes through the provisioning saga rather than a bespoke restart path
+because the saga is already check-then-act: it fast-forwards a stopped container
+to `start_container` and creates a missing one, so there is one convergence path
+instead of two. The reconciler also declines to act when a job for that project is
+already in flight, so it never races the saga it would duplicate.
+
+Every sweep persists its report to `nodes.last_reconcile` (**D-201**), because the
+first question about a reconciliation loop is not "what drifted" but "is it
+running at all", and a log line answers that only until retention expires.
+
+The drill (`bench/node-reboot.mts`) is the done-signal and separates the two
+mechanisms on purpose: containers with a restart policy come back because *Docker*
+restarts them, and a container that is *gone* is reconciliation's job. Both are
+asserted, and every project is finally checked by running a query through the
+connection string the API hands out.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -330,7 +382,7 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-Sixteen decisions came out of running the thing rather than planning it. Full text in
+Eighteen decisions came out of running the thing rather than planning it. Full text in
 the [decision log](docs/00-foundation/05-decision-log.md); the log holds
 D-001…D-192 and is binding when two documents disagree.
 
@@ -352,6 +404,8 @@ D-001…D-192 and is binding when two documents disagree.
 | D-197 | Delivery ids and `Idempotency-Key` are restricted to a colon-free charset | BullMQ rejects `:` in job ids; one bad key silently disabled orphan recovery fleet-wide |
 | D-198 | Framework-level 4xx keep their status; only real faults are 500 | A bodyless DELETE with a JSON content-type returned 500, blaming the server for the client's request |
 | D-199 | A soft-deleted project stays visible; only a purged one is gone | `deleted_at IS NULL` hid the project the moment it was deleted, making the recovery window unusable |
+| D-200 | Reconciliation repairs by enqueueing the provisioning saga, bounded at 3/hour | One convergence path, already idempotent; a bespoke restart would be a second, less-tested one |
+| D-201 | Each sweep persists its report to `nodes.last_reconcile` | "Is reconciliation running at all" should survive log retention and be one SELECT |
 
 ## 7. Measurements
 
@@ -371,6 +425,9 @@ reality is itself the finding.
 - **M-004** — 20 create+delete cycles: delete→soft_deleted p50 416ms, purge p50
   1220ms. Residue afterwards: 0 containers, 0 volumes, 0 MB still booked, 0
   credential rows, 0 placement rows.
+- **M-005** — node reboot: Engine API back in 4.7s, the one container that could
+  not self-restart rebuilt and serving queries 5.2s after the reboot, 4/4 projects
+  answering, and the planted orphan reported without being touched.
 
 Both were taken on an ARM Docker VM with Postgres only — no PgBouncer, no
 PostgREST. Neither licenses raising the planned density (D-091's 150 projects/node).
@@ -381,8 +438,7 @@ PostgREST. Neither licenses raising the planned density (D-091's 150 projects/no
 
 | Task | What it needs to prove |
 |---|---|
-| **T8 Reconciliation sweep** | List containers on the node, diff against desired state, restart what is missing, *report* orphans without auto-deleting |
-| T9 Observability seed | Structured logs to Loki, three metrics, one Grafana panel, one alert |
+| **T9 Observability seed** | Structured logs to Loki, three metrics, one Grafana panel, one alert |
 | T10 Demo script | create → poll → `psql` → delete, green end to end |
 
 Then a **Milestone-0 retro** (D-169) that corrects the cost model and density
@@ -399,6 +455,9 @@ storage, realtime, the dashboard, the CLI, the SDK. All planned in detail under
   window currently protects the data without yet offering a way to get it back.
 - The deletion and purge sagas have not been through the T6 kill matrix. The
   irreversible half of a purge is exactly where a crash matters most.
+- Reconciliation has no gateway-route drift class, because there is no gateway. It
+  also has no way to *resolve* an orphan: it reports them forever until a human
+  acts, and there is no operator tooling for that yet.
 
 - The WAL archive writes to the container filesystem, not the volume, so it does not
   survive container replacement. Belongs with backups, not with provisioning.

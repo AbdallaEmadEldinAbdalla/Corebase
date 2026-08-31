@@ -155,6 +155,40 @@ The `project_databases` row is deleted at purge, not retained. That is not an ae
 
 **Next measurement to take:** the kill matrix against the deletion and purge sagas, and node-reboot convergence for T8.
 
+## M-005 — Node reboot: how long until every project is serving again
+
+**Date:** 2026-08-31 · **Task:** Milestone 0, T8 (reconciliation sweep) · **Answers:** the T8 exit criterion
+
+**Environment:** same Docker staging substitute. Reconcile interval shortened from the production 5 minutes (D-065/D-173) to 5 s so the drill finishes in a minute; the interval is a policy number, and what is under test is whether the sweep converges at all.
+
+**Method:** five projects provisioned to `ready`. One container removed outright (volume kept) so something genuinely needs rebuilding rather than restarting. One project's rows deleted while its container stays, planting an orphan the sweep must report and must **not** delete. Then `docker restart` the data node and wait, touching nothing by hand. Each project is finally checked by connecting through the API's connection string and running a query.
+
+**Numbers:**
+
+| | |
+|---|---|
+| node Engine API back after restart | 4.7 s |
+| every surviving container running again (Docker's restart policy) | within that window |
+| removed container rebuilt and serving queries (reconciliation) | **5.2 s** from the reboot |
+| projects answering queries afterwards | 4 of 4 |
+
+Final sweep report:
+
+| class | ref | action |
+|---|---|---|
+| `container_not_running` | the removed one | `repair_enqueued` |
+| `orphan_container` | the planted orphan | `alert_only` |
+| `orphan_volume` | the planted orphan | `alert_only` |
+| `reservation_drift` | — | `recomputed` |
+
+**Reading it honestly.** Two different mechanisms are at work and the drill separates them deliberately. Containers came back because **Docker's restart policy** restarted them — D-173 says exactly that, and reconciliation is not what recovers a reboot. What reconciliation recovered is the container that was *gone*, which no restart policy can help with; that took one sweep interval plus the saga's own ~2 s, and the volume surviving is why the rebuilt database came back with its data rather than as a fresh one.
+
+The orphan pair is the more important half of the result. Both were reported and both were left exactly where they were. A reconciler that deleted an orphaned volume would be worse than no reconciler at all: the volume is a customer's database whose row went missing, and the container is often the only remaining evidence of what existed.
+
+**What it does not license.** Anything about a real node reboot: `docker restart` on a Docker-in-Docker container is not a kernel boot, and it does not exercise cloud-init, disk remount, XFS quota re-application, or a node that comes back with a different address. It also does not cover the drift classes that have no implementation because their subsystems do not exist — the gateway-route class in particular.
+
+**Next measurement to take:** the same drill against a real VM reboot once a real node exists (OQ-165), and the kill matrix against the deletion and purge sagas.
+
 ## How to add an entry
 
 1. Number sequentially (`M-002`, …). Never renumber.

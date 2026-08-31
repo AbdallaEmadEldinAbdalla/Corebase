@@ -329,6 +329,13 @@ The single authoritative register of every locked decision in the corpus, ADR-st
 | D-198 | Framework-level 4xx rejections keep their own status and message; only genuine faults become `500 INTERNAL` | Malformed JSON, an empty body under a JSON content-type, an unsupported media type, a payload over the limit — all arrived at the client as `500`, telling a caller who sent a bad request that our server was broken, and filling the server-error alert with other people's typos. The framework's message describes the request, not our internals, so passing it through is both safe and far more useful. Found because a bodyless `DELETE` with a JSON content-type — what many HTTP clients send by default — returned 500. [platform API](../02-control-plane/02-platform-api.md) |
 | D-199 | A soft-deleted project stays visible through the API for its whole recovery window; only a purged one is absent | The store filtered on `deleted_at IS NULL`, which hid a project the moment it was soft-deleted — making D-038's 7-day recovery window unusable, because the customer could not see the thing they were meant to be able to restore. Filter on `status <> 'deleted'`. A purged project's *name* becomes reusable at the same moment; its `ref` never does (D-061). [data model](../02-control-plane/01-data-model.md) |
 
+## Reconciliation (from M0/T8)
+
+| ID | Decision | Detail |
+|---|---|---|
+| D-200 | Reconciliation repairs a not-running container by **enqueueing the provisioning saga**, not by a bespoke restart path; bounded at 3 repairs/hour per project, after which the project is marked `failed` and alerted | The saga is already check-then-act at every step, so it converges a stopped container by fast-forwarding to `start_container` and a missing one by creating it — one convergence path instead of two, and the second would be the less-tested one. Refines the drift table's "restart container" wording in [state machine](../02-control-plane/03-provisioning-state-machine.md). The reconciler also declines to act when any job for that project is already `pending`/`enqueued`/`running`, so it never races the saga it would be duplicating. |
+| D-201 | Each sweep persists its full report to `nodes.last_reconcile` with `last_reconcile_at` | The first question about a reconciliation loop is not "what drifted" but "is it running at all", and a log line answers that only until retention expires. One `SELECT` on the node row answers it permanently, and it is the natural source for T9's metrics. [observability](../11-infrastructure/03-observability.md) |
+
 ## How to add a decision
 
 1. Propose it in the owning doc's **Decisions** section with rationale.

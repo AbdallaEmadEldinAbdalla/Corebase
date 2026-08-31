@@ -14,7 +14,9 @@ The worker has also been SIGKILLed at eleven points in that saga to prove it res
 
 Deleting a project keeps its data for a 7-day recovery window and then a scheduled purge destroys it and returns the capacity; twenty create+delete cycles leave nothing behind on the node or in the control plane.
 
-Tasks T1–T7 of ten are done; T8 (the reconciliation sweep) is next. Nothing above the database exists yet — no data API, no auth, no storage, no dashboard.
+Reboot the data node and every project is serving queries again seconds later with no human involved; whatever the control plane and the node disagree about is reported, and anything holding data is reported *without* being touched.
+
+Tasks T1–T8 of ten are done; T9 (the observability seed) is next. Nothing above the database exists yet — no data API, no auth, no storage, no dashboard.
 
 > **[STATUS.md](STATUS.md) is the handover document**: what works, how to run it locally, what every rule in the code is defending against, and what is not built yet. Read it before the corpus if you are here to contribute.
 
@@ -27,7 +29,7 @@ docker build -t corebase/postgres:17.5 infra/docker/postgres
 ./scripts/staging.sh seed-images && ./scripts/staging.sh verify
 ```
 
-Then the full suite (165 tests, integration included — they need the staging stack above and **fail rather than skip** without it):
+Then the full suite (180 tests, integration included — they need the staging stack above and **fail rather than skip** without it):
 
 ```bash
 pnpm test
@@ -49,6 +51,12 @@ Or run twenty full create-use-delete-purge cycles and check nothing is left behi
 
 ```bash
 pnpm --filter @corebase/worker lifecycle
+```
+
+Or reboot the data node and watch it converge on its own:
+
+```bash
+pnpm --filter @corebase/worker node-reboot
 ```
 
 Staging is Docker Compose plus Docker-in-Docker standing in for a control node and a data node. The interface the worker drives is the real one — the Docker Engine API over mutual TLS, no per-node agent (D-052) — so no step of the plan is skipped and nothing is paid for. [STATUS.md §2](STATUS.md) has the details and the environment variables.
