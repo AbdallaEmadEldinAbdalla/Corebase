@@ -35,6 +35,14 @@ RUN set -eux; \
       fi; \
     done
 
+# Auth hardening (D-185). initdb's defaults trust the local socket and loopback,
+# which makes any code execution inside the container an unauthenticated
+# superuser login. `peer` keeps in-container maintenance working (OS postgres →
+# db postgres) without handing that out to any other process; every host
+# connection, including 127.0.0.1, needs scram. init/40-auth-hardening.sql fails
+# the boot if this ever regresses.
+ENV POSTGRES_INITDB_ARGS="--auth-local=peer --auth-host=scram-sha-256"
+
 # Config template. Small-tenant defaults: max_connections is 20 because the
 # pooler multiplexes in front of it (D-074's 3 reserved / 7 PostgREST / 8 pooler
 # / 2 direct budget). Sized for the Free-tier 512 MiB cgroup.
