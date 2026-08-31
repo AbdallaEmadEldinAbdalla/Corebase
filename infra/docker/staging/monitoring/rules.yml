@@ -1,0 +1,35 @@
+# The alert the plan asks for by name, plus the two that would page first in
+# practice. Thresholds are the alert catalog's (docs/11-infrastructure/03).
+groups:
+  - name: corebase-provisioning
+    interval: 5s
+    rules:
+      # "Provisioning job stuck: any job >10 min in non-terminal state" — one
+      # comparison, because the worker exports the age of the oldest such job
+      # rather than making the alert reconstruct it from states and timestamps.
+      - alert: ProvisioningJobStuck
+        expr: corebase_provisioning_oldest_nonterminal_job_seconds > 600
+        for: 1m
+        labels: { severity: page }
+        annotations:
+          summary: A provisioning job has been non-terminal for over 10 minutes
+          description: >-
+            Oldest non-terminal job is {{ $value | humanizeDuration }} old. Either a
+            worker died without the sweeper noticing, or a saga step is hanging.
+
+      # The bin-packer stops at 85% (D-090); passing it means the accounting is
+      # wrong, not that the node is busy.
+      - alert: NodeRamReservedRatioHigh
+        expr: corebase_node_ram_reserved_ratio > 0.85
+        for: 5m
+        labels: { severity: warn }
+        annotations:
+          summary: 'Node {{ $labels.node }} is booked above the 85% fill ceiling'
+
+      # A reconciler nobody notices has stopped is worse than no reconciler.
+      - alert: ReconciliationStale
+        expr: time() - corebase_reconcile_last_success_timestamp_seconds > 900
+        for: 1m
+        labels: { severity: warn }
+        annotations:
+          summary: 'No reconciliation sweep for {{ $labels.node }} in 15 minutes'

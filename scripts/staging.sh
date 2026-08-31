@@ -139,6 +139,25 @@ cmd_down()  { echo "▸ stopping (volumes kept)"; $DC down; }
 cmd_nuke()  { echo "▸ destroying including volumes"; $DC down -v; rm -rf "$CERTS" "$KEK_DIR"; }
 cmd_status(){ $DC ps; }
 
+cmd_monitoring() {
+  # The T9 stack. Reported separately because these are the URLs someone actually
+  # wants during a drill.
+  echo "▸ monitoring"
+  printf '  %-12s %s\n' prometheus "http://127.0.0.1:${PROMETHEUS_PORT:-9090}"
+  printf '  %-12s %s\n' loki       "http://127.0.0.1:${LOKI_PORT:-3100}/ready"
+  printf '  %-12s %s\n' grafana    "http://127.0.0.1:${GRAFANA_PORT:-3001}/d/corebase-provisioning"
+  printf '  %-12s ' "prometheus up"
+  curl -sf "http://127.0.0.1:${PROMETHEUS_PORT:-9090}/-/healthy" >/dev/null && echo PASS || echo FAIL
+  printf '  %-12s ' "loki ready"
+  curl -sf "http://127.0.0.1:${LOKI_PORT:-3100}/ready" >/dev/null && echo PASS || echo "not yet"
+  printf '  %-12s ' "grafana up"
+  curl -sf "http://127.0.0.1:${GRAFANA_PORT:-3001}/api/health" >/dev/null && echo PASS || echo FAIL
+  printf '  %-12s ' "scrape targets"
+  curl -sf "http://127.0.0.1:${PROMETHEUS_PORT:-9090}/api/v1/targets?state=active" 2>/dev/null \
+    | python3 -c "import sys,json;d=json.load(sys.stdin)['data']['activeTargets'];print(' '.join(f\"{t['labels'].get('job')}={t['health']}\" for t in d))" \
+    || echo "unavailable"
+}
+
 case "${1:-}" in
   up) cmd_up ;;
   kek) cmd_kek ;;
@@ -148,6 +167,7 @@ case "${1:-}" in
   down) cmd_down ;;
   nuke) cmd_nuke ;;
   status) cmd_status ;;
+  monitoring) cmd_monitoring ;;
   all) cmd_up && cmd_kek && cmd_seed_images && cmd_verify && cmd_idempotent ;;
-  *) echo "usage: $0 {up|kek|seed-images|verify|idempotent|down|nuke|status|all}"; exit 2 ;;
+  *) echo "usage: $0 {up|kek|seed-images|verify|idempotent|down|nuke|status|monitoring|all}"; exit 2 ;;
 esac

@@ -1,0 +1,30 @@
+# Single-binary Loki with filesystem storage. Production is Loki on mon-1 with R2
+# chunk storage (D-147); the shape of what is stored is the same.
+auth_enabled: false
+server:
+  http_listen_port: 3100
+  log_level: warn
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+limits_config:
+  # 30 days platform retention (D-147). Enforced by the compactor in production.
+  reject_old_samples: false
+  allow_structured_metadata: false

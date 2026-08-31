@@ -1,0 +1,240 @@
+{
+  "uid": "corebase-provisioning",
+  "title": "Corebase \u00b7 Provisioning",
+  "tags": [
+    "corebase",
+    "milestone-0"
+  ],
+  "timezone": "utc",
+  "refresh": "10s",
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Create \u2192 ready duration (p50 / p95 / max)",
+      "description": "The panel T9's done-signal asks for: it should show T5f's twenty runs. Quantiles come from the histogram, so they aggregate correctly across worker instances \u2014 which is why the histogram exists instead of a summary.",
+      "gridPos": {
+        "h": 9,
+        "w": 16,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8
+          }
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "corebase-prom"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le, job_type) (rate(corebase_provisioning_job_seconds_bucket{outcome=\"succeeded\"}[5m])))",
+          "legendFormat": "p50 {{job_type}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "corebase-prom"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, job_type) (rate(corebase_provisioning_job_seconds_bucket{outcome=\"succeeded\"}[5m])))",
+          "legendFormat": "p95 {{job_type}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Jobs finished",
+      "description": "Successes and failures side by side. The plan asks for a failure counter; a failures-only series cannot answer 'what fraction', which is what every alert on it really asks.",
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "corebase-prom"
+          },
+          "expr": "sum by (outcome) (corebase_provisioning_jobs_total)",
+          "legendFormat": "{{outcome}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "barchart",
+      "title": "Where the time goes (p95 per saga step)",
+      "description": "M-002 found ~85% of a create is wait_healthy and the control plane's own work is 57ms. This is that finding, live.",
+      "gridPos": {
+        "h": 11,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "corebase-prom"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, step) (rate(corebase_provisioning_step_seconds_bucket[5m])))",
+          "legendFormat": "{{step}}",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "xTickLabelRotation": 0,
+        "showValue": "always",
+        "barWidth": 0.8
+      },
+      "transformations": [
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Value",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Node RAM booked vs the 85% fill ceiling",
+      "description": "D-090 stops placement at 0.85. Crossing it means the accounting is wrong, not that the node is busy \u2014 which is why the threshold is drawn.",
+      "gridPos": {
+        "h": 11,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.85
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "corebase-prom"
+          },
+          "expr": "corebase_node_ram_reserved_ratio",
+          "legendFormat": "{{node}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Oldest non-terminal job (alert fires above 10 min)",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 20
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 600
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "corebase-prom"
+          },
+          "expr": "corebase_provisioning_oldest_nonterminal_job_seconds",
+          "legendFormat": "oldest job",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "logs",
+      "title": "Platform logs \u2014 filter by ref or request_id",
+      "description": "D-147: request_id and ref live in the log line, never in a Loki label, so one query follows a project's whole history or exactly the work one API call caused.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 20
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "corebase-loki"
+          },
+          "expr": "{service=~\"api|worker\"}",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

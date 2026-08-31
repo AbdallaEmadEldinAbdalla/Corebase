@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: corebase
+    type: file
+    allowUiUpdates: false     # dashboards are code (D-146: provisioned as code)
+    options:
+      path: /etc/grafana/dashboards

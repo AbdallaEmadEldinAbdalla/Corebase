@@ -1,0 +1,49 @@
+// Grafana Alloy: the shipper D-147 names. In production it discovers Docker
+// json-file logs on each node; locally the platform services run as host
+// processes, so it tails the files they are pointed at with CB_LOG_FILE.
+//
+// The label discipline is the point and it matches production exactly: labels are
+// only service/level (and node/project_ref/container for tenant streams). request_id
+// and ref live in the JSON line and are found by filters, never by labels —
+// a request_id label would be a new stream per request.
+
+local.file_match "platform" {
+  path_targets = [
+    {"__path__" = "/logs/api.log",    "service" = "api",    "node" = "local"},
+    {"__path__" = "/logs/worker.log", "service" = "worker", "node" = "local"},
+  ]
+  sync_period = "5s"
+}
+
+loki.source.file "platform" {
+  targets    = local.file_match.platform.targets
+  forward_to = [loki.process.platform.receiver]
+  tail_from_end = false
+}
+
+loki.process "platform" {
+  forward_to = [loki.write.default.receiver]
+
+  // Parse the JSON line so `level` can become a label and the rest stays in the
+  // line where filters can reach it.
+  stage.json {
+    expressions = { level = "level", ts = "ts" }
+  }
+  stage.labels {
+    values = { level = "level" }
+  }
+  // Fastify's pino writes numeric levels; map the ones we alert on.
+  stage.template {
+    source   = "level"
+    template = "{{ if eq .Value \"50\" }}error{{ else if eq .Value \"40\" }}warn{{ else if eq .Value \"30\" }}info{{ else }}{{ .Value }}{{ end }}"
+  }
+  stage.labels {
+    values = { level = "level" }
+  }
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

@@ -88,8 +88,81 @@ services:
       timeout: 5s
       retries: 30
 
+  # ── monitoring (T9) ─────────────────────────────────────────────────────
+  # Production runs these on a separate mon-1 node with R2-backed storage
+  # (D-146/D-147). Locally they sit beside the control node; what is being
+  # rehearsed is the label discipline and the queries, not the topology.
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: cb-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/rules.yml:/etc/prometheus/rules.yml:ro
+      - prometheus-data:/prometheus
+    extra_hosts:
+      # The API and worker are host processes in local staging; in production
+      # they are containers discovered through http_sd.
+      - "host.docker.internal:host-gateway"
+
+  loki:
+    image: grafana/loki:3.3.2
+    container_name: cb-loki
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/loki.yml"]
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+    volumes:
+      - ./monitoring/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+
+  alloy:
+    image: grafana/alloy:v1.5.1
+    container_name: cb-alloy
+    restart: unless-stopped
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.river
+    volumes:
+      - ./monitoring/alloy.river:/etc/alloy/config.river:ro
+      - ./monitoring/logs:/logs:ro
+      - alloy-data:/var/lib/alloy/data
+    depends_on: [loki]
+
+  grafana:
+    image: grafana/grafana:11.5.1
+    container_name: cb-grafana
+    restart: unless-stopped
+    environment:
+      # Anonymous admin: this is a local staging stack with no real data in it,
+      # and a password prompt between an engineer and a dashboard during a drill
+      # is friction with no security value here. Production is behind SSO.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_USERS_DEFAULT_THEME: dark
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on: [prometheus, loki]
+
 volumes:
   control-db-data:
   control-redis-data:
   data-node-certs:
   data-node-docker:
+  prometheus-data:
+  loki-data:
+  alloy-data:
+  grafana-data:
