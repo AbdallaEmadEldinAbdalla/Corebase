@@ -105,6 +105,14 @@ export function createDocker(cfg: DockerConfig) {
       await call('POST', '/volumes/create', { Name: name, Labels: labels });
     },
 
+    /** Every volume on the node, optionally filtered by label. */
+    async listVolumes(labelFilter?: string): Promise<VolumeSummary[]> {
+      const filters = labelFilter
+        ? `?filters=${encodeURIComponent(JSON.stringify({ label: [labelFilter] }))}` : '';
+      const res = await call<{ Volumes: VolumeSummary[] | null }>('GET', `/volumes${filters}`);
+      return res.Volumes ?? [];
+    },
+
     async removeVolume(name: string): Promise<void> {
       try { await call('DELETE', `/volumes/${encodeURIComponent(name)}`); }
       catch (e) { if (!(e instanceof DockerError && e.isNotFound)) throw e; }
@@ -199,6 +207,9 @@ export interface ContainerInspect {
   State: { Status: string; Running: boolean; Restarting: boolean; ExitCode: number; Error: string };
   Config: { Image: string; Labels: Record<string, string> };
   HostConfig: { Memory: number; MemorySwap: number; NanoCpus: number; RestartPolicy: { Name: string } };
+}
+export interface VolumeSummary {
+  Name: string; Labels: Record<string, string> | null;
 }
 export interface ContainerSummary {
   Id: string; Names: string[]; State: string; Labels: Record<string, string>;
