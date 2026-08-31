@@ -56,6 +56,8 @@ export const ERROR_CODES = {
   PROJECT_NAME_TAKEN: 'PROJECT_NAME_TAKEN',
   IDEMPOTENCY_KEY_REQUIRED: 'IDEMPOTENCY_KEY_REQUIRED',
   CAPACITY_UNAVAILABLE: 'CAPACITY_UNAVAILABLE',
+  /** The recovery window closed and the project's data is gone (D-038). */
+  PROJECT_PURGED: 'PROJECT_PURGED',
   INTERNAL: 'INTERNAL',
 } as const;
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
@@ -71,5 +73,16 @@ export const DeleteProjectJob = z.object({
   project_id: z.string().uuid(),
   idempotency_key: z.string(),
 });
-export const JobPayload = z.discriminatedUnion('kind', [ProvisionProjectJob, DeleteProjectJob]);
+/**
+ * The purge is its own job, not a mode on delete_project (D-196): the two phases
+ * are a week apart and must not share one row's checkpoint set, attempt budget
+ * or idempotency key.
+ */
+export const PurgeProjectJob = z.object({
+  kind: z.literal('purge_project'),
+  project_id: z.string().uuid(),
+  idempotency_key: z.string(),
+});
+export const JobPayload = z.discriminatedUnion('kind',
+  [ProvisionProjectJob, DeleteProjectJob, PurgeProjectJob]);
 export type JobPayload = z.infer<typeof JobPayload>;
