@@ -81,7 +81,6 @@ services:
     volumes:
       - data-node-certs:/certs
       - data-node-docker:/var/lib/docker
-      - ./certs:/certs/client-out        # certs copied out for the worker/host to use
     healthcheck:
       test: ["CMD-SHELL", "docker -H tcp://127.0.0.1:2376 --tlsverify --tlscacert /certs/server/ca.pem --tlscert /certs/server/cert.pem --tlskey /certs/server/key.pem info >/dev/null 2>&1 || exit 1"]
       interval: 10s

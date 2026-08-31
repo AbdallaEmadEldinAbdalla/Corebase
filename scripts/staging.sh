@@ -50,6 +50,10 @@ wait_for() {  # wait_for <name> <seconds> <command...>
 
 cmd_up() {
   echo "▸ starting staging (control node + data node)"
+  # Before compose, deliberately. Any directory compose needs and does not find,
+  # the Docker daemon creates as root on Linux — which then locks this script out
+  # of a directory it is about to write. Creating it first is the whole fix.
+  mkdir -p "$CERTS"
   $DC up -d
   wait_for "control-db"    60 docker exec cb-control-db pg_isready -U corebase -d corebase_control
   wait_for "control-redis" 30 docker exec cb-control-redis redis-cli ping
