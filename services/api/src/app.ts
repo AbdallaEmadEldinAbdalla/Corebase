@@ -3,6 +3,7 @@ import { registerErrorHandling } from './kernel/errors.ts';
 import { registerControlPlane, type Enqueue } from './modules/control-plane/routes.ts';
 import { createMemoryStore, type ControlPlaneStore } from './modules/control-plane/store.ts';
 import { registerMetrics } from './kernel/metrics.ts';
+import { registerAuth, type AuthDeps } from './modules/auth/routes.ts';
 
 export interface BuildOptions {
   store?: ControlPlaneStore;
@@ -18,6 +19,12 @@ export interface BuildOptions {
    * has to be parsed, and a guard that silently mis-parses is worse than none.
    */
   onRoute?: (route: { method: string; url: string }) => void;
+  /**
+   * Platform auth (D-062). Absent means the auth endpoints are not registered at
+   * all — better than routes that exist and cannot work, which a client would
+   * code against.
+   */
+  auth?: AuthDeps;
 }
 
 /** Composition root: the only place that wires modules together. */
@@ -36,6 +43,8 @@ export function buildApp(opts: BuildOptions = {}): FastifyInstance {
 
   app.get('/health', async () => ({ status: 'ok', service: 'api' }));
   app.get('/ready', async () => ({ status: 'ready' }));
+
+  if (opts.auth) registerAuth(app, opts.auth);
 
   registerControlPlane(app, {
     store: opts.store ?? createMemoryStore(),

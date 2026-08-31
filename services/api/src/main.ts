@@ -5,6 +5,11 @@ import { createPgStore, ensureBootstrapOrg } from './modules/control-plane/store
 import { createMemoryStore } from './modules/control-plane/store.ts';
 import { createEnvelope } from '@corebase/crypto';
 import { createSecretStore } from '@corebase/secrets';
+import { createUserStore } from './modules/auth/store.ts';
+import { createTokenStore } from './kernel/tokens.ts';
+import { createSessionStore, createMemorySessionStore } from './kernel/sessions.ts';
+import { createRateLimiter, createMemoryRateLimiter } from './kernel/rate-limit.ts';
+import type { AuthDeps } from './modules/auth/routes.ts';
 
 const port = Number(process.env.PORT ?? 8080);
 const url = process.env.CB_CONTROL_DATABASE_URL;
@@ -75,8 +80,39 @@ const actorUserId = await (async () => {
   }
 })();
 
+/**
+ * Platform auth needs both Postgres and Redis. Without them the endpoints are not
+ * registered at all, rather than registered and broken — a route that exists is a
+ * route a client will code against.
+ */
+const auth: AuthDeps | undefined = await (async () => {
+  if (!url) return undefined;
+  const authPool = new Pool({ connectionString: url, max: 5 });
+  const sessions = redisUrl
+    ? createSessionStore(createRedis(redisUrl))
+    : (console.warn(JSON.stringify({ level: 'warn', service: 'api',
+        msg: 'CB_REDIS_URL not set — sessions are in-memory and die with this process.' })),
+       createMemorySessionStore());
+  const loginLimiter = redisUrl
+    ? createRateLimiter(createRedis(redisUrl), { limit: 10, windowSeconds: 300 })
+    : createMemoryRateLimiter({ limit: 10, windowSeconds: 300 });
+  return {
+    pool: authPool,
+    users: createUserStore(authPool),
+    tokens: createTokenStore(authPool),
+    sessions,
+    loginLimiter,
+    // Off only for plain-HTTP local development; a Secure cookie is never sent
+    // over http:// and the failure looks like "login does nothing".
+    secureCookies: process.env.CB_SECURE_COOKIES !== 'false',
+    staticToken: process.env.CB_STATIC_TOKEN ?? 'dev-token',
+    staticUserId: actorUserId,
+  };
+})();
+
 const app = buildApp({
   store, logger: true,
+  ...(auth ? { auth } : {}),
   ...(actorUserId ? { actorUserId } : {}),
   ...(enqueue ? { enqueue } : {}),
 });

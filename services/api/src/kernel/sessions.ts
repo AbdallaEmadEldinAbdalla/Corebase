@@ -150,3 +150,42 @@ export function readCookie(header: string | undefined, name: string): string | u
   }
   return undefined;
 }
+
+/**
+ * In-memory sessions, for unit tests and for `pnpm dev` without Redis.
+ *
+ * Same contract, same two clocks — so a test exercising the absolute limit
+ * exercises the real rule. Not a production path: a restart logs everyone out and
+ * a second instance shares nothing, which is exactly why production uses Redis.
+ */
+export function createMemorySessionStore(): SessionStore {
+  const data = new Map<string, SessionRecord>();
+  const store: SessionStore = {
+    async create(userId) {
+      const id = randomBytes(ID_BYTES).toString('base64url');
+      const now = Math.floor(Date.now() / 1000);
+      const record: SessionRecord = {
+        user_id: userId, csrf: randomBytes(24).toString('base64url'),
+        created_at: now, last_seen_at: now,
+      };
+      data.set(key(id), record);
+      return { id, ...record };
+    },
+    async touch(id) {
+      if (!id || id.length > 128) return undefined;
+      const record = data.get(key(id));
+      if (!record) return undefined;
+      const now = Math.floor(Date.now() / 1000);
+      if (now - record.created_at > ABSOLUTE_TTL_SECONDS) { data.delete(key(id)); return undefined; }
+      record.last_seen_at = now;
+      return { id, ...record };
+    },
+    async destroy(id) { data.delete(key(id)); },
+    async destroyAllFor(userId) {
+      let n = 0;
+      for (const [k, v] of data) if (v.user_id === userId) { data.delete(k); n++; }
+      return n;
+    },
+  };
+  return store;
+}

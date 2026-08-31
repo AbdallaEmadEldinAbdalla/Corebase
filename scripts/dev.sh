@@ -40,6 +40,9 @@ export CB_NODE_HOSTNAME="${CB_NODE_HOSTNAME:-data-1}"
 export CB_STATIC_TOKEN="${CB_STATIC_TOKEN:-dev-token}"
 export PORT="${PORT:-8099}"
 export CB_METRICS_PORT="${CB_METRICS_PORT:-9101}"
+# Local dev is plain HTTP, and a Secure cookie is never sent over http:// —
+# the failure looks like "login silently does nothing".
+export CB_SECURE_COOKIES="${CB_SECURE_COOKIES:-false}"
 export CB_RECONCILE_INTERVAL_MS="${CB_RECONCILE_INTERVAL_MS:-30000}"
 
 if [ ! -d "$CB_KEK_DIR" ] || ! ls "$CB_KEK_DIR"/*.key >/dev/null 2>&1; then

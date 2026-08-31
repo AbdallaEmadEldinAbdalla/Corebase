@@ -168,11 +168,23 @@ describe('P1b — the guard that keeps the exit criterion true', () => {
   const AUDITED = new Set([
     'POST /v1/projects',
     'DELETE /v1/projects/:ref',
+    'POST /v1/auth/signup',
+    'POST /v1/auth/login',
+    'POST /v1/auth/logout',
+    'POST /v1/auth/tokens',
+    'DELETE /v1/auth/tokens/:id',
   ]);
 
   it('every mutating route is audited', () => {
     const routes: string[] = [];
-    buildApp({ staticToken: TOKEN, onRoute: (r) => routes.push(`${r.method} ${r.url}`) });
+    // Built with the auth module registered, or the guard cannot see half the
+    // mutating surface — which is how it would keep passing while the criterion
+    // stopped being true. The deps are never called; only registration matters.
+    buildApp({
+      staticToken: TOKEN,
+      auth: {} as never,
+      onRoute: (r) => routes.push(`${r.method} ${r.url}`),
+    });
     const mutating = routes.filter((r) => /^(POST|PUT|PATCH|DELETE) /.test(r));
 
     expect(mutating.length).toBeGreaterThan(0);
