@@ -1,0 +1,107 @@
+# Phase 1 exit criterion 3: "CI runs unit + integration suites green on every PR."
+#
+# Two jobs, and the split is deliberate. `unit` needs nothing but Node, so it
+# answers in about a minute and catches most mistakes. `integration` stands up the
+# whole staging substitute — control Postgres, Redis, a Docker-in-Docker data node
+# driven over mTLS — and runs the suites that talk to it.
+#
+# The integration suites do not skip when their infrastructure is missing; they
+# fail, loudly, with the command that fixes it. That rule exists because a
+# silently-skipped suite once hid a real bug behind a green run, and CI is exactly
+# where that would happen again.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A new push supersedes an in-flight run on the same ref: the old answer is about
+# code nobody will merge.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  unit:
+    name: typecheck + unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - name: unit tests (no infrastructure)
+        # Pointed at dead ports on purpose: if anything in this lane reaches for a
+        # database, it must fail here rather than pass by accident on a runner
+        # that happens to have one.
+        env:
+          CB_CONTROL_DATABASE_URL: postgres://nobody:nothing@127.0.0.1:1/none
+          CB_REDIS_URL: redis://127.0.0.1:1
+        run: pnpm test:unit
+
+  integration:
+    name: integration (staging substitute)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: build the project database image
+        # The same image the worker puts on a data node: the extension allowlist
+        # (D-078) and the auth hardening (D-185) are enforced at build time, so a
+        # regression in either fails here rather than on a customer's database.
+        uses: docker/build-push-action@v6
+        with:
+          context: infra/docker/postgres
+          tags: corebase/postgres:17.5
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: bring up the staging substitute
+        run: ./scripts/staging.sh up
+
+      - name: migrate, master key, application role
+        run: |
+          ./scripts/migrate-staging.sh
+          ./scripts/staging.sh kek
+          ./scripts/staging.sh app-role
+
+      - name: seed the project image onto the data node
+        run: ./scripts/staging.sh seed-images
+
+      - name: verify the substitute is actually usable
+        # Ten checks including "plaintext :2375 refused" and "node can run a
+        # project container". A green suite on a half-up stack is worth nothing.
+        run: ./scripts/staging.sh verify
+
+      - name: full suite
+        run: pnpm test
+
+      - name: what the stack looked like, if anything failed
+        if: failure()
+        run: |
+          ./scripts/staging.sh status || true
+          docker logs cb-control-db --tail 50 || true
+          docker logs cb-data-node --tail 50 || true
+
+      - name: tear down
+        if: always()
+        run: ./scripts/staging.sh nuke || true

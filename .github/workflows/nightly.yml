@@ -1,0 +1,64 @@
+# The harnesses that are too slow for a pull request but too important to run only
+# by hand: the crash-resume kill matrix (T6), the lifecycle residue loop (T7) and
+# the node-reboot drill (T8).
+#
+# Each is a done-signal for a Milestone-0 task, and each takes minutes rather than
+# seconds — 11 kill points at ~35s, 20 create/delete cycles, a node restart. On a
+# schedule they stay honest; on every PR they would just get disabled.
+name: Nightly drills
+
+on:
+  schedule:
+    - cron: '17 3 * * *'      # off the hour, so a fleet of repos does not stampede
+  workflow_dispatch:
+
+jobs:
+  drills:
+    name: kill matrix · lifecycle · node reboot
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: infra/docker/postgres
+          tags: corebase/postgres:17.5
+          load: true
+          cache-from: type=gha
+
+      - name: bring up the staging substitute
+        run: |
+          ./scripts/staging.sh up
+          ./scripts/migrate-staging.sh
+          ./scripts/staging.sh kek
+          ./scripts/staging.sh app-role
+          ./scripts/staging.sh seed-images
+          ./scripts/staging.sh verify
+
+      # Each drill asserts its own invariants and exits non-zero on failure, so
+      # there is nothing to check here beyond letting them run.
+      - name: T6 — crash-resume kill matrix
+        run: pnpm --filter @corebase/worker kill-matrix
+
+      - name: T7 — lifecycle residue loop
+        run: pnpm --filter @corebase/worker lifecycle
+
+      - name: T8 — node reboot drill
+        run: pnpm --filter @corebase/worker node-reboot
+
+      - name: T5f — provisioning measurement
+        run: pnpm --filter @corebase/worker bench
+
+      - name: numbers, for the record
+        if: always()
+        run: cat docs/14-roadmap/measurements/m-002-provisioning.json || true
+
+      - name: tear down
+        if: always()
+        run: ./scripts/staging.sh nuke || true
