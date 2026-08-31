@@ -1,0 +1,59 @@
+; Rendered per project by entrypoint.sh. Values come from the environment;
+; every rule below is fixed by docs/03-database-platform/02-connection-pooling.md
+; and is deliberately NOT configurable.
+
+[databases]
+; One entry, wildcard: a project has exactly one database and the pooler must not
+; become a route to any other host. `host=db` is the alias the project network
+; gives Postgres (D-228), so this template never learns a project's ref.
+* = host=db port=5432
+
+[pgbouncer]
+listen_addr = 0.0.0.0
+listen_port = 6432
+
+; Transaction mode is the only mode that lets hundreds of client connections share
+; a handful of server slots while keeping transactional semantics (D-015). Session
+; mode would need one server connection per client, against max_connections = 20.
+pool_mode = transaction
+
+; auth_query, not userlist (D-074): `ALTER ROLE … PASSWORD` is then immediately
+; effective with nothing to ship or reload. The function allowlists `developer`
+; only, so this port cannot resolve credentials for an internal role.
+auth_type = scram-sha-256
+auth_user = pgbouncer_auth
+auth_dbname = postgres
+auth_query = SELECT usename, passwd FROM corebase.pgbouncer_lookup($1)
+auth_file = /etc/pgbouncer/userlist.txt
+
+; The asymmetry is the whole point: 200 client connections against 8 server slots.
+max_client_conn = 200
+default_pool_size = 6
+reserve_pool_size = 2
+reserve_pool_timeout = 3
+
+; Protocol-level prepared statements, which is what keeps ORMs working under
+; transaction pooling. SQL-level PREPARE/DEALLOCATE remains unsupported by design.
+max_prepared_statements = 100
+
+; DISCARD ALL on handoff: temp tables, session GUCs and prepared statements must
+; not travel to the next client. This is the mechanism behind "SET LOCAL only".
+server_reset_query = DISCARD ALL
+server_reset_query_always = 1
+
+; Shed idle server connections so a quiet project stops holding Postgres backends.
+server_idle_timeout = 240
+
+; Turn overload into visible latency and then a loud error, rather than into
+; Postgres connection exhaustion or a client that hangs forever.
+query_wait_timeout = 60
+
+; No admin console. `admin_users` is empty and stats are not exposed on the data
+; port — the pooler is not an operations surface for the customer, and anything we
+; need to know about it we ask through the control plane.
+admin_users =
+stats_users =
+
+; Log to stdout so the node's logging driver collects it like everything else.
+logfile =
+pidfile =

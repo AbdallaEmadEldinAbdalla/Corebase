@@ -23,6 +23,12 @@ BEGIN
     -- audited dashboard/DDL path; never handed to customer apps (D-132)
     CREATE ROLE corebase_admin NOINHERIT LOGIN PASSWORD NULL CREATEROLE;
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'pgbouncer_auth') THEN
+    -- The pooler's own identity (D-074). It can do exactly one thing: call the
+    -- lookup function below. The worker sets its password at provision time, so
+    -- no credential is baked into the image.
+    CREATE ROLE pgbouncer_auth NOINHERIT LOGIN PASSWORD NULL;
+  END IF;
 END
 $$;
 
