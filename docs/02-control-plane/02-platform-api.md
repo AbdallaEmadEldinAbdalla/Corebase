@@ -74,7 +74,8 @@ Operator (staff) access is a separate surface — see [audit & admin access](05-
 |---|---|
 | `POST /v1/orgs` · `GET /v1/orgs` · `GET/PATCH/DELETE /v1/orgs/:org_id` | CRUD; delete requires zero non-purged projects |
 | `GET /v1/orgs/:org_id/members` · `PATCH/DELETE /v1/orgs/:org_id/members/:user_id` | List, change role, remove |
-| `POST /v1/orgs/:org_id/invites` · `GET .../invites` · `DELETE .../invites/:id` | Invite by email, list pending, revoke |
+| `POST /v1/orgs/:org_id/invites` · `GET .../invites` · `DELETE .../invites/:id` | Invite by email, list pending, revoke. Create returns the token **once** until the Phase-4 email sender exists |
+| `POST /v1/invites/accept` | Accept an invite (D-213). The invite's email must match the accepting account, or a forwarded email is a join token |
 | `POST /v1/invites/accept` | Accept with invite token (auth required) |
 
 #### Projects
@@ -82,7 +83,9 @@ Operator (staff) access is a separate surface — see [audit & admin access](05-
 | Method & path | Purpose | Notes |
 |---|---|---|
 | `POST /v1/projects` | Create → returns `202` + project in `creating` | `Idempotency-Key` required |
-| `GET /v1/projects?org_id=` | List (cursor-paginated); excludes `deleted`, includes `soft_deleted` with `restorable_until` | |
+| `GET /v1/projects?org_id=` | List (cursor-paginated); excludes `deleted`, includes `soft_deleted` with `restorable_until`. Scoped to the caller's own organizations | |
+| `GET /v1/projects/:ref/keys` | `anon` returned in the clear (publishable by design); `service_role` needs `?reveal=true`, the `key.manage` capability, and writes a `key.revealed` audit row | Prefix is a label — `cbk_anon_<ref4>` (D-218) |
+| `GET /v1/projects/:ref/.well-known/jwks.json` | Per-project JWKS (D-014). Unauthenticated and cacheable: a public key is public, and a JWKS behind auth breaks every verifier when a credential rotates | |
 | `GET /v1/projects/:ref` | Detail incl. `database` block when `ready` | |
 | `PATCH /v1/projects/:ref` | Rename, change `project_group_id` | `ref`, `region`, `environment` immutable |
 | `POST /v1/projects/:ref/pause` | → `pausing` (D-008) | 202; `PROJECT_NOT_READY` unless `ready` |

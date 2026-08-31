@@ -154,7 +154,7 @@ CREATE TABLE projects (                                                -- §57
   organization_id  uuid NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
   ref              citext NOT NULL UNIQUE                    -- immutable URL slug
                      CHECK (ref ~ '^[a-z][a-z0-9]{15,19}$'),
-  name             text NOT NULL,
+  name             text NOT NULL,          -- unique per ORG, not globally (D-217)
   region           text NOT NULL DEFAULT 'eu-central',       -- D-024: single region in V1
   status           project_status NOT NULL DEFAULT 'creating',
   plan             project_plan NOT NULL DEFAULT 'free',
@@ -192,6 +192,24 @@ CREATE TABLE project_api_keys (                                        -- §47
   UNIQUE (key_hash)
 );
 CREATE INDEX idx_api_keys_project ON project_api_keys(project_id) WHERE revoked_at IS NULL;
+
+-- D-212: personal access tokens. D-062 names them and this table was missing —
+-- project_api_keys holds a *project's* keys, not a *user's* CLI token. Same rule
+-- as above: hash plus a display prefix, never the token.
+CREATE TABLE user_access_tokens (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name         text NOT NULL,
+  token_hash   text NOT NULL UNIQUE,      -- SHA-256 of the full `cbp_…` token
+  token_prefix text NOT NULL,             -- `cbp_` + first 8, for display
+  scopes       text[] NOT NULL DEFAULT '{}',   -- D-062's scoping, empty = full access
+  expires_at   timestamptz,               -- NULL = no expiry (OQ-065 open)
+  last_used_at timestamptz,               -- written by the resolve query itself
+  revoked_at   timestamptz,
+  created_at   timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_access_tokens_user ON user_access_tokens(user_id) WHERE revoked_at IS NULL;
+CREATE INDEX idx_access_tokens_live ON user_access_tokens(token_hash) WHERE revoked_at IS NULL;
 
 -- D-188: column names follow the credentials doc; `kek_id` is text because the
 -- master key is a file named <kek_id>.key, and an integer version cannot name one.
@@ -321,6 +339,20 @@ CREATE INDEX idx_audit_project_time ON audit_logs(project_id, created_at DESC);
 
 REVOKE UPDATE, DELETE, TRUNCATE ON audit_logs FROM PUBLIC;
 -- The application role receives INSERT and SELECT only (see 05-audit-and-admin-access.md).
+--
+-- D-215: the REVOKE alone does NOT make this append-only, and the build proved it
+-- — privileges do not bind a table's owner, and the application connected as the
+-- owner. A statement trigger raising on UPDATE/DELETE does bind the owner, and
+-- D-216 splits the application off the owner role so the privilege half becomes
+-- real too. Both layers ship; neither alone is enough.
+CREATE OR REPLACE FUNCTION corebase_audit_is_append_only() RETURNS trigger
+  LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'audit_logs is append-only: % is not permitted', TG_OP;
+END $$;
+CREATE TRIGGER audit_logs_append_only
+  BEFORE UPDATE OR DELETE ON audit_logs
+  FOR EACH STATEMENT EXECUTE FUNCTION corebase_audit_is_append_only();
 ```
 
 *Rationale:* deliberately **no foreign keys** — audit rows must survive deletion of everything they reference. `bigint` identity, not uuid: monotonic ids make gap detection (tamper evidence) trivial. Grants make it append-only at the database layer, not just by convention.

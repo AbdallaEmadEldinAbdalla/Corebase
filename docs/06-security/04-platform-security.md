@@ -36,12 +36,12 @@ node agent ──► object storage (R2)                      : TLS (S3 API)
 
 ### Least-privilege credential matrix
 
-The governing rule (proposal §65–66): **each component holds the minimum credential to do its job and nothing that would widen a compromise. Nothing, anywhere, holds a customer's plaintext password — auth stores only password *hashes* (argon2id), and the DB uses scram verifiers.**
+The governing rule (proposal §65–66): **each component holds the minimum credential to do its job and nothing that would widen a compromise. Nothing, anywhere, holds a customer's plaintext password — auth stores only password *hashes* — argon2id as specified here, superseded in the build by scrypt per D-211, which records the reasoning and a revisit trigger — and the DB uses scram verifiers.**
 
 | Component | Holds | Explicitly does NOT hold | Why |
 |---|---|---|---|
 | Gateway (Fastify, D-016) | JWKS **cache** (public keys only) + a hash-lookup table of API-key → project/role; Redis handle for rate limits | No private signing keys, no DB credentials, no KMS grant | The most internet-exposed component holds only public/verify material; a gateway compromise cannot mint tokens or read secrets |
-| Auth service | Project **private** signing keys (to mint JWTs) — fetched from the sealed store per project, held in memory; argon2id password hashes | No node SSH, no Docker API, no other project's material beyond what it's actively signing for | Signing is auth's job; it's isolated from infra control |
+| Auth service | Project **private** signing keys (to mint JWTs) — fetched from the sealed store per project, held in memory; scrypt password hashes (D-211) | No node SSH, no Docker API, no other project's material beyond what it's actively signing for | Signing is auth's job; it's isolated from infra control |
 | Control-plane API | A scoped **KMS grant** (decrypt data keys on demand) | No node SSH/Docker creds; no standing plaintext secrets (decrypts just-in-time, doesn't cache plaintext) | Envelope-encryption consumer; JIT decryption limits exposure window |
 | Provisioner **worker** | Node **SSH / Docker API** credentials (per-node scoped), object-storage creds for provisioning | No KMS master, no customer JWT signing keys | Infra actuation is separated from secret custody; a worker compromise is bounded to nodes it already manages ([threat model](01-threat-model.md) e) |
 | Node agent | Its own node-scoped token; the node's LUKS key transiently at boot | No cross-node credentials, no control-plane DB access | Node compromise stays node-local |
