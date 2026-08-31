@@ -344,6 +344,13 @@ The single authoritative register of every locked decision in the corpus, ADR-st
 | D-203 | The worker re-asserts its own node row (upsert) on every reconciliation pass, not only at startup | A worker whose node row disappears — a bad restore, an operator's `DELETE`, a truncated control plane — stays up while placement is blind to it. The symptom is "provisioning hangs" and it reads like anything but the cause. One upsert per sweep makes it self-healing. Found while building T9. [state machine](../02-control-plane/03-provisioning-state-machine.md) |
 | D-204 | The "provisioning job stuck" alert reads a purpose-built gauge (`corebase_provisioning_oldest_nonterminal_job_seconds`) rather than reconstructing the condition in PromQL | The alert becomes one comparison against 600, which is reviewable at a glance, and it degrades honestly: if the worker dies the series goes stale, and staleness is itself an alert. A PromQL expression over states and timestamps would be the harder thing to get right and the harder thing to trust. [observability](../11-infrastructure/03-observability.md) |
 
+## Demo path (from M0/T10)
+
+| ID | Decision | Detail |
+|---|---|---|
+| D-205 | A soft-deleted project exposes `deleted_at` and `purge_after` on `GET /v1/projects/:ref`; both fields are **absent** rather than null for a live project | D-038's recovery window is a promise the customer has to be able to see the end of — a deadline you cannot read is not a deadline you can act on. Absent-not-null because an absent field reads as "not applicable" while a null reads as "we lost it". Found by writing the demo script: it had nothing to print at the one moment the window matters. [platform API](../02-control-plane/02-platform-api.md) |
+| D-206 | There is no customer-facing "purge now". Closing the recovery window early is a control-plane operation, and the demo script marks its own shortcut as test-only | Seven days of undo is the product, not an inconvenience to route around. A `?purge=true` flag would exist mainly to be clicked by mistake, and the one legitimate caller — CI wanting no residue — can expire the window and let the ordinary scheduled purge do the work. Revisit if a compliance customer needs certified immediate destruction, which is a different feature with a different audit trail. [provisioning state machine](../02-control-plane/03-provisioning-state-machine.md) |
+
 ## How to add a decision
 
 1. Propose it in the owning doc's **Decisions** section with rationale.

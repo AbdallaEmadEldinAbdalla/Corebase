@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-08-31 · **Phase:** Milestone 0 (the provisioning spine) · **T1–T9 done, T10 next**
+**Last updated:** 2026-08-31 · **Phase:** Milestone 0 (the provisioning spine) · **T1–T10 done — Milestone 0's tasks are complete; the retro (D-169) remains**
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -37,7 +37,8 @@ no customer-facing dashboard.
 
 ## 2. Run it locally
 
-Prerequisites: Docker (Desktop is fine), Node 22+, pnpm 9.
+Prerequisites: Docker (Desktop is fine), Node 22+, pnpm 9, plus `jq` and `psql`
+for the demo.
 
 ```bash
 pnpm install
@@ -49,7 +50,22 @@ docker build -t corebase/postgres:17.5 infra/docker/postgres
 ./scripts/staging.sh verify        # 10 checks; all must pass
 ```
 
-Then run the whole test suite, or the provisioning measurement:
+Start the services, then see the whole thing work in about five seconds:
+
+```bash
+./scripts/dev.sh
+```
+
+```bash
+./scripts/demo.sh
+```
+
+That creates a project, waits for it, connects to the database it made with the
+credentials the API handed back, runs real SQL, and deletes it — using only curl
+and psql, which is exactly what a customer has. `--purge` also destroys it;
+`--keep` leaves it running and prints the command to connect.
+
+Then the test suite, or the provisioning measurement:
 
 ```bash
 pnpm test
@@ -86,14 +102,8 @@ pnpm --filter @corebase/worker node-reboot
 
 ### Watching it work
 
-`scripts/dev.sh` starts the API and worker with the right eleven environment
-variables and tees their output to the files Alloy tails, so logs reach Loki:
-
-```bash
-./scripts/dev.sh
-```
-
-Then Grafana is at <http://127.0.0.1:3001/d/corebase-provisioning> (anonymous
+`scripts/dev.sh` (above) also tees the services' output to the files Alloy tails,
+so logs reach Loki. Grafana is at <http://127.0.0.1:3001/d/corebase-provisioning> (anonymous
 admin, local only) and `./scripts/staging.sh monitoring` prints the URLs plus a
 health check. To verify the whole observability path end to end — scrape targets,
 20 runs on the panel, logs queryable by ref, the alert actually firing:
@@ -167,6 +177,8 @@ boot. Don't use them.
 ## 4. What is built, in detail
 
 Test counts are from `pnpm test` and are all currently green: **197 tests**.
+
+Every task below has a command that proves it; they are listed with the task.
 
 ### T1 — Repo scaffold · done
 pnpm workspaces + Turborepo. `typecheck` and `test` across every package.
@@ -402,6 +414,32 @@ non-terminal job and waits for the rule to reach `firing`, not merely `pending`:
 rule whose `for` window never elapses would satisfy "pending" forever, which is
 exactly the bug an alert test should catch.
 
+### T10 — Demo script · done
+
+`./scripts/demo.sh` is the whole product in one file, and it is deliberately
+poor in privileges: **curl and psql only**, no database access, no internal
+helpers, because a demo that needs more than a customer has is not a demo. It is
+also the seed of the golden-path e2e (13-quality/01), so it is written to be read
+— each step says what it is proving.
+
+It creates a project, waits for `ready`, connects on the returned string, runs
+`CREATE TABLE` / `INSERT` / `SELECT`, and then asserts three things about the
+database a customer should not have to take on trust: it is Postgres 17.5, the
+new table already has RLS enabled (D-083 — the event trigger fired), and the
+customer's role is not a superuser (D-080). Then it deletes the project and prints
+the date the recovery window closes.
+
+Two things it surfaced. The API had no way to tell you when your recovery window
+ends, which made D-038 a promise with no visible deadline — `deleted_at` and
+`purge_after` are now on the project detail (**D-205**). And the script wanted a
+"purge now" that does not exist and should not (**D-206**): seven days of undo is
+the product, so `--purge` expires the window through the control DB and is
+labelled test-only.
+
+Green end to end in ~5 s, and it cleans up after itself when it fails, because a
+script that leaves a running database behind on every failure teaches people to
+distrust it.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -441,7 +479,7 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-Twenty-one decisions came out of running the thing rather than planning it. Full text in
+Twenty-three decisions came out of running the thing rather than planning it. Full text in
 the [decision log](docs/00-foundation/05-decision-log.md); the log holds
 D-001…D-192 and is binding when two documents disagree.
 
@@ -468,6 +506,8 @@ D-001…D-192 and is binding when two documents disagree.
 | D-202 | Hand-written metrics registry; no `corebase_*` metric carries `project_ref`, asserted by a check | D-146's budget is a constraint: one per-project histogram would be 600k series |
 | D-203 | The worker re-asserts its node row on every reconcile, not just at startup | A vanished node row leaves the worker up while placement is blind to it |
 | D-204 | The stuck-job alert reads a purpose-built gauge, not a PromQL reconstruction | One comparison is reviewable; a stale series is itself an alert |
+| D-205 | A soft-deleted project exposes `deleted_at` and `purge_after`; both absent, not null, when alive | A recovery deadline you cannot read is not a deadline you can act on |
+| D-206 | No customer-facing "purge now"; early closure is a control-plane operation | Seven days of undo is the product, not an inconvenience to route around |
 
 ## 7. Measurements
 
@@ -500,14 +540,11 @@ PostgREST. Neither licenses raising the planned density (D-091's 150 projects/no
 
 ## 8. What is not built yet
 
-**Milestone 0, remaining:**
-
-| Task | What it needs to prove |
-|---|---|
-| **T10 Demo script** | create → poll → `psql` → delete, green end to end |
-
-Then a **Milestone-0 retro** (D-169) that corrects the cost model and density
-assumptions with the measured numbers — part of the milestone, not an afterthought.
+**Milestone 0, remaining:** the ten tasks are done. What is left is the
+**retro** (D-169), which is part of the milestone and not an afterthought: six
+measurements (M-001…M-006) now exist against assumptions the plan made before
+anything was built, and the cost model, the density figures (D-090/D-091/D-174)
+and the risk register have not yet been reconciled with them.
 
 **Everything above the database** is Phase 1+: the data API (PostgREST), auth,
 storage, realtime, the dashboard, the CLI, the SDK. All planned in detail under

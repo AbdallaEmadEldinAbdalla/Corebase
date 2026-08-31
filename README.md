@@ -18,7 +18,7 @@ Reboot the data node and every project is serving queries again seconds later wi
 
 All of it is visible: Prometheus scrapes both services, Grafana has a provisioned dashboard, logs are in Loki and findable by project ref or request id, and the "job stuck" alert has been watched firing.
 
-Tasks T1–T9 of ten are done; T10 (the demo script) is next. Nothing above the database exists yet — no data API, no auth, no storage, no dashboard.
+**All ten Milestone-0 tasks are done.** What remains is the milestone retro (D-169): reconciling the cost model and the density figures with the six measurements the build produced. Nothing above the database exists yet — no data API, no auth, no storage, no dashboard.
 
 > **[STATUS.md](STATUS.md) is the handover document**: what works, how to run it locally, what every rule in the code is defending against, and what is not built yet. Read it before the corpus if you are here to contribute.
 
@@ -31,7 +31,19 @@ docker build -t corebase/postgres:17.5 infra/docker/postgres
 ./scripts/staging.sh seed-images && ./scripts/staging.sh verify
 ```
 
-Then the full suite (197 tests, integration included — they need the staging stack above and **fail rather than skip** without it):
+Then start the services and watch the whole thing work in about five seconds:
+
+```bash
+./scripts/dev.sh
+```
+
+```bash
+./scripts/demo.sh
+```
+
+It creates a project, waits for it, connects to the database it made with the credentials the API handed back, runs real SQL, and deletes it — using only `curl` and `psql`, which is exactly what a customer has.
+
+The full suite is 197 tests, integration included; they need the staging stack above and **fail rather than skip** without it:
 
 ```bash
 pnpm test
