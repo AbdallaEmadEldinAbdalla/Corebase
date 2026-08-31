@@ -710,6 +710,25 @@ The whole recipe was replayed locally from a **nuked** stack before being commit
 7 migrations from empty, 10/10 verify — which is how the fresh-install
 bootstrap-owner bug in P1a surfaced.
 
+**It is green on a runner now**, and getting there took three failures that no local
+run could have produced, which is the argument for CI in three lines:
+
+1. `pnpm/action-setup` refuses to start when both its `version` input and
+   package.json's `packageManager` name a version. The input is gone; pinning it
+   twice is how the two drift.
+2. buildx's default *docker* driver cannot export a cache, so `cache-to: type=gha`
+   failed the very build it was meant to make cheap. `setup-buildx-action` supplies a
+   docker-container builder, which supports both the GitHub cache and `load: true`.
+3. `./certs:/certs/client-out` was a bind mount on the data node, and **on Linux the
+   Docker daemon creates a missing bind-mount source directory as root** — so
+   `infra/docker/staging/certs` arrived root-owned and the script could not write the
+   certs it was about to pull. Docker Desktop remaps bind-mount ownership to the
+   local user, which is why this script worked on macOS for months with a latent
+   defect. The mount was also doing nothing: dind writes client certs to the named
+   volume, and inside the running container `client-out` held only what the host had
+   put there. Removed, not repointed (**D-227**), and `cmd_up` now creates the
+   directory before compose can.
+
 **And then the lane itself turned out to be wrong**, which is worth recording
 because the failure mode is invisible. Two defects, and together they meant the
 "needs no infrastructure" proof proved nothing. `services/worker/src/e2e.test.ts`
@@ -882,9 +901,9 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-Forty-three decisions came out of running the thing rather than planning it —
-D-184…D-210 from Milestone 0, D-211…D-226 from Phase 1. Full text in the
-[decision log](docs/00-foundation/05-decision-log.md); the log holds D-001…D-226 and is
+Forty-four decisions came out of running the thing rather than planning it —
+D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1. Full text in the
+[decision log](docs/00-foundation/05-decision-log.md); the log holds D-001…D-227 and is
 binding when two documents disagree.
 
 | ID | What changed | Why it surfaced |
@@ -932,6 +951,7 @@ binding when two documents disagree.
 | D-224 | The [UX standards](docs/09-dashboard/05-ux-standards.md) document is binding, and its 20-question gate runs on every UI change | The first shell honoured every token and had no interaction contract: right in every colour, wrong in every mechanic |
 | D-225 | Motion is 120–180 ms, transform/opacity only, disabled under `prefers-reduced-motion` (resolves OQ-170) | "No motion at all" is right for a static board and wrong for a shell — layers arriving without direction is why an interface feels abrupt |
 | D-226 | The command palette and full keyboard reachability are shell requirements; every menu capability is also in the palette | It converts "learn where the button is" into "know what it is called", and it forces every action to have a name a CLI can reuse |
+| D-227 | No directory this repo writes to may be a compose bind-mount *source*; certs are copied out of the named volume by `docker exec cat` | On Linux the Docker daemon creates a missing bind-mount source as root, locking the scripts out; Docker Desktop remaps it, so the defect was invisible on macOS for months |
 
 ## 7. Measurements
 
@@ -1025,10 +1045,10 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   scope currently has its user's full authority.
 - The invite email is not sent (same Phase-4 sender), so an invite has to be handed
   over out of band for `POST /v1/invites/accept` to be usable.
-- The nightly drills have never run **on a GitHub runner** — they are green locally
-  and the workflow is written, but the first scheduled run is the real test. The
-  same is true of the whole CI file: the recipe was replayed locally from a nuked
-  stack, which is strong evidence and not the same thing.
+- The **nightly drills** have never run on a GitHub runner. `ci.yml` now has —
+  both lanes green, including the full integration lane — but `nightly.yml` shares
+  none of that proof beyond the setup steps, and the first scheduled run is still
+  the real test for the kill matrix, the lifecycle loop and the reboot drill.
 - The dashboard covers the shell only: no members page, no billing, no org
   settings, no audit viewer, no table editor, no SQL editor. The audited
   `service_role` reveal is therefore not reachable from the UI — the keys page shows
