@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Pool } from 'pg';
+import { ensureBootstrapOrg } from './modules/control-plane/store.pg.ts';
 
 /**
  * P1a: the schema properties the rest of Phase 1 depends on, asserted against the
@@ -19,6 +20,10 @@ beforeAll(async () => {
   pool = new Pool({ connectionString: DB, max: 4, connectionTimeoutMillis: 1500 });
   try {
     await pool.query('select 1 from organization_members limit 0');
+    // The dev org and its owner are created by startup, not by a migration — see
+    // ensureBootstrapOrg. A test that assumes otherwise passes only on a database
+    // that has already been through Milestone 0.
+    await ensureBootstrapOrg(pool);
     up = true;
   } catch (err) { reason = (err as Error).message; up = false; }
 }, 20_000);

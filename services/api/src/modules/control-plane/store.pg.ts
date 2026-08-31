@@ -55,7 +55,18 @@ export interface PgStoreOptions {
   organizationId: string;
 }
 
-/** Idempotent bootstrap of the dev org; returns its id. */
+/**
+ * Idempotent bootstrap of the dev org, *with an owner*; returns its id.
+ *
+ * The membership is here and not only in the P1a migration because of an ordering
+ * problem a fresh install exposes and an upgraded one hides. The migration links
+ * the bootstrap user to the `dev` org by joining on its slug — but on a clean
+ * database that org does not exist yet, since this function creates it at startup.
+ * So the migration's INSERT matched nothing and a fresh deployment came up with an
+ * organization that had no owner, violating the invariant every membership path
+ * assumes. My staging database already had the org from Milestone 0, which is
+ * exactly why the bug survived until CI ran against an empty one.
+ */
 export async function ensureBootstrapOrg(pool: Pool, slug = 'dev'): Promise<string> {
   const { rows } = await pool.query<{ id: string }>(
     `INSERT INTO organizations (name, slug) VALUES ($1, $2)
@@ -63,7 +74,12 @@ export async function ensureBootstrapOrg(pool: Pool, slug = 'dev'): Promise<stri
      RETURNING id`,
     ['Development', slug],
   );
-  return rows[0]!.id;
+  const orgId = rows[0]!.id;
+  await pool.query(
+    `INSERT INTO organization_members (organization_id, user_id, role)
+     SELECT $1, u.id, 'owner' FROM users u WHERE u.email = 'dev@corebase.local'
+     ON CONFLICT (organization_id, user_id) DO NOTHING`, [orgId]);
+  return orgId;
 }
 
 export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
