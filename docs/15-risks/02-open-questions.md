@@ -61,7 +61,7 @@ Everything the corpus deliberately leaves unresolved, in one place. Each OQ live
 | OQ-040 | `usage_records` granularity: hourly (enables intra-day abuse cutoffs, ~24× rows) vs daily | [data model](../02-control-plane/01-data-model.md) | Phase 1, with abuse prevention |
 | OQ-041 | Does `project_members` ship in V1, or is org-level RBAC enough until agencies arrive (D-003)? | [data model](../02-control-plane/01-data-model.md) | V1.x |
 | OQ-042 | Final `ref` length/alphabet (16–20 lowercase alnum, letter-first) validated against wildcard-TLS/subdomain scheme | [data model](../02-control-plane/01-data-model.md) | Phase 1 DDL freeze |
-| OQ-043 | Ready-notification transport for the dashboard: poll `GET /v1/projects/:ref` vs SSE `/v1/events` | [platform API](../02-control-plane/02-platform-api.md) | before Phase 7 create-UX is finalized |
+| OQ-043 | ~~Ready-notification transport for the dashboard~~ **Partly resolved by D-221**: polling for create and resume, which are seconds long. Still open for operations measured in minutes — restore-from-backup is the case that may need SSE | [platform API](../02-control-plane/02-platform-api.md) | before the Phase 3 restore UX |
 | OQ-044 | Exact per-plan platform-API rate-limit numbers (current table is placeholder) | [platform API](../02-control-plane/02-platform-api.md) | with pricing + load tests (Phase 9) |
 | OQ-045 | Drain budget (90 s) vs pgBackRest final backup: longer budget for `backup` workers, or checkpointable sub-steps? | [job queue & workers](../02-control-plane/04-job-queue-and-workers.md) | Phase 3, measured with real backups |
 | OQ-046 | Customer audit export: dashboard NDJSON enough, or SIEM streaming (webhook/S3 push)? | [audit & admin access](../02-control-plane/05-audit-and-admin-access.md) | deferred until asked twice |
@@ -176,7 +176,7 @@ Everything the corpus deliberately leaves unresolved, in one place. Each OQ live
 
 | ID | Question (one line) | Owning doc | Decide by |
 |---|---|---|---|
-| OQ-149 | Overview sparkline data path: control-plane rollup table vs a scoped Prometheus proxy on the platform API | [dashboard IA](../09-dashboard/01-dashboard-ia.md) | before the overview page is built (Phase 7) |
+| OQ-149 | Overview sparkline data path: control-plane rollup table vs a scoped Prometheus proxy on the platform API. Still open on purpose — D-222 ships the overview page *without* the sparklines and says so on the page, rather than settling this from inside a component | [dashboard IA](../09-dashboard/01-dashboard-ia.md) | before any per-project metric is shown to a customer |
 | OQ-131 | Executed-DDL journal: exported into `db pull`/`db diff` as migration entries, or human-readable log only? | [table editor](../09-dashboard/02-table-editor.md) | Phase 7, with migrations |
 | OQ-132 | Index creation from the editor: plain `CREATE INDEX` vs `CONCURRENTLY` by default above a row-count threshold | [table editor](../09-dashboard/02-table-editor.md) | with the D-132 execution-path implementation |
 | OQ-133 | Introspection cache: is focus-revalidate + 60 s polling enough, or should the OQ-082 DDL trigger push-invalidate editors? | [SQL editor](../09-dashboard/03-sql-editor.md) | Phase 7, together with OQ-082 |

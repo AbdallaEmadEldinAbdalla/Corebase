@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-08-31 · **Phase:** Phase 1 (the platform surface) · **Milestone 0 complete** (ten tasks + retro) · **Phase 1: P1a–P1f done, P1g remaining** — all three Phase-1 exit criteria met
+**Last updated:** 2026-08-31 · **Phase:** Phase 1 (the platform surface) · **Milestone 0 complete** (ten tasks + retro) · **Phase 1 complete** — P1a–P1g, all three exit criteria met
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -53,9 +53,13 @@ routes to keep it that way. Each project gets its own ES256 keypair with `anon` 
 integration lane against the Docker staging stack on every PR, with the slow drills
 on a nightly schedule.
 
+And there is a dashboard: sign in, switch organizations, see your projects, create
+one and watch it go from `creating` to `ready` without reloading, then copy a
+connection string that works — built on the exported design system, in both themes.
+
 Still nothing between a customer and their database above SQL: no data API
-(PostgREST), no end-user auth service, no storage, no realtime, and no dashboard
-UI — P1g is the dashboard shell and Phase 2 is the gateway.
+(PostgREST), no end-user auth service, no storage, no realtime. That is Phase 2 and
+beyond.
 
 ## 2. Run it locally
 
@@ -87,10 +91,41 @@ credentials the API handed back, runs real SQL, and deletes it — using only cu
 and psql, which is exactly what a customer has. `--purge` also destroys it;
 `--keep` leaves it running and prints the command to connect.
 
+### The dashboard
+
+`dev.sh` sets `CB_DASHBOARD_ORIGINS`, so with it running:
+
+```bash
+pnpm dev:dashboard
+```
+
+Then open http://localhost:3000. There is no seeded password anywhere — the
+bootstrap account has no hash on purpose — so create an account on `/signup`. A new
+account has no organization and lands on `/no-org`; the org endpoint exists but has
+no screen yet, so make one with the API:
+
+```bash
+curl -sS -c /tmp/cb.jar -X POST http://127.0.0.1:8099/v1/auth/login -H 'content-type: application/json' -d '{"email":"you@example.com","password":"your-password-here"}'
+```
+
+```bash
+curl -sS -b /tmp/cb.jar -X POST http://127.0.0.1:8099/v1/orgs -H 'content-type: application/json' -H "x-csrf-token: $CSRF" -d '{"name":"Greenbull","slug":"greenbull"}'
+```
+
+`$CSRF` is the `csrf_token` from the login response. Reload the dashboard and the
+switcher has an org; from there create a project and watch it reach `ready`.
+
 Then the test suite, or the provisioning measurement:
 
 ```bash
 pnpm test
+```
+
+The unit lane is the fast half — no Docker, no database, about a minute — and it is
+what CI runs first:
+
+```bash
+pnpm test:unit
 ```
 
 ```bash
@@ -174,7 +209,10 @@ design-exports/        design system artefacts: tokens, 43 HTML components, 142 
 migrations/            plain SQL, applied in filename order, checksummed
 infra/docker/postgres/ the per-project database image (extension allowlist, auth hardening)
 infra/docker/staging/  the local stand-in for staging: control node + dind data node
-scripts/               staging.sh, migrate-staging.sh
+scripts/               staging.sh, migrate-staging.sh, dev.sh, demo.sh
+.github/workflows/     ci.yml (unit + integration on every PR), nightly.yml (the drills)
+apps/
+  dashboard/           the Next.js dashboard shell (P1g) — a pure client of /v1
 packages/
   config/              shared tsconfig base
   types/               shared types, error envelope, project-ref grammar
@@ -182,6 +220,8 @@ packages/
   secrets/             credential persistence — the store-then-apply rule lives here
   queue/               BullMQ + ioredis wiring, idempotency-keyed enqueue
   metrics/             a Prometheus registry: counters, gauges, histograms
+  audit/               the audit writer: redaction, size cap, joins the caller's transaction
+  jwt/                 ES256 sign/verify, one algorithm only
   migrate/             the migration runner (advisory lock, per-file transaction, drift check)
 services/
   api/                 Fastify control-plane API
@@ -189,8 +229,10 @@ services/
   worker/bench/        the provisioning measurement harness
 ```
 
-Node runs TypeScript directly with `--experimental-strip-types`; there is no build
-step. That has one consequence worth knowing: **Node only strips types, it does not
+Everything except the dashboard runs TypeScript directly with
+`--experimental-strip-types`; there is no build step. The dashboard is the exception
+— Next.js compiles it — which is why it is the only package with a `build` that
+produces anything. That has one consequence worth knowing: **Node only strips types, it does not
 transpile.** TypeScript features that need code generation — parameter properties,
 enums, decorators — fail at runtime while Vitest happily transpiles them in tests.
 That combination once produced 17 passing tests against a service that could not
@@ -198,7 +240,8 @@ boot. Don't use them.
 
 ## 4. What is built, in detail
 
-Test counts are from `pnpm test` and are all currently green: **198 tests**.
+Test counts are from `pnpm test` and are all currently green: **375 tests**, of
+which **212** need no infrastructure (`pnpm test:unit`).
 
 Every task below has a command that proves it; they are listed with the task.
 
@@ -493,7 +536,7 @@ distrust it.
 
 Milestone 0 built the spine: one endpoint, one hard-coded org, a static token, and a
 real database at the end of it. Phase 1 turns that into something a person can hold
-an account on. The [phase plan](docs/14-roadmap/01-phase-plan.md) sets three exit
+an account on, and gives them a dashboard to hold it in. The [phase plan](docs/14-roadmap/01-phase-plan.md) sets three exit
 criteria, and they are what the tasks below are measured against:
 
 1. two users with different roles see correct permissions end to end;
@@ -637,8 +680,9 @@ useless for the one job it has. It is now a label, `cbk_anon_<ref4>` (**D-218**)
 
 Two lanes, and the split is the point.
 
-**`unit`** — install, `pnpm typecheck`, `pnpm test:unit`: **200 tests across 10
-packages**, no infrastructure, about a minute. Every package got a `test:unit` script
+**`unit`** — install, `pnpm typecheck`, `pnpm build`, `pnpm test:unit`: **212 tests
+across 11 packages**, no infrastructure, about a minute. The build is in this lane
+because `tsc --noEmit` is happy about plenty of things `next build` refuses. Every package got a `test:unit` script
 that excludes `**/*.e2e.test.ts`, which meant renaming the DB-dependent tests to say
 so in their filenames — a test that needs a database should declare it where you can
 see it, not in a `beforeAll` that skips. The lane is run with the database and Redis
@@ -649,7 +693,7 @@ fails here instead of passing by accident on a runner that happens to have some.
 D-185 auth hardening are enforced in CI, not just locally), brings up the same Docker
 staging substitute the dev loop uses, migrates, generates a master key, enables the
 application role, seeds the image onto the data node, runs `staging.sh verify`, and
-then runs the full **309-test** suite. On failure it dumps `staging.sh status` and
+then runs the full **375-test** suite. On failure it dumps `staging.sh status` and
 both containers' logs, because a red CI run with no diagnostics costs a full
 reproduce-locally cycle.
 
@@ -663,8 +707,115 @@ loop (20 cycles), the T8 node-reboot drill, and the M-002 provisioning bench. On
 schedule they stay honest; on every PR they would get disabled within a week.
 
 The whole recipe was replayed locally from a **nuked** stack before being committed —
-7 migrations from empty, 10/10 verify, 309 tests — which is how the fresh-install
+7 migrations from empty, 10/10 verify — which is how the fresh-install
 bootstrap-owner bug in P1a surfaced.
+
+**And then the lane itself turned out to be wrong**, which is worth recording
+because the failure mode is invisible. Two defects, and together they meant the
+"needs no infrastructure" proof proved nothing. `services/worker/src/e2e.test.ts`
+was not matched by `**/*.e2e.test.ts` — the glob needs something before `.e2e.` and
+that filename has nothing — so nine tests that truncate the staging database were
+in the unit lane the whole time. And turbo was replaying a **cached pass**: results
+were keyed on file hashes, but a database is an input turbo cannot hash, so
+re-running with the database URL on a dead port produced a cache hit and printed
+"10 successful" without executing a thing. Both are fixed (**D-223**): the file is
+renamed, `test` and `test:unit` are `cache: false`, and an audit of all 32 test
+files says it was the only leak. The numbers above are from after the fix.
+### P1g — the dashboard shell · done · 9 tests
+
+`apps/dashboard`, a Next.js App Router app that is a pure client of the platform
+API (D-130): no API routes, no BFF, no server-side control-plane access. Session
+cookies for auth, TanStack Query as the entire data layer — the server cache *is*
+the app state, so there is no store.
+
+**It is built on the design system that already existed.** `design-exports/07-html`
+holds `tokens.css` and `components.css` rendered from the Pencil boards, and that
+turned out to be a component library covering every piece the shell needs: button,
+field, card, badge, banner, menu, switcher, empty state, table, skeleton. So the
+app uses those classes rather than Tailwind + shadcn/ui (**D-220** narrows D-025's
+UI half). Adopting Tailwind would have meant re-expressing 40 role tokens in a
+second naming system, then mapping shadcn's own `background`/`foreground`/`primary`
+onto ours as a third layer — or running both and guaranteeing that a `cb-btn` and a
+shadcn `Button` drift apart while claiming to be the same design.
+
+Instead of diffing against the export byte-for-byte, a test enforces the two rules
+the export exists to communicate, which is a stronger guard: **no stylesheet may
+name a ramp step** (D-178 — "a component that names a ramp step directly is a bug",
+and it is a bug that looks perfectly fine in light mode and surfaces months later
+as an unreadable dark theme), and **no drop shadows** (D-179). Both were verified
+by adding a violation and watching them fail. The shadow rule had to be rewritten
+first: the original banned `box-shadow` outright and failed on the design system's
+*own* focus ring and the active nav item's 3px accent bar, which are required. The
+rule is the blur radius — a non-zero blur is elevation, a zero blur is a ring.
+
+**What was built:** login, signup, an org switcher, the projects grid, the
+create-project flow, and the project overview. Plus a `/no-org` page, because a
+signed-in account with no organization is a real state — an unaccepted invite, a
+deleted org — and bouncing it to `/login` would be telling the user something
+untrue.
+
+**Pieces worth naming:**
+
+- **CORS had to exist first** (**D-219**). The dashboard is the first browser
+  client, so every call is cross-origin *with* the session cookie. Allowlist only,
+  no wildcard ever, `Vary: Origin` on every response, and **empty by default** — a
+  `localhost:3000` fallback would be convenient and would also ship to production
+  the first time someone forgot the variable, since the service starts fine either
+  way. Verified live: the dashboard origin gets the full header set,
+  `https://evil.example` gets `vary: Origin` and nothing else.
+- **One error surface for the whole app.** The design system makes it binding that
+  every error shows the platform `code`, a sentence, and the `request_id` with a
+  copy button (D-032). One component, so no page can render `String(error)` and
+  drop the id — the only thing support can act on.
+- **The idempotency key is minted once per form, not per click** (D-055). A
+  double-click, a flaky connection or an impatient reload must not produce two
+  databases.
+- **Progress is polled, not streamed** (**D-221**, resolving OQ-043 for create and
+  resume). Provisioning is ~2.5 s measured; a stream would need a
+  connection-holding endpoint and a reconnect story to answer what two GETs answer.
+  OQ-043 stays open for restore-from-backup, which takes minutes.
+
+**The overview page is a stub, and says so on the page** (**D-222**). The IA
+specifies three zones; two of them cannot be honest yet. Per-service health needs
+PostgREST, Auth and Storage — a card reading "Auth: green" would be a claim about a
+service that is not deployed. The sparklines need a metrics path and OQ-149 has not
+chosen one; inventing it inside a component is the hardest place to change it. What
+the page does show is everything the control plane actually knows: state, region,
+plan, the recovery deadline when soft-deleted, the connection strings, and the API
+keys — `anon` in full because it is publishable by design, `service_role` as its
+`cbk_srv_<ref4>` label because revealing it is audited and that flow belongs with
+the keys page.
+
+**Two bugs the browser found that no test would have.**
+
+The first was mine twice over. A new project's status is **`creating`**, not
+`provisioning` — I had hand-written the list of states. The badge went neutral,
+which is cosmetic, and the overview page concluded the project was not settling and
+**stopped polling**, which is not: the page would have sat on CREATING until the
+user reloaded, on the very first thing anyone does with the product. The fix is to
+stop keeping a list — `TONE` is typed `Record<ProjectStatus, string>` against the
+enum in `@corebase/types`, so a new state is now a compile error, and a test
+asserts the settling and resting sets partition the enum with nothing left
+undecided. Verified the type bites by deleting a key and watching `tsc` fail.
+
+The second was a hydration mismatch: the theme script sets `data-theme` on `<html>`
+before React hydrates, by design, and React cannot tell an intentional
+pre-hydration mutation from a bug. `suppressHydrationWarning` on that one element.
+
+Also corrected by looking at it: the org switcher had a "+ New project" row copied
+from the board — but that board is the *project* switcher. The IA gives the org
+switcher exactly one job, swapping `[slug]`, and having the create action in two
+places would make neither the obvious one.
+
+**Verified by driving it, not by asserting about it.** Signed up through the API,
+created two orgs, then in a browser: signed in, watched the redirect land on the
+projects page, opened the org switcher, created a project, watched the state go
+`creating` → `ready` without a reload, switched to the second org and confirmed it
+shows zero projects, signed out, hit a project URL directly and landed on
+`/login?next=%2Fproject%2F…`, signed back in and arrived at that exact project. Then
+the real test: **the connection string the page displayed was pasted into `psql`,
+which created a table and inserted a row.** Both themes rendered and the toggle
+cycles dark → system → light with the stored value, attribute and label in step.
 
 ## 5. Rules the code follows
 
@@ -705,9 +856,9 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-Thirty-five decisions came out of running the thing rather than planning it — D-184…D-210
-from Milestone 0, D-211…D-218 from Phase 1. Full text in the
-[decision log](docs/00-foundation/05-decision-log.md); the log holds D-001…D-218 and is
+Forty decisions came out of running the thing rather than planning it — D-184…D-210
+from Milestone 0, D-211…D-223 from Phase 1. Full text in the
+[decision log](docs/00-foundation/05-decision-log.md); the log holds D-001…D-223 and is
 binding when two documents disagree.
 
 | ID | What changed | Why it surfaced |
@@ -747,6 +898,11 @@ binding when two documents disagree.
 | D-216 | The API connects as `corebase_app`, which owns nothing and cannot run DDL; `corebase` owns the schema | Three claims in the corpus were untrue while one role did both jobs |
 | D-217 | A project name is unique **within its organization**; the `ref` is the global identity | A global check lets one tenant deny "api" to everyone, and says so in the 409 |
 | D-218 | `key_prefix` is a label (`cbk_anon_<ref4>`), not a literal prefix | Both keys displayed as `eyJhbGciOiJF` — the base64 of the JWT header, identical for every key ever minted |
+| D-219 | CORS is an explicit allowlist, empty by default, never a wildcard, always `Vary: Origin` | A localhost default ships to production the first time someone forgets the variable, because the service starts fine either way |
+| D-220 | The dashboard uses the exported design-system class library, not Tailwind + shadcn (narrows D-025's UI half) | The design system already exists as an implementation; a second component system for the same design guarantees drift |
+| D-221 | Create and resume progress is polled, not streamed (resolves OQ-043 for those flows) | Provisioning is ~2.5 s; a stream needs a connection-holding endpoint and a reconnect story to answer what two GETs answer |
+| D-222 | The overview page ships without health cards or sparklines and says so on the page | "Auth: green" would be a claim about a service that is not deployed, and OQ-149 must not be settled from inside a component |
+| D-223 | Test results are never cached, and `*.e2e.test.ts` is a load-bearing filename | Turbo hashes files, not databases — a cached pass was replayed against dead ports and printed a green lane that never ran |
 
 ## 7. Measurements
 
@@ -783,12 +939,15 @@ PostgREST. Neither licenses raising the planned density (D-091's 150 projects/no
 register and the decision log now carry the measured numbers, and D-209 gates what
 may be done with them next.
 
-**Phase 1 is at P1f of P1g.** All three exit criteria are met — roles decide
-permissions end to end (P1d), every mutation is audited and a guard enforces it
-(P1b), and CI runs both suites on every PR (P1f). What remains is **P1g, the
-dashboard shell**: login, org switcher, project list, the create-project flow and a
-project overview stub. The design system for it already exists under
-[design-exports/](design-exports/07-html) — it has never been wired to the API.
+**Phase 1 is complete** — P1a through P1g. All three exit criteria are met: roles
+decide permissions end to end (P1d), every mutation is audited and a route guard
+enforces it (P1b), and CI runs both suites on every PR (P1f). The dashboard shell
+(P1g) covers login, signup, the org switcher, the projects grid, the create-project
+flow and a project overview.
+
+**Next is Phase 2**, the database platform: PgBouncer and the pooled connection
+string that is currently allocated but dead, pause/resume, disk quotas, and the
+credential rotation path.
 
 The measurement that would move the cost model most is the one Phase 1/2 makes
 possible:
@@ -838,7 +997,20 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
 - The invite email is not sent (same Phase-4 sender), so an invite has to be handed
   over out of band for `POST /v1/invites/accept` to be usable.
 - The nightly drills have never run **on a GitHub runner** — they are green locally
-  and the workflow is written, but the first scheduled run is the real test.
+  and the workflow is written, but the first scheduled run is the real test. The
+  same is true of the whole CI file: the recipe was replayed locally from a nuked
+  stack, which is strong evidence and not the same thing.
+- The dashboard covers the shell only. No members page, no billing, no org
+  settings, no audit viewer, no table editor, no SQL editor, no keys page — so the
+  audited `service_role` reveal is not reachable from the UI. Creating an
+  *organization* has an endpoint and no screen, which is why `/no-org` can explain
+  the state but not resolve it.
+- The dashboard has no pause/resume affordance because the endpoints do not exist
+  yet (Phase 2). That also means D-131's auto-resume-on-open is not implemented,
+  and a `paused` project currently renders as a badge and nothing else.
+- No dashboard tests beyond the design-system and state-machine guards. The flows
+  were verified by driving a browser by hand; there is no Playwright suite, so a
+  regression in the login or create flow would not be caught by CI.
 
 ## 9. Where to look when you pick this up
 
@@ -857,4 +1029,6 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
 | What do those numbers *not* prove? | [the M0 retro §4](docs/14-roadmap/06-milestone-0-retro.md) — read before quoting any of them |
 | How does provisioning actually work? | `services/worker/src/jobs/sagas.ts` — read top to bottom |
 | How does a project database get built? | `infra/docker/postgres/` — Dockerfile plus four init scripts |
-| What does the UI look like? | [design-exports/07-html](design-exports/07-html) served over HTTP |
+| What does the UI look like? | run the dashboard (§2), or [design-exports/07-html](design-exports/07-html) served over HTTP |
+| How does the dashboard talk to the API? | `apps/dashboard/src/lib/api.ts` — envelope, CSRF, 401, credentials, all in one place |
+| Why is the dashboard not Tailwind? | D-220 in the [decision log](docs/00-foundation/05-decision-log.md) |

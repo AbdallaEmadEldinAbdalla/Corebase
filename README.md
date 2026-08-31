@@ -8,7 +8,7 @@ Corebase is a developer-focused Backend-as-a-Service: a developer creates a proj
 
 ## Status
 
-**Milestone 0 complete; Phase 1 at P1f of P1g.**
+**Milestone 0 complete; Phase 1 complete.**
 
 **The provisioning spine (Milestone 0).** `POST /v1/projects` returns a real, isolated PostgreSQL 17.5 database on a data node about **2.5 seconds** later, with its own volume, cgroup limits, the full role model, envelope-encrypted credentials, and a connection string you can `psql` into immediately. Twenty consecutive creates are measured end to end.
 
@@ -28,7 +28,9 @@ Every mutating call leaves a row in an append-only audit table — enforced by a
 
 Each project gets its own ES256 keypair with `anon` and `service_role` keys, and publishes `GET /v1/projects/:ref/.well-known/jwks.json` so a customer's services can verify tokens without calling us.
 
-All three Phase-1 exit criteria are met. What remains is **P1g, the dashboard shell**. Above the database, the data plane is still Phase 2+: no data API (PostgREST), no end-user auth service, no storage, no realtime.
+**The dashboard shell (P1g).** A Next.js app that is a pure client of the platform API — no BFF, no server-side control-plane access. Sign in, switch organizations, see your projects, create one and watch it go `creating` → `ready` without reloading, then copy a connection string that works. It is built on the design system that already existed in `design-exports/` rather than on Tailwind + shadcn (D-220): those exports turned out to be a complete component library, and a second component system for the same design would only drift from it. Both themes ship, and a test enforces the two rules that decay silently — no stylesheet may name a ramp step, and there are no drop shadows.
+
+All three Phase-1 exit criteria are met. Above the database, the data plane is still Phase 2+: no data API (PostgREST), no end-user auth service, no storage, no realtime — and the dashboard is a shell, so there is no table editor, SQL editor, members page or billing yet.
 
 > **[STATUS.md](STATUS.md) is the handover document**: what works, how to run it locally, what every rule in the code is defending against, and what is not built yet. Read it before the corpus if you are here to contribute.
 
@@ -51,15 +53,23 @@ Then start the services and watch the whole thing work in about five seconds:
 ./scripts/demo.sh
 ```
 
-It creates a project, waits for it, connects to the database it made with the credentials the API handed back, runs real SQL, and deletes it — using only `curl` and `psql`, which is exactly what a customer has.
+Or use the dashboard, on http://localhost:3000:
 
-The full suite is **309 tests**, integration included; they need the staging stack above and **fail rather than skip** without it:
+```bash
+pnpm dev:dashboard
+```
+
+There is no seeded password anywhere, so create an account on `/signup`; a new account has no organization, and [STATUS.md](STATUS.md) §2 has the two curl calls that make one (the endpoint exists, the screen does not yet).
+
+The demo script creates a project, waits for it, connects to the database it made with the credentials the API handed back, runs real SQL, and deletes it — using only `curl` and `psql`, which is exactly what a customer has.
+
+The full suite is **375 tests**, integration included; they need the staging stack above and **fail rather than skip** without it:
 
 ```bash
 pnpm test
 ```
 
-The unit lane is **200 of those** and needs no infrastructure at all — it is what CI runs first, in about a minute:
+The unit lane is **212 of those** and needs no infrastructure at all — it is what CI runs first, in about a minute:
 
 ```bash
 pnpm test:unit
@@ -107,6 +117,7 @@ Staging is Docker Compose plus Docker-in-Docker standing in for a control node a
 | `infra/docker/postgres` | The per-project database image: extension allowlist enforced by absence, no `trust` auth anywhere, RLS on at table creation |
 | `infra/docker/staging` | The local stand-in for staging, including Prometheus, Loki, Alloy and Grafana with the dashboard provisioned as code |
 | `packages/metrics` | A Prometheus registry — counters, gauges, histograms, with label sets declared up front so the cardinality budget is hard to break |
+| `apps/dashboard` | The dashboard shell: login, signup, org switcher, projects grid, create-project flow, project overview — Next.js App Router, TanStack Query, session cookies, no BFF |
 | `.github/workflows` | CI in two lanes — a one-minute unit lane run against dead database ports, and an integration lane that stands up the whole Docker stack — plus the nightly crash, lifecycle and reboot drills |
 
 ## The planning corpus
