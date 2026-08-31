@@ -16,8 +16,11 @@ if (!dbUrl || !redisUrl) {
   process.exit(2);
 }
 
+// A log line without a time is half a log line: every question about a crash
+// recovery is a question about ordering and gaps, and T6's 60s mystery was read
+// straight off these timestamps.
 const log = (level: string, msg: string, extra: Record<string, unknown> = {}) =>
-  console.log(JSON.stringify({ level, service: 'worker', msg, ...extra }));
+  console.log(JSON.stringify({ ts: new Date().toISOString(), level, service: 'worker', msg, ...extra }));
 
 const pool = new Pool({ connectionString: dbUrl, max: 10 });
 const redis = createRedis(redisUrl);
@@ -78,8 +81,19 @@ const sagas = buildSagas({
   bootstrapSecret: process.env.CB_BOOTSTRAP_SECRET ?? '',
   healthTimeoutMs: Number(process.env.CB_HEALTH_TIMEOUT_MS ?? 60_000),
 });
-const runner = createRunner({ repo, sagas, log: (l, m, e) => log(l, m, e) });
-const sweeper = createSweeper({ repo, queue, log: (m, e) => log('info', m, e) });
+const runner = createRunner({
+  repo, sagas,
+  staleAfterMs: Number(process.env.CB_STALE_AFTER_MS ?? 30_000),
+  log: (l, m, e) => log(l, m, e),
+});
+// The sweeper's stale threshold must match the runner's, or the two disagree
+// about whether a row is orphaned: a sweeper that sweeps sooner re-delivers work
+// the runner will refuse to claim.
+const sweeper = createSweeper({
+  repo, queue,
+  staleAfterMs: Number(process.env.CB_STALE_AFTER_MS ?? 30_000),
+  log: (m, e) => log('info', m, e),
+});
 
 const worker = createWorker(redis, async (data) => { await runner.execute(data); });
 worker.on('failed', (job, err) => log('warn', 'delivery failed', { id: job?.id, error: err.message }));

@@ -28,9 +28,27 @@ export interface RunnerOptions {
 
 export class UnknownJobTypeError extends Error {}
 
+/**
+ * How long a claimed job may go without a heartbeat before another worker may
+ * take it. Derived from the heartbeat interval on purpose: a worker that has
+ * missed three beats is dead by any measure available to us, and a threshold
+ * chosen independently of the beat drifts into one of two failures — too long
+ * and a crashed job's re-delivery arrives before the row looks stale (T6 found
+ * this: BullMQ re-delivered at ~30s against a 90s threshold, the restarted
+ * worker declined the claim, and the delivery was marked complete, leaving the
+ * project stuck forever); too short and a live worker has its job stolen
+ * mid-step.
+ */
+export const STALE_HEARTBEAT_MULTIPLE = 3;
+
 export function createRunner(opts: RunnerOptions) {
-  const staleAfterMs = opts.staleAfterMs ?? 90_000;
   const heartbeatMs = opts.heartbeatMs ?? 10_000;
+  const staleAfterMs = opts.staleAfterMs ?? heartbeatMs * STALE_HEARTBEAT_MULTIPLE;
+  if (staleAfterMs <= heartbeatMs * 2) {
+    throw new Error(
+      `staleAfterMs (${staleAfterMs}ms) must exceed two heartbeat intervals ` +
+      `(${heartbeatMs}ms each), or a live worker loses jobs it is still running`);
+  }
   const log = opts.log ?? (() => {});
   const now = opts.now ?? Date.now;
 

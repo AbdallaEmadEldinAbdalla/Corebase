@@ -64,6 +64,60 @@ export async function enqueueProvisioning(
   return { enqueued: true };
 }
 
+/**
+ * The delivery id used when the sweeper rebuilds a lost delivery.
+ *
+ * Deliberately *not* the bare idempotency key. Redis still holds a job under
+ * that key — the one the dead worker was handed — and BullMQ keeps it `active`
+ * with a live lock for the full `lockDuration` after the process vanished, so
+ * neither adding nor removing it is possible. Waiting that out made crash
+ * recovery take 60s when Postgres had known the worker was dead for 30 (T6
+ * measured exactly that).
+ *
+ * Keyed by attempt, so a sweep that runs twice before the worker picks up
+ * produces one delivery, not two, and a second crash produces a third id rather
+ * than colliding with the second.
+ */
+export function recoveryJobId(idempotencyKey: string, attempt: number): string {
+  return `${idempotencyKey}#recover-${attempt}`;
+}
+
+/**
+ * Re-deliver a job whose row Postgres says is orphaned.
+ *
+ * `enqueueProvisioning`'s "already there, do nothing" is right for the producer:
+ * two creates with one idempotency key must not become two deliveries. It is
+ * wrong for the sweeper, whose whole purpose is to rebuild deliveries from
+ * Postgres — Redis's record of the *previous* delivery is not a reason to
+ * withhold the next one.
+ *
+ * This is safe only because of the claim UPDATE in provisioning_jobs: that
+ * statement is the mutex, so a stale delivery and a recovery delivery arriving
+ * together means one runs and one is skipped, never two runs. Do not call this
+ * from anywhere lacking that guarantee.
+ */
+export async function enqueueRecovery(
+  queue: Queue<ProvisioningJobData>,
+  data: ProvisioningJobData,
+  attempt: number,
+  opts: JobsOptions = {},
+): Promise<{ enqueued: boolean; jobId: string }> {
+  // A row that was never delivered at all — the API died between COMMIT and
+  // enqueue — is not a recovery, it is the first delivery, and it should carry
+  // the plain idempotency key like any other. Only deviate when that key is
+  // already taken by the delivery a dead worker was holding.
+  const plain = data.idempotency_key;
+  if (!(await queue.getJob(plain))) {
+    await queue.add(data.job_type, data, { ...opts, jobId: plain });
+    return { enqueued: true, jobId: plain };
+  }
+
+  const jobId = recoveryJobId(plain, attempt);
+  if (await queue.getJob(jobId)) return { enqueued: false, jobId };
+  await queue.add(data.job_type, data, { ...opts, jobId });
+  return { enqueued: true, jobId };
+}
+
 export function createWorker(
   connection: Redis,
   handler: (data: ProvisioningJobData, job: Job<ProvisioningJobData>) => Promise<void>,
