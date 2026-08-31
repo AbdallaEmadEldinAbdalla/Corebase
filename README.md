@@ -8,7 +8,9 @@ Corebase is a developer-focused Backend-as-a-Service: a developer creates a proj
 
 ## Status
 
-**Building Milestone 0 — the provisioning spine.** `POST /v1/projects` returns a real, isolated PostgreSQL 17.5 database on a data node about **2.5 seconds** later, with its own volume, cgroup limits, the full role model, envelope-encrypted credentials, and a connection string you can `psql` into immediately. Twenty consecutive creates are measured end to end.
+**Milestone 0 complete; Phase 1 at P1f of P1g.**
+
+**The provisioning spine (Milestone 0).** `POST /v1/projects` returns a real, isolated PostgreSQL 17.5 database on a data node about **2.5 seconds** later, with its own volume, cgroup limits, the full role model, envelope-encrypted credentials, and a connection string you can `psql` into immediately. Twenty consecutive creates are measured end to end.
 
 The worker has also been SIGKILLed at eleven points in that saga to prove it resumes with no duplicate containers, volumes, credentials or capacity bookings.
 
@@ -18,7 +20,15 @@ Reboot the data node and every project is serving queries again seconds later wi
 
 All of it is visible: Prometheus scrapes both services, Grafana has a provisioned dashboard, logs are in Loki and findable by project ref or request id, and the "job stuck" alert has been watched firing.
 
-**Milestone 0 is complete** — ten tasks and the retro. The [retro](docs/14-roadmap/06-milestone-0-retro.md) reconciled the cost model with six measurements and its main output is a refusal: the RAM and density planning numbers did not move, even though the first data is 3× favourable, because every number was taken in the cheapest corner of the state space. Next is Phase 1. Nothing above the database exists yet — no data API, no auth, no storage, no dashboard.
+The [retro](docs/14-roadmap/06-milestone-0-retro.md) reconciled the cost model with six measurements and its main output is a refusal: the RAM and density planning numbers did not move, even though the first data is 3× favourable, because every number was taken in the cheapest corner of the state space.
+
+**The platform surface (Phase 1).** You can sign up and log in — scrypt hashing, rate-limited per identifier and per address, with nothing distinguishing an unknown email from a wrong password including the response time — and hold either a session cookie or a `cbp_` personal access token. You can create organizations, invite people to them, and hold one of three roles that genuinely decides what you can do: a member creates and pauses projects but cannot delete them, an admin does everything except delete the org or grant owner, and no admin can strip an owner to take the org. Projects belong to organizations, so listing them shows *yours*.
+
+Every mutating call leaves a row in an append-only audit table — enforced by a trigger, because `REVOKE` does not bind a table's owner, and by an application role that owns nothing and cannot run DDL. A test enumerates every mutating route and fails if one is unaudited.
+
+Each project gets its own ES256 keypair with `anon` and `service_role` keys, and publishes `GET /v1/projects/:ref/.well-known/jwks.json` so a customer's services can verify tokens without calling us.
+
+All three Phase-1 exit criteria are met. What remains is **P1g, the dashboard shell**. Above the database, the data plane is still Phase 2+: no data API (PostgREST), no end-user auth service, no storage, no realtime.
 
 > **[STATUS.md](STATUS.md) is the handover document**: what works, how to run it locally, what every rule in the code is defending against, and what is not built yet. Read it before the corpus if you are here to contribute.
 
@@ -43,10 +53,16 @@ Then start the services and watch the whole thing work in about five seconds:
 
 It creates a project, waits for it, connects to the database it made with the credentials the API handed back, runs real SQL, and deletes it — using only `curl` and `psql`, which is exactly what a customer has.
 
-The full suite is 198 tests, integration included; they need the staging stack above and **fail rather than skip** without it:
+The full suite is **309 tests**, integration included; they need the staging stack above and **fail rather than skip** without it:
 
 ```bash
 pnpm test
+```
+
+The unit lane is **200 of those** and needs no infrastructure at all — it is what CI runs first, in about a minute:
+
+```bash
+pnpm test:unit
 ```
 
 Or measure provisioning end to end — twenty creates, each proven usable by connecting to it:
@@ -81,16 +97,17 @@ Staging is Docker Compose plus Docker-in-Docker standing in for a control node a
 
 | | |
 |---|---|
-| `services/api` | Fastify control-plane API: `/v1/projects` CRUD, error envelope with `request_id`, idempotency keys, two-phase enqueue |
+| `services/api` | Fastify control-plane API: auth, organizations, invites, project CRUD, project keys and JWKS; the documented `/v1` envelope with `request_id`, keyset pagination, idempotency keys, two-phase enqueue |
 | `services/worker` | Provisioning worker: job runner with checkpoints, transactional placement, Docker Engine API client over mTLS, the eight-step provisioning saga |
 | `packages/crypto` | Envelope encryption — per-secret data key wrapped by a master key that never enters the database |
 | `packages/secrets` | Credential persistence; enforces store-then-apply so a crash cannot lose a password |
-| `packages/queue` `packages/migrate` `packages/types` | BullMQ wiring, the SQL migration runner, shared types |
+| `packages/audit` | The audit writer: joins the caller's transaction, redacts secrets on the way in, truncates rather than rejects |
+| `packages/jwt` | ES256 sign/verify, hand-written to support exactly one algorithm — a wrong `alg` is rejected before a signature is computed |
+| `packages/queue` `packages/migrate` `packages/types` | BullMQ wiring, the SQL migration runner, shared types and prefixed transport ids |
 | `infra/docker/postgres` | The per-project database image: extension allowlist enforced by absence, no `trust` auth anywhere, RLS on at table creation |
 | `infra/docker/staging` | The local stand-in for staging, including Prometheus, Loki, Alloy and Grafana with the dashboard provisioned as code |
 | `packages/metrics` | A Prometheus registry — counters, gauges, histograms, with label sets declared up front so the cardinality budget is hard to break |
-
-## The planning corpus
+| `.github/workflows` | CI in two lanes — a one-minute unit lane run against dead database ports, and an integration lane that stands up the whole Docker stack — plus the nightly crash, lifecycle and reboot drills |
 
 ## The planning corpus
 

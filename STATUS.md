@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-08-31 · **Phase:** Milestone 0 (the provisioning spine) · **Milestone 0 complete — ten tasks and the retro**
+**Last updated:** 2026-08-31 · **Phase:** Phase 1 (the platform surface) · **Milestone 0 complete** (ten tasks + retro) · **Phase 1: P1a–P1f done, P1g remaining** — all three Phase-1 exit criteria met
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -37,8 +37,25 @@ holding data is reported *without* being touched
 ([M-005](docs/14-roadmap/05-measurements.md)). All of it is visible: Prometheus
 scrapes both services, Grafana has a provisioned dashboard, logs are in Loki and
 findable by project ref or request id, and the "job stuck" alert has been watched
-firing. Nothing above the database exists yet: no data API, no auth, no storage,
-no customer-facing dashboard.
+firing.
+
+Since then, Phase 1 has put a platform around that spine. You can sign up, log in
+(scrypt, rate-limited, timing-equalised), hold a session or a `cbp_` personal access
+token, create organizations, invite people to them, and hold one of three roles that
+actually decides what you can do — a member can create and pause projects but not
+delete them, an admin can do everything but delete the org or grant owner, and no
+admin can strip an owner to take the org. Projects belong to organizations now, so
+listing them shows *yours*; the previous version showed every project on the
+platform. Every mutating call leaves an audit row in an append-only table, enforced
+by a trigger and by a database role that owns nothing, and a test enumerates the
+routes to keep it that way. Each project gets its own ES256 keypair with `anon` and
+`service_role` keys and publishes a JWKS. CI runs a one-minute unit lane and a full
+integration lane against the Docker staging stack on every PR, with the slow drills
+on a nightly schedule.
+
+Still nothing between a customer and their database above SQL: no data API
+(PostgREST), no end-user auth service, no storage, no realtime, and no dashboard
+UI — P1g is the dashboard shell and Phase 2 is the gateway.
 
 ## 2. Run it locally
 
@@ -470,6 +487,184 @@ labelled test-only.
 Green end to end in ~5 s, and it cleans up after itself when it fails, because a
 script that leaves a running database behind on every failure teaches people to
 distrust it.
+---
+
+## 4b. Phase 1 — the platform surface
+
+Milestone 0 built the spine: one endpoint, one hard-coded org, a static token, and a
+real database at the end of it. Phase 1 turns that into something a person can hold
+an account on. The [phase plan](docs/14-roadmap/01-phase-plan.md) sets three exit
+criteria, and they are what the tasks below are measured against:
+
+1. two users with different roles see correct permissions end to end;
+2. every mutating call leaves an audit row;
+3. CI runs unit + integration suites green on every PR.
+
+### P1a — identity, membership and audit schema · done
+
+`20260901090000_p1a_identity_and_audit.sql`: `users`, `user_identities` (so an OAuth
+provider can be added later without a rewrite), `organization_members`,
+`organization_invites`, `project_api_keys`, `audit_logs`.
+
+The bootstrap owner is seeded **with no password hash**. It exists so the dev org has
+an owner, and it cannot be logged into — a seeded account with a known password is
+the oldest way to ship a backdoor by accident.
+
+Two findings, and both are in the decision log.
+
+`REVOKE … FROM PUBLIC` does not bind the table owner, so the first version of
+"append-only audit" was not append-only at all: the migration ran as the owner, and
+so did the API (**D-215**). The fix is a `BEFORE UPDATE OR DELETE` statement-level
+trigger that raises unconditionally — a rule the *owner* also obeys — plus a
+least-privilege application role, below (**D-216**).
+
+```sql
+CREATE TRIGGER audit_logs_append_only
+  BEFORE UPDATE OR DELETE ON audit_logs
+  FOR EACH STATEMENT EXECUTE FUNCTION corebase_audit_is_append_only();
+```
+
+And the ordering bug CI found rather than I did: the migration linked the bootstrap
+user to the dev org by joining on its slug, but on a **clean** database that org does
+not exist yet — the API creates it at startup. So the INSERT matched nothing and a
+fresh install came up with an organization that had no owner. My staging database
+already had the org from Milestone 0, which is exactly why it survived until the
+integration lane ran against an empty one. `ensureBootstrapOrg` now creates the
+membership too, idempotently.
+
+### P1b — the application role, the audit writer, the envelope · done · 15 tests
+
+**A role that cannot rewrite history.** `corebase_app` is `NOLOGIN` with grants
+narrow enough that `UPDATE audit_logs` is refused by privilege and not only by
+trigger (`20260901100000_p1b_app_role.sql`). The API runs as it; migrations do not.
+
+**`writeAudit(q, actor, event)`** takes the *caller's* client rather than a pool, so
+the audit row joins the mutation's transaction — an audit written outside the
+transaction is a lie waiting for a rollback.
+
+It redacts on the way in. The key patterns catch `password`/`token`/`secret`/`key`,
+with a `NOT_SECRET_KEY` allowlist so that `idempotency_key`, `key_prefix`, `kek_id`
+and friends stay readable — over-redaction hurts too, and an audit trail full of
+`[redacted]` is not evidence. The value patterns catch PEM blocks, JWTs, 43-char
+base64url secrets and password-bearing connection strings, so a secret pasted into
+an innocuously-named field is still caught. Metadata over 8 KiB is truncated, never
+rejected: dropping the audit row is the worst possible response to a large one.
+
+**A guard that keeps criterion 2 true.** A test enumerates every mutating route via
+Fastify's `onRoute` hook and fails if one has no audit call. This one is worth the
+paragraph because it was wrong **twice** and passed both times: first it parsed
+`printRoutes`' tree and matched nothing at all, then it built the app without the
+auth and orgs modules so it could not see half the mutating surface. Both times the
+proof was the same — add a throwaway unaudited route and watch the guard fail.
+
+**The `/v1` envelope** now matches the documented contract, closing OQ-175, and
+list endpoints use keyset pagination with an opaque base64url cursor over
+`(created_at, id)`. Never OFFSET: page 500 of an OFFSET query reads 10,000 rows to
+return 20, and it skips rows when the set changes under the reader.
+
+### P1c — passwords, sessions and personal access tokens · done
+
+**scrypt**, at the user's direction, rather than paying argon2's native-build cost
+(**D-211**). `N=65536, r=8, p=2`, parameters stored in the hash so they can be raised
+without invalidating anyone, NFKC normalisation so a password typed on a different
+keyboard still verifies, and `verifyPassword` returning `{ok, needsRehash}` so the
+login path upgrades old hashes — raising the cost is worth nothing to existing users
+otherwise.
+
+Nothing distinguishes an unknown email from a wrong password: not the status, not the
+message, and not the timing. The last one is why `decoyHash`/`burnVerify` exist — a
+miss that returns in a millisecond while a real failure takes 100 ms is an
+enumeration oracle no matter what the body says. Login is rate-limited per identifier
+*and* per address, since either alone has an obvious hole, and failures are audited
+with a reason the operator sees and the client never does.
+
+Sessions are opaque ids in Redis under a SHA-256 of the key, with a 7-day idle and
+30-day absolute TTL, `HttpOnly`/`SameSite=Lax`, and CSRF enforced inside the
+principal resolver for mutating methods — not in a hook someone can forget to add.
+PATs are `cbp_`-prefixed, hashed at rest, and shown exactly once (D-060): the list
+endpoint cannot leak one even if it is wrong.
+
+`resolvePrincipal` tries session cookie, then PAT, then the static token — which
+authenticates but is *nobody*, so `/v1/auth/me` says so rather than inventing a user.
+
+Deferred out loud: `verify-email` and `password-reset` need an email sender, which is
+Phase 4. They are **absent rather than stubbed** — a 501 route is a promise a client
+will code against, and a silently-succeeding stub is worse than either.
+
+### P1d — organizations, roles and project scoping · done · *exit criterion 1*
+
+The role model is [one table](services/api/src/kernel/permissions.ts), not scattered
+`if (role === 'owner')` checks, because a matrix can be *read* to answer "what can an
+admin do" and conditionals can only be searched.
+
+Three checks, deliberately separate:
+
+- `can(role, capability)` — the matrix.
+- `canAssignRole(actor, target)` — "may change roles" and "may grant *this* role" are
+  different questions, and conflating them lets an admin promote themselves to owner.
+- `canActOn(actor, subject)` — an admin must not be able to strip every owner and
+  take the org, a hole no single capability check closes because "may change roles"
+  was true the whole time.
+
+A non-member gets **404, not 403**: 403 confirms the org exists.
+
+What P1d exposed in Milestone-0 code was worse than what it added. Project list
+returned **every project on the platform**; project names were checked for uniqueness
+**globally**, so one tenant's naming leaked into another's (**D-217**); a delete was
+audited under the bootstrap org rather than the project's own; and the project routes
+demanded the static token first, so a logged-in user's cookie was rejected. Also
+`count(*) … FOR UPDATE` is not valid Postgres, which made every "cannot remove the
+last owner" case a 500 — the fix is to lock the rows and then count them.
+
+### P1e — project API keys and JWKS · done
+
+ES256 JWTs, [hand-written](packages/jwt/src/index.ts) to support exactly one
+algorithm. `verify` rejects any `alg` other than `ES256` **before** computing a
+signature and requires a 64-byte R‖S, which is the whole `alg: none` /
+algorithm-confusion family closed by construction rather than by configuration.
+
+Provisioning now mints a per-project keypair and two keys — `anon` and
+`service_role` — stored envelope-encrypted like every other credential, and
+`mark_ready` refuses unless both exist. `GET /v1/projects/:ref/.well-known/jwks.json`
+publishes the public half so a customer's own services can verify tokens without
+calling us.
+
+One bug worth keeping: both keys' `key_prefix` came out as `eyJhbGciOiJF` — the
+base64 of the JWT header, identical for every key ever minted, which made the column
+useless for the one job it has. It is now a label, `cbk_anon_<ref4>` (**D-218**).
+
+### P1f — CI · done · *exit criterion 3*
+
+Two lanes, and the split is the point.
+
+**`unit`** — install, `pnpm typecheck`, `pnpm test:unit`: **200 tests across 10
+packages**, no infrastructure, about a minute. Every package got a `test:unit` script
+that excludes `**/*.e2e.test.ts`, which meant renaming the DB-dependent tests to say
+so in their filenames — a test that needs a database should declare it where you can
+see it, not in a `beforeAll` that skips. The lane is run with the database and Redis
+URLs pointed at **dead ports**, so anything that quietly reaches for infrastructure
+fails here instead of passing by accident on a runner that happens to have some.
+
+**`integration`** — builds the project image (so the D-078 extension allowlist and the
+D-185 auth hardening are enforced in CI, not just locally), brings up the same Docker
+staging substitute the dev loop uses, migrates, generates a master key, enables the
+application role, seeds the image onto the data node, runs `staging.sh verify`, and
+then runs the full **309-test** suite. On failure it dumps `staging.sh status` and
+both containers' logs, because a red CI run with no diagnostics costs a full
+reproduce-locally cycle.
+
+The integration suites **do not skip** when their infrastructure is missing — they
+fail, with the command that fixes it. A silently-skipped suite once hid a real bug
+behind a green run here, and CI is exactly where that would happen again.
+
+**`nightly.yml`** carries the drills that are too slow for a PR and too important to
+run only by hand: the T6 kill matrix (11 SIGKILL points), the T7 lifecycle residue
+loop (20 cycles), the T8 node-reboot drill, and the M-002 provisioning bench. On a
+schedule they stay honest; on every PR they would get disabled within a week.
+
+The whole recipe was replayed locally from a **nuked** stack before being committed —
+7 migrations from empty, 10/10 verify, 309 tests — which is how the fresh-install
+bootstrap-owner bug in P1a surfaced.
 
 ## 5. Rules the code follows
 
@@ -510,9 +705,10 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-Twenty-three decisions came out of running the thing rather than planning it. Full text in
-the [decision log](docs/00-foundation/05-decision-log.md); the log holds
-D-001…D-192 and is binding when two documents disagree.
+Thirty-five decisions came out of running the thing rather than planning it — D-184…D-210
+from Milestone 0, D-211…D-218 from Phase 1. Full text in the
+[decision log](docs/00-foundation/05-decision-log.md); the log holds D-001…D-218 and is
+binding when two documents disagree.
 
 | ID | What changed | Why it surfaced |
 |---|---|---|
@@ -543,6 +739,14 @@ D-001…D-192 and is binding when two documents disagree.
 | D-208 | D-071's warm pool deferred with a trigger | Cold creates already run 18× inside budget; building it would be the R-4 failure |
 | D-209 | The RAM and density planning numbers may only be re-based on a measurement meeting four stated conditions | Every M0 number came from the cheapest corner of the state space |
 | D-210 | Every measurement states what it does not license; decisions may not cite one beyond its conditions | Stops an idle-ARM number being quoted as a density result |
+| D-211 | Platform passwords use **scrypt**, not argon2id; parameters live in the hash and weak hashes upgrade on login | argon2id needs a native module in every image that touches a login; the algorithm gap is small, the toolchain gap is not |
+| D-212 | PATs get their own table, `user_access_tokens` | `project_api_keys` holds a *project's* keys, not a *user's* CLI token; revocation keeps the row because an incident review needs it |
+| D-213 | `POST /v1/invites/accept` exists; accepting requires the invite's email to match the account | The endpoint table had no way to accept an invite, and the email match stops a forwarded invite from being a bearer token |
+| D-214 | The two project keys are stored envelope-encrypted, replacing D-107's deterministic re-derivation | Deterministic ECDSA needs RFC 6979, which Node does not expose — and a bad nonce leaks the private key |
+| D-215 | `audit_logs` is append-only by **trigger**, not by `REVOKE` alone | Applied the REVOKE, then tried the UPDATE: it succeeded. Privileges do not bind a table's owner |
+| D-216 | The API connects as `corebase_app`, which owns nothing and cannot run DDL; `corebase` owns the schema | Three claims in the corpus were untrue while one role did both jobs |
+| D-217 | A project name is unique **within its organization**; the `ref` is the global identity | A global check lets one tenant deny "api" to everyone, and says so in the 409 |
+| D-218 | `key_prefix` is a label (`cbk_anon_<ref4>`), not a literal prefix | Both keys displayed as `eyJhbGciOiJF` — the base64 of the JWT header, identical for every key ever minted |
 
 ## 7. Measurements
 
@@ -579,16 +783,24 @@ PostgREST. Neither licenses raising the planned density (D-091's 150 projects/no
 register and the decision log now carry the measured numbers, and D-209 gates what
 may be done with them next.
 
-**Next is Phase 1**, per the [phase plan](docs/14-roadmap/01-phase-plan.md). The
-measurement that would move the model most is the one Phase 1/2 makes possible:
+**Phase 1 is at P1f of P1g.** All three exit criteria are met — roles decide
+permissions end to end (P1d), every mutation is audited and a guard enforces it
+(P1b), and CI runs both suites on every PR (P1f). What remains is **P1g, the
+dashboard shell**: login, org switcher, project list, the create-project flow and a
+project overview stub. The design system for it already exists under
+[design-exports/](design-exports/07-html) — it has never been wired to the API.
+
+The measurement that would move the cost model most is the one Phase 1/2 makes
+possible:
 the full triplet (Postgres + PgBouncer + PostgREST) under light load on x86, with
 10 and 50 projects co-resident and the per-project exporters attached. That single
 run answers the per-project RAM budget, the per-project cardinality budget, and
 the first honest read on co-tenant contention.
 
-**Everything above the database** is Phase 1+: the data API (PostgREST), auth,
-storage, realtime, the dashboard, the CLI, the SDK. All planned in detail under
-[docs/](docs/INDEX.md); none started.
+**Everything above the database** is Phase 2+: the data API (PostgREST), the end-user
+auth service, storage, realtime, the CLI, the SDK. All planned in detail under
+[docs/](docs/INDEX.md); none started. Phase 1 built the *platform* around the spine —
+accounts, orgs, roles, audit, project keys — not the customer-facing data plane.
 
 **Known gaps in what *is* built:**
 
@@ -616,7 +828,17 @@ storage, realtime, the dashboard, the CLI, the SDK. All planned in detail under
   a later task, and the `pooled` connection string will not connect until then.
 - `corebase_admin` exists as a role with no password; the audited dashboard path that
   needs it does not exist yet.
-- OQ-175: two API response envelopes still diverge from the documented contract.
+- `verify-email` and `password-reset` are **absent, not stubbed** — both need the
+  Phase-4 email sender. Email verification is what gates project creation in the
+  platform API, so that gate is currently declared and not enforced.
+- No OAuth identity providers. `user_identities` exists so adding one is not a
+  rewrite; nothing writes to it yet.
+- PAT scopes are stored and returned but not yet *enforced* — a token with a narrow
+  scope currently has its user's full authority.
+- The invite email is not sent (same Phase-4 sender), so an invite has to be handed
+  over out of band for `POST /v1/invites/accept` to be usable.
+- The nightly drills have never run **on a GitHub runner** — they are green locally
+  and the workflow is written, but the first scheduled run is the real test.
 
 ## 9. Where to look when you pick this up
 
@@ -625,7 +847,12 @@ storage, realtime, the dashboard, the CLI, the SDK. All planned in detail under
 | What are we building and why? | [docs/INDEX.md](docs/INDEX.md), then [00-foundation](docs/00-foundation/01-vision-and-principles.md) |
 | Why is it like this? | [docs/00-foundation/05-decision-log.md](docs/00-foundation/05-decision-log.md) — binding |
 | What is deliberately unresolved? | [docs/15-risks/02-open-questions.md](docs/15-risks/02-open-questions.md) — 140 questions |
-| What is the next task, exactly? | [docs/14-roadmap/04-milestone-0.md](docs/14-roadmap/04-milestone-0.md) — includes a progress table |
+| What is the next task, exactly? | [docs/14-roadmap/01-phase-plan.md](docs/14-roadmap/01-phase-plan.md) — Phase 1, P1g (dashboard shell) |
+| What did Milestone 0 deliver? | [docs/14-roadmap/04-milestone-0.md](docs/14-roadmap/04-milestone-0.md) — includes a progress table |
+| How do permissions work? | `services/api/src/kernel/permissions.ts` — the whole role model is one table |
+| How does auth work? | `services/api/src/kernel/principal.ts`, then `sessions.ts` and `modules/auth/` |
+| Why is every mutation audited? | `packages/audit/src/index.ts`, and the guard in `services/api/src/audit.p1.e2e.test.ts` |
+| What does CI do? | [.github/workflows/ci.yml](.github/workflows/ci.yml) — two lanes; `nightly.yml` for the drills |
 | What did we measure? | [docs/14-roadmap/05-measurements.md](docs/14-roadmap/05-measurements.md) |
 | What do those numbers *not* prove? | [the M0 retro §4](docs/14-roadmap/06-milestone-0-retro.md) — read before quoting any of them |
 | How does provisioning actually work? | `services/worker/src/jobs/sagas.ts` — read top to bottom |
