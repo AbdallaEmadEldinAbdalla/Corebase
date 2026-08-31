@@ -98,6 +98,7 @@ The complete A-to-Z plan for Corebase. Every doc follows the template **Purpose 
 | [02 Table editor](09-dashboard/02-table-editor.md) | UI ops → SQL/migrations, RLS policy editor |
 | [03 SQL editor](09-dashboard/03-sql-editor.md) | Editor requirements, history, explain, safety rails |
 | [04 Design system](09-dashboard/04-design-system.md) | Colour/type/shape tokens, light + dark themes, component inventory and variants |
+| [05 UX standards](09-dashboard/05-ux-standards.md) | The interaction contract: navigation, reachability, density, feedback, states — and the 20-question gate every UI change runs (D-224) |
 
 ## 10 — CLI & SDK
 

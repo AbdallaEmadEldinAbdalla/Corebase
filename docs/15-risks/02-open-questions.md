@@ -183,7 +183,7 @@ Everything the corpus deliberately leaves unresolved, in one place. Each OQ live
 | OQ-134 | Query-history redaction/retention: literal masking, shorter retention, org-configurable, or per-run "don't record"? | [SQL editor](../09-dashboard/03-sql-editor.md) | before history ships (Phase 7) |
 | OQ-168 | Does the marketing site share the product token set, or get a looser expressive palette the product avoids? | [design system](../09-dashboard/04-design-system.md) | before the launch site is built |
 | OQ-169 | Icon library: adopt Lucide (shadcn default) or draw a custom set for the ~30 product-specific concepts? | [design system](../09-dashboard/04-design-system.md) | Phase 7 |
-| OQ-170 | Ship a `prefers-reduced-motion` contract now, or defer until animation exists (incl. skeleton shimmer)? | [design system](../09-dashboard/04-design-system.md) | when the first animation lands |
+| OQ-170 | ~~Ship a `prefers-reduced-motion` contract now, or defer until animation exists~~ **Resolved by D-225**: shipped now — 120–180 ms, `transform`/`opacity` only, fully disabled under `prefers-reduced-motion: reduce`; skeletons do not shimmer | [design system](../09-dashboard/04-design-system.md), [ux standards](../09-dashboard/05-ux-standards.md) | — |
 | OQ-171 | Does the CLI colour its output to match the violet palette, or stay terminal-default? | [design system](../09-dashboard/04-design-system.md) | Phase 8, with CLI spec |
 
 ### OQ-039, 135–139 — CLI & SDK
@@ -243,6 +243,9 @@ Everything the corpus deliberately leaves unresolved, in one place. Each OQ live
 |---|---|---|---|
 | OQ-166 | Security-review budget/vendor class: full pentest vs focused review of auth + RLS | [risk register](01-risk-register.md) | Phase 7 timeframe |
 | OQ-167 | Cyber-insurance: worth it pre-revenue? | [risk register](01-risk-register.md) | before public launch |
+| OQ-179 | Does the command palette search *data* (projects by name and ref, later tables and buckets) or only actions and destinations? Data search means an endpoint per searchable resource plus a debounce contract; actions-only is a smaller promise. Leaning: destinations plus the user's own objects, since the project list is already client-side | [ux standards](../09-dashboard/05-ux-standards.md) | before a second searchable resource type exists |
+| OQ-180 | Where does a side panel's state live in the URL — a query parameter (`?panel=key&id=…`, simple and ugly) or a nested route (clean, doubles the route count)? | [ux standards](../09-dashboard/05-ux-standards.md) | before the second panel is built; retrofitting one is cheap and retrofitting five is not |
+| OQ-181 | Is there a density preference (comfortable/compact) or is dense the only mode? A preference is a second layout to test forever; leaning one mode until someone complains | [ux standards](../09-dashboard/05-ux-standards.md) | when a customer asks |
 
 ## Dependencies
 
