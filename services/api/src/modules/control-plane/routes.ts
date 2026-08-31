@@ -71,7 +71,7 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
     const { ref } = req.params as { ref: string };
     const project = await deps.store.getProject(ref);
     if (!project) throw ApiError.notFound('Project');
-    const next = await deps.store.markStatus(ref, 'DELETING');
+    const next = await deps.store.markStatus(ref, 'deleting');
     return reply.status(202).send(next);
   });
 }

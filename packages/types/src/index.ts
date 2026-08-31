@@ -1,9 +1,15 @@
 import { z } from 'zod';
 
 /** Project lifecycle states (D-053 state machine; see docs/02-control-plane/03). */
+/**
+ * Lowercase on the wire, matching the platform-API contract
+ * (docs/02-control-plane/02-platform-api.md) AND the project_status Postgres
+ * enum — so no casing translation layer exists to drift. Display casing
+ * (a READY badge) is the UI's business.
+ */
 export const ProjectStatus = z.enum([
-  'CREATING', 'PROVISIONING', 'CONFIGURING', 'READY',
-  'FAILED', 'PAUSING', 'PAUSED', 'RESUMING', 'DELETING', 'DELETED',
+  'creating', 'provisioning', 'configuring', 'ready', 'failed',
+  'pausing', 'paused', 'resuming', 'deleting', 'soft_deleted', 'deleted',
 ]);
 export type ProjectStatus = z.infer<typeof ProjectStatus>;
 

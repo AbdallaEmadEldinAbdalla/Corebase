@@ -48,7 +48,7 @@ export function createMemoryStore(): ControlPlaneStore {
       const project: Project = {
         id: crypto.randomUUID(),
         ref, name, region, plan,
-        status: 'CREATING',
+        status: 'creating',
         created_at: new Date().toISOString(),
       };
       const job: JobRow = {

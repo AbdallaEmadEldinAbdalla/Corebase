@@ -3,13 +3,18 @@ import { ERROR_CODES, type ErrorCode } from '@corebase/types';
 
 /** Thrown by modules; the kernel renders it into the D-032 envelope. */
 export class ApiError extends Error {
-  constructor(
-    readonly statusCode: number,
-    readonly code: ErrorCode,
-    message: string,
-  ) {
+  // Declared and assigned explicitly, NOT as constructor parameter properties:
+  // node --experimental-strip-types only removes types, and parameter
+  // properties need a real transform. Vitest transpiles and so hides this —
+  // the running service would fail to boot.
+  readonly statusCode: number;
+  readonly code: ErrorCode;
+
+  constructor(statusCode: number, code: ErrorCode, message: string) {
     super(message);
     this.name = 'ApiError';
+    this.statusCode = statusCode;
+    this.code = code;
   }
   static notFound(what: string) {
     return new ApiError(404, ERROR_CODES.PROJECT_NOT_FOUND, `${what} does not exist.`);

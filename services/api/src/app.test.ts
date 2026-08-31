@@ -53,7 +53,7 @@ describe('POST /v1/projects', () => {
     });
     expect(res.statusCode).toBe(202);
     const p = res.json();
-    expect(p.status).toBe('CREATING');
+    expect(p.status).toBe('creating');
     expect(p.ref).toMatch(/^[a-z][a-z2-7]{19}$/);
     expect(p.region).toBe('eu-central');
   });
@@ -106,7 +106,7 @@ describe('DELETE /v1/projects/:ref', () => {
     const { ref } = created.json();
     const res = await a.inject({ method: 'DELETE', url: `/v1/projects/${ref}`, headers: auth });
     expect(res.statusCode).toBe(202);
-    expect(res.json().status).toBe('DELETING');
+    expect(res.json().status).toBe('deleting');
   });
 });
 
