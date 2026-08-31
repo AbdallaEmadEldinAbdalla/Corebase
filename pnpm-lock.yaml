@@ -20,6 +20,21 @@ importers:
 
   packages/config: {}
 
+  packages/crypto:
+    devDependencies:
+      '@corebase/config':
+        specifier: workspace:*
+        version: link:../config
+      '@types/node':
+        specifier: ^22.7.5
+        version: 22.20.1
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.3
+        version: 2.1.9(@types/node@22.20.1)
+
   packages/migrate:
     dependencies:
       pg:
@@ -67,6 +82,31 @@ importers:
         specifier: ^2.1.3
         version: 2.1.9(@types/node@22.20.1)
 
+  packages/secrets:
+    dependencies:
+      '@corebase/crypto':
+        specifier: workspace:*
+        version: link:../crypto
+      pg:
+        specifier: ^8.13.1
+        version: 8.23.0
+    devDependencies:
+      '@corebase/config':
+        specifier: workspace:*
+        version: link:../config
+      '@types/node':
+        specifier: ^22.7.5
+        version: 22.20.1
+      '@types/pg':
+        specifier: ^8.11.10
+        version: 8.23.1
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.3
+        version: 2.1.9(@types/node@22.20.1)
+
   packages/types:
     dependencies:
       zod:
@@ -85,9 +125,15 @@ importers:
 
   services/api:
     dependencies:
+      '@corebase/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
       '@corebase/queue':
         specifier: workspace:*
         version: link:../../packages/queue
+      '@corebase/secrets':
+        specifier: workspace:*
+        version: link:../../packages/secrets
       '@corebase/types':
         specifier: workspace:*
         version: link:../../packages/types
@@ -119,9 +165,15 @@ importers:
 
   services/worker:
     dependencies:
+      '@corebase/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
       '@corebase/queue':
         specifier: workspace:*
         version: link:../../packages/queue
+      '@corebase/secrets':
+        specifier: workspace:*
+        version: link:../../packages/secrets
       '@corebase/types':
         specifier: workspace:*
         version: link:../../packages/types
