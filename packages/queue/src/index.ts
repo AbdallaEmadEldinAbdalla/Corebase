@@ -19,6 +19,27 @@ import IORedis, { type Redis } from 'ioredis';
 export const QUEUE_PROVISIONING = 'provisioning';
 export const QUEUE_PREFIX = 'corebase';
 
+/**
+ * BullMQ reserves ':' in job ids as well as in queue names, and rejects it with
+ * "Custom Id cannot contain :". Since the delivery id IS the idempotency key
+ * (D-067), that constraint reaches all the way out to the API's
+ * `Idempotency-Key` header and to every internally-derived key.
+ *
+ * Enforced here rather than trusted, because the failure is silent and total: an
+ * enqueue that throws is swallowed by the producer (the row of record exists, so
+ * the sweeper will retry), and the sweeper then throws on the same key every
+ * sweep — one bad key disables orphan recovery for every project on the fleet.
+ */
+export const DELIVERY_ID_PATTERN = /^[A-Za-z0-9_.=#@-]{8,255}$/;
+
+export function assertValidDeliveryId(key: string): void {
+  if (!DELIVERY_ID_PATTERN.test(key)) {
+    throw new Error(
+      `"${key}" cannot be a delivery id: it must match ${DELIVERY_ID_PATTERN} ` +
+      "(BullMQ rejects ':' in job ids, and the delivery id is the idempotency key)");
+  }
+}
+
 export interface ProvisioningJobData {
   job_row_id: string;
   idempotency_key: string;
@@ -58,6 +79,7 @@ export async function enqueueProvisioning(
   data: ProvisioningJobData,
   opts: JobsOptions = {},
 ): Promise<{ enqueued: boolean }> {
+  assertValidDeliveryId(data.idempotency_key);
   const existing = await queue.getJob(data.idempotency_key);
   if (existing) return { enqueued: false };
   await queue.add(data.job_type, data, { ...opts, jobId: data.idempotency_key });
@@ -106,6 +128,7 @@ export async function enqueueRecovery(
   // enqueue — is not a recovery, it is the first delivery, and it should carry
   // the plain idempotency key like any other. Only deviate when that key is
   // already taken by the delivery a dead worker was holding.
+  assertValidDeliveryId(data.idempotency_key);
   const plain = data.idempotency_key;
   if (!(await queue.getJob(plain))) {
     await queue.add(data.job_type, data, { ...opts, jobId: plain });

@@ -47,6 +47,26 @@ export function registerErrorHandling(app: FastifyInstance) {
         error: { code: err.code, message: err.message, request_id: requestId },
       });
     }
+    // Framework-level rejections carry their own status: malformed JSON, an
+    // empty body under a JSON content-type, an unsupported media type, a payload
+    // over the limit. Reporting those as 500 tells a client that sent a bad
+    // request that our server is broken, and fills the server-error alert with
+    // other people's typos. Honour the status the framework already decided.
+    const status = (err as { statusCode?: number }).statusCode;
+    if (typeof status === 'number' && status >= 400 && status < 500) {
+      req.log.info({ code: (err as { code?: string }).code, statusCode: status },
+        'request rejected by the framework');
+      return reply.status(status).send({
+        error: {
+          // The message is about the request, not about our internals, so it is
+          // safe to pass through and far more useful than a generic string.
+          code: status === 401 || status === 403 ? ERROR_CODES.UNAUTHORIZED : ERROR_CODES.VALIDATION_FAILED,
+          message: err.message,
+          request_id: requestId,
+        },
+      });
+    }
+
     req.log.error({ err }, 'unhandled error');
     return reply.status(500).send({
       error: {

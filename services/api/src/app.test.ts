@@ -106,7 +106,61 @@ describe('DELETE /v1/projects/:ref', () => {
     const { ref } = created.json();
     const res = await a.inject({ method: 'DELETE', url: `/v1/projects/${ref}`, headers: auth });
     expect(res.statusCode).toBe(202);
-    expect(res.json().status).toBe('deleting');
+    expect(res.json().project.status).toBe('deleting');
+    expect(res.json().job.kind).toBe('delete_project');
+  });
+});
+
+describe('framework-level rejections keep their status', () => {
+  it('an empty body under a JSON content-type is a 400, not a 500', async () => {
+    // Some HTTP clients set content-type globally, so a bodyless DELETE arrives
+    // claiming to carry JSON. Answering 500 tells the caller our server is
+    // broken and puts their typo in our server-error alert.
+    const res = await app().inject({
+      method: 'DELETE', url: '/v1/projects/whatever',
+      headers: { ...auth, 'content-type': 'application/json' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('VALIDATION_FAILED');
+    expect(res.json().error.message).toMatch(/Body cannot be empty/);
+  });
+
+  it('malformed JSON is a 400, not a 500', async () => {
+    const res = await app().inject({
+      method: 'POST', url: '/v1/projects',
+      headers: { ...auth, 'idempotency-key': 'key-00000010', 'content-type': 'application/json' },
+      payload: '{"name": ',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('VALIDATION_FAILED');
+  });
+
+  it('still reports a genuine server fault as 500', async () => {
+    const broken = buildApp({
+      store: { ...createMemoryStore(), listProjects: async () => { throw new Error('boom'); } },
+      staticToken: TOKEN,
+    });
+    const res = await broken.inject({ method: 'GET', url: '/v1/projects', headers: auth });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error.code).toBe('INTERNAL');
+    // and never leaks the internal message
+    expect(res.json().error.message).not.toMatch(/boom/);
+  });
+});
+
+describe('DELETE is idempotent by construction', () => {
+  it('a repeated delete does not create a second teardown job', async () => {
+    const a = app();
+    const created = await a.inject({ method: 'POST', url: '/v1/projects',
+      headers: { ...auth, 'idempotency-key': 'key-00000009' }, payload: { name: 'twice-app' } });
+    const { ref } = created.json();
+    const first = await a.inject({ method: 'DELETE', url: `/v1/projects/${ref}`, headers: auth });
+    const second = await a.inject({ method: 'DELETE', url: `/v1/projects/${ref}`, headers: auth });
+    expect(first.statusCode).toBe(202);
+    expect(second.statusCode).toBe(202);
+    // Same job, not a second one: the key is derived from the project, so the
+    // caller cannot cause two teardowns by clicking twice.
+    expect(second.json().job.id).toBe(first.json().job.id);
   });
 });
 
