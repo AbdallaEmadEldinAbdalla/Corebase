@@ -1,4 +1,5 @@
 import { Pool } from 'pg';
+import { createRedis, createQueue, enqueueProvisioning, type ProvisioningJobData } from '@corebase/queue';
 import { buildApp } from './app.ts';
 import { createPgStore, ensureBootstrapOrg } from './modules/control-plane/store.pg.ts';
 import { createMemoryStore } from './modules/control-plane/store.ts';
@@ -25,7 +26,21 @@ const store = await (async () => {
   return createPgStore({ pool, organizationId });
 })();
 
-const app = buildApp({ store, logger: true });
+const redisUrl = process.env.CB_REDIS_URL;
+const enqueue = redisUrl
+  ? (() => {
+      const queue = createQueue(createRedis(redisUrl));
+      return async (job: ProvisioningJobData) => {
+        await enqueueProvisioning(queue, job);
+      };
+    })()
+  : undefined;
+if (!redisUrl) {
+  console.warn(JSON.stringify({ level: 'warn', service: 'api',
+    msg: 'CB_REDIS_URL not set — jobs will only be delivered by the worker sweeper.' }));
+}
+
+const app = buildApp({ store, logger: true, ...(enqueue ? { enqueue } : {}) });
 app.listen({ port, host: '0.0.0.0' }).catch((err) => {
   app.log.error(err);
   process.exit(1);

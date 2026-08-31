@@ -1,10 +1,12 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { registerErrorHandling } from './kernel/errors.ts';
-import { registerControlPlane } from './modules/control-plane/routes.ts';
+import { registerControlPlane, type Enqueue } from './modules/control-plane/routes.ts';
 import { createMemoryStore, type ControlPlaneStore } from './modules/control-plane/store.ts';
 
 export interface BuildOptions {
   store?: ControlPlaneStore;
+  enqueue?: Enqueue;
+  onEnqueueError?: (err: Error) => void;
   staticToken?: string;
   logger?: boolean;
 }
@@ -20,6 +22,8 @@ export function buildApp(opts: BuildOptions = {}): FastifyInstance {
   registerControlPlane(app, {
     store: opts.store ?? createMemoryStore(),
     staticToken: opts.staticToken ?? process.env.CB_STATIC_TOKEN ?? 'dev-token',
+    ...(opts.enqueue ? { enqueue: opts.enqueue } : {}),
+    ...(opts.onEnqueueError ? { onEnqueueError: opts.onEnqueueError } : {}),
   });
   return app;
 }

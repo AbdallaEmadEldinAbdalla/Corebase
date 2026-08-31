@@ -4,8 +4,21 @@ import { ApiError } from '../../kernel/errors.ts';
 import { generateProjectRef } from '../../kernel/ref.ts';
 import type { ControlPlaneStore } from './store.ts';
 
+/**
+ * Phase two of the two-phase enqueue (D-067). Phase one — the job row — is
+ * already committed by the store, so this is best-effort by design: if Redis is
+ * down the row stays 'pending' and the worker's sweeper picks it up. The
+ * request must NOT fail for it, because the project genuinely was accepted.
+ */
+export type Enqueue = (job: {
+  job_row_id: string; idempotency_key: string; job_type: string; project_id: string | null;
+}) => Promise<void>;
+
 export interface ControlPlaneDeps {
   store: ControlPlaneStore;
+  /** Optional: without it the sweeper is the only delivery path (slower, still correct). */
+  enqueue?: Enqueue;
+  onEnqueueError?: (err: Error) => void;
   /** M0: one static token (T4). Real dual-mode auth is D-062. */
   staticToken: string;
 }
@@ -43,13 +56,30 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
         `A project named "${parsed.data.name}" already exists.`);
     }
 
-    const { project, replayed } = await deps.store.createProject({
+    const { project, job, replayed } = await deps.store.createProject({
       ref: generateProjectRef(),
       name: parsed.data.name,
       region: parsed.data.region,
       plan: parsed.data.plan,
       idempotencyKey: key,
     });
+
+    if (deps.enqueue) {
+      try {
+        await deps.enqueue({
+          job_row_id: job.id,
+          idempotency_key: job.idempotency_key,
+          job_type: job.kind,
+          project_id: project.id,
+        });
+      } catch (err) {
+        // Intentionally swallowed: the row of record exists and the sweeper will
+        // deliver it. Failing the request here would tell the caller their
+        // project was rejected when it was not.
+        req.log.warn({ err, project: project.ref }, 'enqueue failed; sweeper will recover');
+        deps.onEnqueueError?.(err as Error);
+      }
+    }
     return reply.status(replayed ? 200 : 202).send(project);
   });
 

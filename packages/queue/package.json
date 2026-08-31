@@ -1,0 +1,13 @@
+{
+  "name": "@corebase/queue",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": { "typecheck": "tsc --noEmit", "test": "vitest run" },
+  "dependencies": { "bullmq": "^5.25.6", "ioredis": "^5.4.1", "@corebase/types": "workspace:*" },
+  "devDependencies": {
+    "@corebase/config": "workspace:*", "@types/node": "^22.7.5",
+    "typescript": "^5.6.3", "vitest": "^2.1.3"
+  }
+}
