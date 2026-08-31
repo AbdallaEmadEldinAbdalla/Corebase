@@ -1,0 +1,82 @@
+import type { Project, ProjectStatus, JobPayload } from '@corebase/types';
+
+export interface JobRow {
+  id: string;
+  kind: JobPayload['kind'];
+  project_id: string;
+  idempotency_key: string;
+  state: 'queued' | 'running' | 'done' | 'failed';
+}
+
+/**
+ * M0 store. Deliberately an interface with an in-memory implementation so T4
+ * (API) is testable before T3 (Postgres) lands; the Postgres implementation
+ * replaces it without touching the module's callers.
+ *
+ * The contract that matters and must survive: createProject writes the project
+ * row and its job row in ONE atomic step (two-phase enqueue, D-067) — Redis is
+ * never the source of truth for job existence.
+ */
+export interface ControlPlaneStore {
+  createProject(input: {
+    ref: string; name: string; region: string; plan: string; idempotencyKey: string;
+  }): Promise<{ project: Project; job: JobRow; replayed: boolean }>;
+  /** Replay lookup: a seen key must return the original outcome (D-063). */
+  findByIdempotencyKey(key: string): Promise<Project | undefined>;
+  getProject(ref: string): Promise<Project | undefined>;
+  listProjects(): Promise<Project[]>;
+  markStatus(ref: string, status: ProjectStatus): Promise<Project | undefined>;
+  findByName(name: string): Promise<Project | undefined>;
+  jobs(): Promise<JobRow[]>;
+}
+
+export function createMemoryStore(): ControlPlaneStore {
+  const projects = new Map<string, Project>();          // ref -> project
+  const jobs: JobRow[] = [];
+  const byIdempotency = new Map<string, string>();      // key -> ref
+
+  return {
+    async createProject({ ref, name, region, plan, idempotencyKey }) {
+      // Replay of a seen key returns the original result, never a second project
+      // (D-063: 24h replay window).
+      const seen = byIdempotency.get(idempotencyKey);
+      if (seen) {
+        const project = projects.get(seen)!;
+        const job = jobs.find((j) => j.project_id === project.id)!;
+        return { project, job, replayed: true };
+      }
+      const project: Project = {
+        id: crypto.randomUUID(),
+        ref, name, region, plan,
+        status: 'CREATING',
+        created_at: new Date().toISOString(),
+      };
+      const job: JobRow = {
+        id: crypto.randomUUID(),
+        kind: 'provision_project',
+        project_id: project.id,
+        idempotency_key: idempotencyKey,
+        state: 'queued',
+      };
+      projects.set(ref, project);
+      jobs.push(job);
+      byIdempotency.set(idempotencyKey, ref);
+      return { project, job, replayed: false };
+    },
+    async findByIdempotencyKey(key) {
+      const ref = byIdempotency.get(key);
+      return ref ? projects.get(ref) : undefined;
+    },
+    async getProject(ref) { return projects.get(ref); },
+    async listProjects() { return [...projects.values()]; },
+    async markStatus(ref, status) {
+      const p = projects.get(ref);
+      if (!p) return undefined;
+      const next = { ...p, status };
+      projects.set(ref, next);
+      return next;
+    },
+    async findByName(name) { return [...projects.values()].find((p) => p.name === name); },
+    async jobs() { return [...jobs]; },
+  };
+}
