@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { registerErrorHandling } from './kernel/errors.ts';
+import { registerCors } from './kernel/cors.ts';
 import { registerControlPlane, type Enqueue, type ControlPlaneDeps } from './modules/control-plane/routes.ts';
 import { createMemoryStore, type ControlPlaneStore } from './modules/control-plane/store.ts';
 import { registerMetrics } from './kernel/metrics.ts';
@@ -41,6 +42,11 @@ export interface BuildOptions {
    * more, which is the honest answer for an API with no master key.
    */
   projectSecrets?: { secrets: NonNullable<ControlPlaneDeps['secrets']> };
+  /**
+   * Origins allowed to call this API from a browser (P1g). Absent or empty means
+   * none — see kernel/cors.ts for why that is the default rather than localhost.
+   */
+  corsOrigins?: readonly string[];
 }
 
 /** Composition root: the only place that wires modules together. */
@@ -55,6 +61,9 @@ export function buildApp(opts: BuildOptions = {}): FastifyInstance {
     });
   }
   registerErrorHandling(app);
+  // Before everything: a preflight must be answered even for a route that will
+  // go on to reject the real request.
+  registerCors(app, { origins: opts.corsOrigins ?? [] });
   registerMetrics(app);
 
   app.get('/health', async () => ({ status: 'ok', service: 'api' }));

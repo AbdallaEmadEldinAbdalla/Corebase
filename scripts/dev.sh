@@ -43,6 +43,10 @@ export CB_METRICS_PORT="${CB_METRICS_PORT:-9101}"
 # Local dev is plain HTTP, and a Secure cookie is never sent over http:// —
 # the failure looks like "login silently does nothing".
 export CB_SECURE_COOKIES="${CB_SECURE_COOKIES:-false}"
+# The dashboard runs on its own origin, so every call it makes is cross-origin
+# and carries the session cookie. Set explicitly here rather than defaulted in
+# the service — see services/api/src/kernel/cors.ts.
+export CB_DASHBOARD_ORIGINS="${CB_DASHBOARD_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}"
 export CB_RECONCILE_INTERVAL_MS="${CB_RECONCILE_INTERVAL_MS:-30000}"
 
 if [ ! -d "$CB_KEK_DIR" ] || ! ls "$CB_KEK_DIR"/*.key >/dev/null 2>&1; then

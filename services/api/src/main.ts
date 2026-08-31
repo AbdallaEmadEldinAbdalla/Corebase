@@ -1,6 +1,7 @@
 import { Pool } from 'pg';
 import { createRedis, createQueue, enqueueProvisioning, type ProvisioningJobData } from '@corebase/queue';
 import { buildApp } from './app.ts';
+import { parseOrigins } from './kernel/cors.ts';
 import { createPgStore, ensureBootstrapOrg } from './modules/control-plane/store.pg.ts';
 import { createMemoryStore } from './modules/control-plane/store.ts';
 import { createEnvelope } from '@corebase/crypto';
@@ -131,8 +132,13 @@ const orgs = auth
     }
   : undefined;
 
+// Unset means no browser may call this API. See kernel/cors.ts: a localhost
+// default would be a production hole the first time someone forgot the variable.
+const corsOrigins = parseOrigins(process.env.CB_DASHBOARD_ORIGINS);
+
 const app = buildApp({
   store, logger: true,
+  ...(corsOrigins.length ? { corsOrigins } : {}),
   ...(auth ? { auth } : {}),
   ...(orgs ? { orgs } : {}),
   ...(secretsForApi ? { projectSecrets: { secrets: secretsForApi } } : {}),
@@ -154,6 +160,12 @@ const app = buildApp({
   ...(actorUserId ? { actorUserId } : {}),
   ...(enqueue ? { enqueue } : {}),
 });
+// Said out loud at boot, because "the dashboard cannot log in" and "CORS is off"
+// look nothing alike from the browser's console.
+app.log.info({ corsOrigins }, corsOrigins.length
+  ? 'browser origins allowed'
+  : 'no browser origins allowed (set CB_DASHBOARD_ORIGINS)');
+
 app.listen({ port, host: '0.0.0.0' }).catch((err) => {
   app.log.error(err);
   process.exit(1);
