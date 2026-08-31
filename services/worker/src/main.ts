@@ -4,6 +4,7 @@ import { createJobRepo } from './jobs/repo.ts';
 import { createRunner } from './jobs/runner.ts';
 import { buildSagas } from './jobs/sagas.ts';
 import { registerNode } from './placement.ts';
+import { createDocker } from './docker.ts';
 import { createSweeper } from './sweeper.ts';
 
 const dbUrl = process.env.CB_CONTROL_DATABASE_URL;
@@ -32,7 +33,28 @@ const nodeId = await registerNode(pool, {
 });
 log('info', 'node registered', { nodeId, hostname: process.env.CB_NODE_HOSTNAME ?? 'data-node-local' });
 
-const sagas = buildSagas({ pool });
+const dockerHost = process.env.CB_DOCKER_HOST;
+const dockerCertDir = process.env.CB_DOCKER_CERT_DIR;
+const docker = dockerHost && dockerCertDir
+  ? createDocker({
+      host: dockerHost,
+      port: Number(process.env.CB_DOCKER_PORT ?? 2376),
+      certDir: dockerCertDir,
+    })
+  : undefined;
+if (docker) {
+  const version = await docker.ping();
+  log('info', 'connected to the data node over mTLS', { engine: version });
+} else {
+  log('warn', 'no Docker client configured — container steps will fail', {});
+}
+
+const sagas = buildSagas({
+  pool,
+  ...(docker ? { docker } : {}),
+  bootstrapSecret: process.env.CB_BOOTSTRAP_SECRET ?? '',
+  healthTimeoutMs: Number(process.env.CB_HEALTH_TIMEOUT_MS ?? 60_000),
+});
 const runner = createRunner({ repo, sagas, log: (l, m, e) => log(l, m, e) });
 const sweeper = createSweeper({ repo, queue, log: (m, e) => log('info', m, e) });
 
