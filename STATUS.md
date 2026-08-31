@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-08-31 · **Phase:** Milestone 0 (the provisioning spine) · **T1–T10 done — Milestone 0's tasks are complete; the retro (D-169) remains**
+**Last updated:** 2026-08-31 · **Phase:** Milestone 0 (the provisioning spine) · **Milestone 0 complete — ten tasks and the retro**
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -9,6 +9,11 @@ for the binding decisions.
 
 It is kept current with every step of work. Where it says something is done, there is
 a commit, a test count, and usually a measurement behind it.
+
+The one thing to read before trusting any number here: the
+[Milestone-0 retro](docs/14-roadmap/06-milestone-0-retro.md) §4, which lists what
+the measurements do **not** license. Everything measured so far was measured in the
+cheapest corner of the state space.
 
 ---
 
@@ -414,6 +419,32 @@ non-terminal job and waits for the rule to reach `firing`, not merely `pending`:
 rule whose `for` window never elapses would satisfy "pending" forever, which is
 exactly the bug an alert test should catch.
 
+### The Milestone-0 retro · done · [the retro](docs/14-roadmap/06-milestone-0-retro.md)
+
+D-169 made the retro part of the milestone: end by replacing assumptions with
+measurements. Six measurements existed; all six pointed the comfortable way.
+
+**The retro's main output is a refusal.** The 350 MB per-active-project planning
+budget and the 150-active/node density figure did **not** move, even though the
+first data is ~3× under. D-209 now states the four conditions any measurement must
+meet before they can — full triplet, x86 launch-SKU hardware, ≥50 co-resident
+projects, client load attached — because every M0 number came from one of three
+processes, on ARM, idle, at 21 co-resident. Lowering a planning number on
+convenient data is how a density model becomes confidently wrong.
+
+What did change: the paused-project disk residual was 8–30× pessimistic and is
+re-based to ~60 MB (D-207), which *strengthens* the pause multiplier the cost model
+rests on. D-071's warm pool is deferred with an explicit trigger (D-208) because
+the cold create path already runs 18× inside its budget — the first time R-4
+("building ahead of users") was caught in the act and stopped. R-6 (provisioning
+corruption) drops 9 → 6 on built-and-green evidence; R-2 and R-12 deliberately hold.
+
+It also counts what the build taught us about the plan. Twenty-three of 210
+decisions came from executing rather than planning, and **not one reversed an
+architectural choice** — every correction was a level down: a flag, a threshold, a
+column name, an ordering. The corpus was directionally right and locally wrong, in
+ways only execution surfaces.
+
 ### T10 — Demo script · done
 
 `./scripts/demo.sh` is the whole product in one file, and it is deliberately
@@ -508,6 +539,10 @@ D-001…D-192 and is binding when two documents disagree.
 | D-204 | The stuck-job alert reads a purpose-built gauge, not a PromQL reconstruction | One comparison is reviewable; a stale series is itself an alert |
 | D-205 | A soft-deleted project exposes `deleted_at` and `purge_after`; both absent, not null, when alive | A recovery deadline you cannot read is not a deadline you can act on |
 | D-206 | No customer-facing "purge now"; early closure is a control-plane operation | Seven days of undo is the product, not an inconvenience to route around |
+| D-207 | Paused-project disk residual re-based 0.5–2 GB → ~60 MB | Measured at ~59 MB per empty volume; the assumption was 8–30× pessimistic |
+| D-208 | D-071's warm pool deferred with a trigger | Cold creates already run 18× inside budget; building it would be the R-4 failure |
+| D-209 | The RAM and density planning numbers may only be re-based on a measurement meeting four stated conditions | Every M0 number came from the cheapest corner of the state space |
+| D-210 | Every measurement states what it does not license; decisions may not cite one beyond its conditions | Stops an idle-ARM number being quoted as a density result |
 
 ## 7. Measurements
 
@@ -540,11 +575,16 @@ PostgREST. Neither licenses raising the planned density (D-091's 150 projects/no
 
 ## 8. What is not built yet
 
-**Milestone 0, remaining:** the ten tasks are done. What is left is the
-**retro** (D-169), which is part of the milestone and not an afterthought: six
-measurements (M-001…M-006) now exist against assumptions the plan made before
-anything was built, and the cost model, the density figures (D-090/D-091/D-174)
-and the risk register have not yet been reconciled with them.
+**Milestone 0 is complete** — ten tasks and the retro. The cost model, the risk
+register and the decision log now carry the measured numbers, and D-209 gates what
+may be done with them next.
+
+**Next is Phase 1**, per the [phase plan](docs/14-roadmap/01-phase-plan.md). The
+measurement that would move the model most is the one Phase 1/2 makes possible:
+the full triplet (Postgres + PgBouncer + PostgREST) under light load on x86, with
+10 and 50 projects co-resident and the per-project exporters attached. That single
+run answers the per-project RAM budget, the per-project cardinality budget, and
+the first honest read on co-tenant contention.
 
 **Everything above the database** is Phase 1+: the data API (PostgREST), auth,
 storage, realtime, the dashboard, the CLI, the SDK. All planned in detail under
@@ -587,6 +627,7 @@ storage, realtime, the dashboard, the CLI, the SDK. All planned in detail under
 | What is deliberately unresolved? | [docs/15-risks/02-open-questions.md](docs/15-risks/02-open-questions.md) — 140 questions |
 | What is the next task, exactly? | [docs/14-roadmap/04-milestone-0.md](docs/14-roadmap/04-milestone-0.md) — includes a progress table |
 | What did we measure? | [docs/14-roadmap/05-measurements.md](docs/14-roadmap/05-measurements.md) |
+| What do those numbers *not* prove? | [the M0 retro §4](docs/14-roadmap/06-milestone-0-retro.md) — read before quoting any of them |
 | How does provisioning actually work? | `services/worker/src/jobs/sagas.ts` — read top to bottom |
 | How does a project database get built? | `infra/docker/postgres/` — Dockerfile plus four init scripts |
 | What does the UI look like? | [design-exports/07-html](design-exports/07-html) served over HTTP |

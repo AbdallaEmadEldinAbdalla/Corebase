@@ -18,7 +18,7 @@ Reboot the data node and every project is serving queries again seconds later wi
 
 All of it is visible: Prometheus scrapes both services, Grafana has a provisioned dashboard, logs are in Loki and findable by project ref or request id, and the "job stuck" alert has been watched firing.
 
-**All ten Milestone-0 tasks are done.** What remains is the milestone retro (D-169): reconciling the cost model and the density figures with the six measurements the build produced. Nothing above the database exists yet — no data API, no auth, no storage, no dashboard.
+**Milestone 0 is complete** — ten tasks and the retro. The [retro](docs/14-roadmap/06-milestone-0-retro.md) reconciled the cost model with six measurements and its main output is a refusal: the RAM and density planning numbers did not move, even though the first data is 3× favourable, because every number was taken in the cheapest corner of the state space. Next is Phase 1. Nothing above the database exists yet — no data API, no auth, no storage, no dashboard.
 
 > **[STATUS.md](STATUS.md) is the handover document**: what works, how to run it locally, what every rule in the code is defending against, and what is not built yet. Read it before the corpus if you are here to contribute.
 
@@ -119,9 +119,9 @@ The corpus covers, A to Z:
 
 ## Two registers keep the corpus honest
 
-- **[Decision log](docs/00-foundation/05-decision-log.md)** — every binding decision (D-001…D-192) with its rationale. If two documents disagree, this log wins. Overturned decisions are annotated, never deleted, so the reasoning stays auditable — D-083's FORCE-RLS half, for instance, is annotated as superseded by D-191, which the build discovered by breaking a customer's first `INSERT`.
-- **[Open questions](docs/15-risks/02-open-questions.md)** — 140 questions left deliberately unresolved, each with an owning document and a decide-by trigger.
-- **[Measurement log](docs/14-roadmap/05-measurements.md)** — every number the plan assumed and the build later measured, append-only. The drift between assumption and reality is the finding.
+- **[Decision log](docs/00-foundation/05-decision-log.md)** — every binding decision (D-001…D-210) with its rationale. If two documents disagree, this log wins. Overturned decisions are annotated, never deleted, so the reasoning stays auditable — D-083's FORCE-RLS half, for instance, is annotated as superseded by D-191, which the build discovered by breaking a customer's first `INSERT`.
+- **[Open questions](docs/15-risks/02-open-questions.md)** — 142 questions left deliberately unresolved, each with an owning document and a decide-by trigger.
+- **[Measurement log](docs/14-roadmap/05-measurements.md)** — every number the plan assumed and the build later measured, append-only, and each entry states what it does **not** license. The drift between assumption and reality is the finding; the [Milestone-0 retro](docs/14-roadmap/06-milestone-0-retro.md) is where that drift was acted on.
 
 ## The design system
 
