@@ -27,20 +27,22 @@ The first-pass unit-economics math the v0.1 proposal deferred (§52: "exact numb
 
 | Component | Assumed idle RSS | Note |
 |---|---|---|
-| PostgreSQL 17, tuned small (`shared_buffers` 128 MB, low `max_connections`) | **150–300 MB** | ASSUMPTION; grows with connections, extensions, cache pressure |
+| PostgreSQL 17, tuned small (`shared_buffers` 128 MB, low `max_connections`) | **150–300 MB** | **MEASURED 102.2 MiB** cgroup peak idle ([M-001](../14-roadmap/05-measurements.md)) — assumption conservative by 1.5–3×, on ARM, freshly initialised, no clients |
 | PgBouncer (transaction mode, D-015) | **~15 MB** | ASSUMPTION |
-| PostgREST (per project, D-011) | **~60 MB** | ASSUMPTION; JVM-free Haskell binary, stable RSS |
+| PostgREST (per project, D-011) | **~60 MB** | ASSUMPTION — unbuilt, unmeasured |
 | Container/cgroup overhead | ~10–25 MB | ASSUMPTION |
-| **Total per ACTIVE project** | **~250–400 MB** | **Planning number: 350 MB** |
+| **Total per ACTIVE project** | **~250–400 MB** | **Planning number: 350 MB — UNCHANGED after the M0 retro (D-209).** One of three processes measured, on the wrong architecture, idle. May only be re-based on a measurement meeting all four conditions in D-209 |
 
-A **paused** project (D-008) is a stopped container: **~0 MB RAM, ~0 CPU**. Its residual cost is disk (volume retained) + backup objects in R2 + a row in the control plane. ASSUMPTION: residual ≈ 0.5–2 GB NVMe + ~0.2–1 GB R2 ≈ **€0.01–0.04/mo**.
+A **paused** project (D-008) is a stopped container: **~0 MB RAM, ~0 CPU**. Its residual cost is disk (volume retained) + backup objects in R2 + a row in the control plane.
+
+**Re-based by the M0 retro (D-207):** the NVMe residual is **~60 MB baseline** plus customer data, measured at ~59 MB per empty project volume ([M-004](../14-roadmap/05-measurements.md)) — the original 0.5–2 GB assumption was pessimistic by 8–30×. Residual ≈ **€0.005–0.02/mo**, and the dominant term is now the project's R2 backup objects rather than its volume. This strengthens the pause multiplier the whole model rests on. *(Caveat: measured with WAL archiving writing to the container filesystem rather than the volume — a known gap. See OQ-177.)*
 
 #### A.3 Density per node
 
 | Quantity | Value | Derivation |
 |---|---|---|
 | Usable RAM on a 64 GB node | ~56 GB | ASSUMPTION: reserve ~8 GB for OS, Docker, node agent, monitoring, page-cache headroom |
-| Active projects per 64 GB node | **~120–180** | 56 GB ÷ 350 MB ≈ 160; range covers 300–450 MB actuals. **Planning number: 150** — the *per-node design max* at D-090's 85% placement stop; fleet-wide the D-148 75% reserved-RAM ceiling makes **~135–140 active/node** the fleet-planning average (D-174) |
+| Active projects per 64 GB node | **~120–180** *(UNCHANGED; 21 co-resident measured on an 8 GiB ARM VM says nothing about this — D-209)* | 56 GB ÷ 350 MB ≈ 160; range covers 300–450 MB actuals. **Planning number: 150** — the *per-node design max* at D-090's 85% placement stop; fleet-wide the D-148 75% reserved-RAM ceiling makes **~135–140 active/node** the fleet-planning average (D-174) |
 | Pause rate on mature free fleet | **80–90%** | ASSUMPTION; industry-typical for free tiers (Supabase pauses at 7 days inactivity; most free projects are experiments). **Planning number: 85%** |
 | **Total projects per node (free-dominated fleet)** | **~750–1,200** (hard cap 1,200, D-090) | 150 active slots ÷ (1 − pause rate). At 85% paused: 150 ÷ 0.15 = **1,000**; the raw formula exceeds the cap at >87.5% paused, and the D-090 cap binds first. The pause multiplier is **×5–10** on effective density |
 | Disk check | Not binding | 1,000 free projects × ≤500 MB DB cap, realistic average ~100 MB ⇒ ~100 GB of 2 TB NVMe. RAM binds first |
@@ -56,7 +58,7 @@ A **paused** project (D-008) is a stopped container: **~0 MB RAM, ~0 CPU**. Its 
 | R2 operations | ~$4.50/M writes, ~$0.36/M reads | ASSUMPTION; negligible until high scale |
 | Hetzner dedicated bandwidth | ~unmetered 1 Gbit (fair use) | ASSUMPTION; API/DB egress effectively free vs AWS's ~$0.09/GB. Fair-use limits are a sensitivity item (§E) |
 | Backups (pgBackRest → R2, D-019) | included in R2 storage line | ASSUMPTION: compressed base + WAL ≈ 0.5–2× DB size |
-| **Control-plane fixed base** | **~€120–150/mo** | ASSUMPTION: 2–3 cloud VMs (control-plane API+DB, monitoring/Grafana/Loki node, gateway/LB) + DNS + snapshots |
+| **Control-plane fixed base** | **~€120–150/mo** | ASSUMPTION: 2–3 cloud VMs (control-plane API+DB, monitoring/Grafana/Loki node, gateway/LB) + DNS + snapshots. **First data:** the whole monitoring stack (Prometheus + Loki + Grafana + Alloy) measures **~320 MiB** resident and 156 platform series ([M-006](../14-roadmap/05-measurements.md)), so mon-1 does not need to be a large VM — but the per-project half of D-146's series budget is unmeasured, and that is the half that sizes it |
 | Misc fixed (email provider, domains, error tracking) | ~€30–60/mo | ASSUMPTION; email costs detailed in [email infrastructure](../05-auth/04-email-infrastructure.md) |
 
 ### B. Modeled scenarios
@@ -142,11 +144,12 @@ The pause/resume + container model captures **most of Neon's idle economics with
 | Stress | Effect | Threshold where it hurts | Mitigation |
 |---|---|---|---|
 | **Low pause rate** | The dominant risk. At 50% paused (vs 85%), effective density drops 1,000 → 300/node; free-fleet node cost ~×3.3 | Pause rate < ~70% sustained | 7-day inactivity pause is enforced, not best-effort; monitor pause rate as a first-class metric; tune inactivity window before buying hardware |
-| **RAM creep per project** | 350 → 500 MB cuts active density ~30% | avg RSS > ~450 MB | cgroup memory limits per container (D-009); conservative Postgres defaults; extension allowlist ([extensions](../03-database-platform/06-extensions-and-upgrades.md)) |
+| **RAM creep per project** | 350 → 500 MB cuts active density ~30% | avg RSS > ~450 MB | cgroup memory limits per container (D-009); conservative Postgres defaults; extension allowlist ([extensions](../03-database-platform/06-extensions-and-upgrades.md)). **Measured floor:** 102.2 MiB for idle Postgres alone (M-001), rising to 27.9 MiB *anon* at ten client backends — a 5.6× move from the cheapest state, which is the shape of this risk, not its magnitude |
 | **Storage-heavy tenants** | Free cap is 500 MB DB + 1 GB files, so bounded; risk is paid tenants at $0.015/GB COGS vs metered price | only if overage price < COGS (it isn't; see [pricing](02-pricing-and-plans.md)) | hard-stop free caps; overage pricing > COGS by design |
 | **Egress abuse / fair use** | R2 egress is free to us, but Hetzner's unmetered bandwidth is fair-use; a tenant proxying video through PostgREST burns node bandwidth | sustained multi-TB per project | per-project egress caps ([abuse prevention](03-abuse-prevention.md)); serve files from R2 URLs, never proxied through nodes |
 | **Conversion below plan** | Scenario 2 at 2% paid: revenue €460 vs €495 cost — breakeven-ish, not fatal (fixed base is small) | < ~2% sustained at 1k+ projects | free-tier quotas tight enough that real apps upgrade; see [pricing](02-pricing-and-plans.md) |
 | **Node failure blast radius** | 1,000 projects per node = 1,000 angry users per dead disk | — | this is a durability/risk item, not a cost item: pgBackRest restore-to-new (D-019), N+2 spare capacity priced into Scenario 3, [risk register](../15-risks/01-risk-register.md) |
+| **Density-at-scale unknown** | The two constraints expected to bind first — co-tenant page-cache pressure and IO contention — are unmeasured; 21 co-resident projects cannot show them | any node above ~50 active projects, i.e. the first real node | The D-209 precondition: the planning number does not move until a measurement with the full triplet, x86, ≥50 co-resident projects and client load exists |
 | **Hetzner price/availability shift** | whole model keyed to ~€1/GB-RAM-mo | dedicated RAM > ~€2.5/GB-mo | provider abstraction (D-023 keeps exit possible); model survives at OVH/other EU dedicated prices |
 
 ### F. Binding cost guardrails
@@ -155,7 +158,7 @@ These are operating rules, not aspirations. Breach ⇒ page/alert and a schedule
 
 | Guardrail | Threshold (provisional) |
 |---|---|
-| Blended infra cost per **paused** free project | ≤ **€0.05/mo** |
+| Blended infra cost per **paused** free project | ≤ **€0.05/mo** *(measured residual now ~€0.005–0.02 — D-207)* |
 | Blended infra cost per **active** free project | ≤ **€0.50/mo** |
 | Free-fleet total infra spend | ≤ **25% of MRR** once MRR > €2,000 (before that, absolute cap €400/mo on free-fleet-attributed spend) |
 | Node RAM utilization alert | warn at **75%**, stop new placements at **85%** |
@@ -169,11 +172,14 @@ These are operating rules, not aspirations. Breach ⇒ page/alert and a schedule
 
 ## Open Questions
 
-- ***(first data: [M-001](../14-roadmap/05-measurements.md))* OQ-090:** Actual measured RSS of the tuned per-project stack (Postgres 17 + PgBouncer + PostgREST) under realistic idle and light load — the 350 MB planning number needs a benchmark before node purchase.
+- ***(first data: [M-001](../14-roadmap/05-measurements.md), [M-002](../14-roadmap/05-measurements.md); still open — [M0 retro](../14-roadmap/06-milestone-0-retro.md))* OQ-090:** Actual measured RSS of the tuned per-project stack (Postgres 17 + PgBouncer + PostgREST) under realistic idle and light load — the 350 MB planning number needs a benchmark before node purchase. **Postgres alone is now measured (102.2 MiB cgroup peak idle); the other two processes do not exist yet, so the triplet number remains open and D-209 gates what may be done with partial data.**
+- **OQ-176:** Does the ~14:1 booked-to-used RAM ratio ([M-002](../14-roadmap/05-measurements.md)) survive real client load, and at what load does the 350 MB booking begin to bind? Decides whether D-174's overcommit is comfortable or merely untested.
+- **OQ-177:** What is the per-project disk floor once WAL archiving writes to the volume rather than the container filesystem? The ~59 MB measured in M-004 is the floor with archiving effectively disabled.
 - **OQ-091:** Resume latency target and its cost: does sub-5-second resume require keeping page-cache-warm snapshots or pre-started shells, and what does that do to effective density? (Owned jointly with [postgres provisioning](../03-database-platform/01-postgres-provisioning.md).)
 - **OQ-092:** Hetzner fair-use bandwidth reality: at what sustained per-node egress do we get throttled or a call from Hetzner, and does that force a CDN-in-front-of-API posture earlier than planned?
 
 ## Dependencies
 
 - Builds on: [../00-foundation/02-competitive-analysis.md](../00-foundation/02-competitive-analysis.md) (lane 3, D-006/D-008), [../00-foundation/03-critical-review.md](../00-foundation/03-critical-review.md) (§2.1), [../01-architecture/03-multi-tenancy-and-isolation.md](../01-architecture/03-multi-tenancy-and-isolation.md) (D-009), [../03-database-platform/01-postgres-provisioning.md](../03-database-platform/01-postgres-provisioning.md), [../11-infrastructure/01-infra-phases.md](../11-infrastructure/01-infra-phases.md) (D-023), [../07-storage/01-storage-architecture.md](../07-storage/01-storage-architecture.md) (D-017)
+- Corrected by: [Milestone 0 retro](../14-roadmap/06-milestone-0-retro.md) (D-207 paused residual; D-209 gate on re-basing the RAM and density planning numbers)
 - Feeds: [02-pricing-and-plans.md](02-pricing-and-plans.md) (quotas and overage prices must clear these COGS numbers), [03-abuse-prevention.md](03-abuse-prevention.md) (quotas as abuse ceilings), [../14-roadmap/01-phase-plan.md](../14-roadmap/01-phase-plan.md), [../15-risks/01-risk-register.md](../15-risks/01-risk-register.md)
