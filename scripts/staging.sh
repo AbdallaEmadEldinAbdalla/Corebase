@@ -9,6 +9,7 @@ COMPOSE_FILE="$(cd "$(dirname "$0")/.." && pwd)/infra/docker/staging/docker-comp
 STAGING_DIR="$(dirname "$COMPOSE_FILE")"
 DC="docker compose -f $COMPOSE_FILE"
 CERTS="$STAGING_DIR/certs"
+KEK_DIR="$STAGING_DIR/kek.d"
 DATA_NODE_PORT="${DATA_NODE_PORT:-2376}"
 CONTROL_DB_PORT="${CONTROL_DB_PORT:-55433}"
 CONTROL_REDIS_PORT="${CONTROL_REDIS_PORT:-56379}"
@@ -47,6 +48,23 @@ cmd_up() {
   echo "▸ up"
 }
 
+cmd_kek() {
+  # The control plane refuses to start without a master key (D-035/D-075). In
+  # production this is generated offline with two sealed offline copies; locally
+  # it is one throwaway file, gitignored, and losing it means losing every stored
+  # credential in staging — which is exactly the property we want to rehearse.
+  mkdir -p "$KEK_DIR"
+  local id="kek_$(date +%Y_%m)"
+  if [ -f "$KEK_DIR/$id.key" ]; then
+    echo "  ✓ KEK $id already present"
+  else
+    head -c 32 /dev/urandom > "$KEK_DIR/$id.key"
+    chmod 600 "$KEK_DIR/$id.key"
+    echo "  ✓ generated KEK $id (32 bytes)"
+  fi
+  echo "    export CB_KEK_DIR=$KEK_DIR"
+}
+
 cmd_seed_images() {
   # Production pre-pulls images onto every node so provisioning is a claim, not a
   # download (D-071). Locally the data node has its own image store, so we push
@@ -83,6 +101,16 @@ cmd_verify() {
   printf '  %-36s' "host ports published"
   if nc -z 127.0.0.1 "$CONTROL_DB_PORT" >/dev/null 2>&1 && nc -z 127.0.0.1 "$CONTROL_REDIS_PORT" >/dev/null 2>&1; then echo "PASS"; else echo "FAIL"; fail=1; fi
 
+  printf '  %-36s' "project port range reachable"
+  # The control plane opens direct admin connections to project databases, so the
+  # allocator's range has to be published from the node — not just allocated in
+  # the control plane (D-192).
+  if docker port cb-data-node | grep -q '^5433/tcp'; then echo "PASS"; else
+    echo "FAIL (publish PROJECT_PORT_MIN-MAX)"; fail=1; fi
+
+  printf '  %-36s' "master key present"
+  if ls "$KEK_DIR"/*.key >/dev/null 2>&1; then echo "PASS"; else echo "SKIP (run kek)"; fi
+
   printf '  %-36s' "node can run a project container"
   if node_docker run --rm --name cb-smoke -e POSTGRES_PASSWORD=smoke -d corebase/postgres:17.5 >/dev/null 2>&1; then
     ok=0
@@ -108,17 +136,18 @@ cmd_idempotent() {
 }
 
 cmd_down()  { echo "▸ stopping (volumes kept)"; $DC down; }
-cmd_nuke()  { echo "▸ destroying including volumes"; $DC down -v; rm -rf "$CERTS"; }
+cmd_nuke()  { echo "▸ destroying including volumes"; $DC down -v; rm -rf "$CERTS" "$KEK_DIR"; }
 cmd_status(){ $DC ps; }
 
 case "${1:-}" in
   up) cmd_up ;;
+  kek) cmd_kek ;;
   seed-images) cmd_seed_images ;;
   verify) cmd_verify ;;
   idempotent) cmd_idempotent ;;
   down) cmd_down ;;
   nuke) cmd_nuke ;;
   status) cmd_status ;;
-  all) cmd_up && cmd_seed_images && cmd_verify && cmd_idempotent ;;
-  *) echo "usage: $0 {up|seed-images|verify|idempotent|down|nuke|status|all}"; exit 2 ;;
+  all) cmd_up && cmd_kek && cmd_seed_images && cmd_verify && cmd_idempotent ;;
+  *) echo "usage: $0 {up|kek|seed-images|verify|idempotent|down|nuke|status|all}"; exit 2 ;;
 esac

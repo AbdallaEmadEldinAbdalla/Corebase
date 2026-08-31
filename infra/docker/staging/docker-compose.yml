@@ -67,6 +67,16 @@ services:
       DOCKER_TLS_CERTDIR: /certs         # dockerd generates CA + server + client certs here
     ports:
       - "${DATA_NODE_PORT:-2376}:2376"   # Engine API, TLS only — never 2375
+      # Project database ports. On a real node these are published by dockerd on
+      # the node's own address and reached over the private network; dind puts
+      # them in its own namespace, so the range has to be republished to be
+      # reachable from the control plane running on the host.
+      #
+      # Ten ports, not the fleet's thousand (PG_PORT_RANGE): publishing 1000
+      # ports through Docker Desktop's proxy costs seconds of startup and a
+      # process per port for no extra coverage. CB_PG_PORT_MIN/MAX narrow the
+      # allocator to match — see placement.ts.
+      - "${PROJECT_PORT_MIN:-5433}-${PROJECT_PORT_MAX:-5442}:5433-5442"
     volumes:
       - data-node-certs:/certs
       - data-node-docker:/var/lib/docker

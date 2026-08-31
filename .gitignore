@@ -13,3 +13,7 @@ dist/
 # local env
 .env
 selfhost/.env
+
+# staging secrets: generated locally, never committed
+infra/docker/staging/certs/
+infra/docker/staging/kek.d/
