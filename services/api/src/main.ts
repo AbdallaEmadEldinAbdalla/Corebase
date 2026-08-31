@@ -3,6 +3,8 @@ import { createRedis, createQueue, enqueueProvisioning, type ProvisioningJobData
 import { buildApp } from './app.ts';
 import { createPgStore, ensureBootstrapOrg } from './modules/control-plane/store.pg.ts';
 import { createMemoryStore } from './modules/control-plane/store.ts';
+import { createEnvelope } from '@corebase/crypto';
+import { createSecretStore } from '@corebase/secrets';
 
 const port = Number(process.env.PORT ?? 8080);
 const url = process.env.CB_CONTROL_DATABASE_URL;
@@ -23,7 +25,22 @@ const store = await (async () => {
   }
   const pool = new Pool({ connectionString: url, max: 10 });
   const organizationId = await ensureBootstrapOrg(pool);
-  return createPgStore({ pool, organizationId });
+
+  // The KEK lets the API render connection strings. Without it the API still
+  // serves everything else — a dashboard that cannot show a password is far
+  // better than a dashboard that will not load.
+  const kekDir = process.env.CB_KEK_DIR;
+  let secrets;
+  if (kekDir) {
+    const envelope = createEnvelope({
+      kekDir, ...(process.env.CB_KEK_ID ? { kekId: process.env.CB_KEK_ID } : {}),
+    });
+    secrets = createSecretStore(pool, envelope);
+  } else {
+    console.warn(JSON.stringify({ level: 'warn', service: 'api',
+      msg: 'CB_KEK_DIR not set — connection strings will be omitted from project detail.' }));
+  }
+  return createPgStore({ pool, organizationId, ...(secrets ? { secrets } : {}) });
 })();
 
 const redisUrl = process.env.CB_REDIS_URL;

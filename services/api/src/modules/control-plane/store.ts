@@ -1,5 +1,23 @@
 import type { Project, ProjectStatus, JobPayload } from '@corebase/types';
 
+/**
+ * What a ready project exposes to its owner (platform-api contract). Assembled
+ * from the placement row plus the decrypted developer credential — the plaintext
+ * exists in the control plane only to render these strings (credentials §2).
+ */
+export interface DatabaseInfo {
+  host: string;
+  port: number;
+  pooler_port: number;
+  pg_version: string;
+  connection_strings?: { direct: string; pooled: string };
+}
+
+export interface ProjectDetail {
+  project: Project;
+  database?: DatabaseInfo;
+}
+
 export interface JobRow {
   id: string;
   kind: JobPayload['kind'];
@@ -24,6 +42,12 @@ export interface ControlPlaneStore {
   /** Replay lookup: a seen key must return the original outcome (D-063). */
   findByIdempotencyKey(key: string): Promise<Project | undefined>;
   getProject(ref: string): Promise<Project | undefined>;
+  /**
+   * The project plus its connection details. Separate from getProject because
+   * building it decrypts a credential, and most callers have no business doing
+   * that.
+   */
+  getProjectDetail(ref: string): Promise<ProjectDetail | undefined>;
   listProjects(): Promise<Project[]>;
   markStatus(ref: string, status: ProjectStatus): Promise<Project | undefined>;
   findByName(name: string): Promise<Project | undefined>;
@@ -68,6 +92,12 @@ export function createMemoryStore(): ControlPlaneStore {
       return ref ? projects.get(ref) : undefined;
     },
     async getProject(ref) { return projects.get(ref); },
+    async getProjectDetail(ref) {
+      // The memory store has no data plane, so there are never connection
+      // details — the shape is still the real one.
+      const project = projects.get(ref);
+      return project ? { project } : undefined;
+    },
     async listProjects() { return [...projects.values()]; },
     async markStatus(ref, status) {
       const p = projects.get(ref);

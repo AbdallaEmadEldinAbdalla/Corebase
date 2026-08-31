@@ -1,6 +1,8 @@
 import type { Pool, PoolClient } from 'pg';
 import type { Project, ProjectStatus } from '@corebase/types';
-import type { ControlPlaneStore, JobRow } from './store.ts';
+import type { ControlPlaneStore, JobRow, DatabaseInfo } from './store.ts';
+import type { SecretStore } from '@corebase/secrets';
+import { SECRET_NAMES } from '@corebase/secrets';
 
 /**
  * Postgres implementation of the control-plane store (T4 on T3's schema).
@@ -31,6 +33,12 @@ const toProject = (r: ProjectRowDb): Project => ({
 export interface PgStoreOptions {
   pool: Pool;
   /**
+   * Reader for envelope-encrypted credentials. Optional because the API can run
+   * without a KEK — it then serves connection details without the password
+   * rather than refusing to answer at all, which is the more useful failure.
+   */
+  secrets?: SecretStore;
+  /**
    * M0 runs with one hardcoded org (milestone 0: "a single hardcoded dev account
    * is fine"). P1 replaces this with the real org resolved from the session.
    */
@@ -48,7 +56,8 @@ export async function ensureBootstrapOrg(pool: Pool, slug = 'dev'): Promise<stri
   return rows[0]!.id;
 }
 
-export function createPgStore({ pool, organizationId }: PgStoreOptions): ControlPlaneStore {
+export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
+  const { pool, organizationId } = opts;
   const jobFromDb = (r: {
     id: string; job_type: string; project_id: string | null;
     idempotency_key: string; state: string;
@@ -108,6 +117,48 @@ export function createPgStore({ pool, organizationId }: PgStoreOptions): Control
         [ref],
       );
       return rows[0] ? toProject(rows[0]) : undefined;
+    },
+
+    async getProjectDetail(ref) {
+      const { rows } = await pool.query<ProjectRowDb & {
+        db_host: string | null; db_port: number | null; db_pooler_port: number | null;
+        db_version: string | null;
+      }>(`SELECT ${PROJECT_COLUMNS},
+                 d.connection_host AS db_host, d.port AS db_port,
+                 d.pooler_port AS db_pooler_port, d.pg_version AS db_version
+            FROM projects p
+            LEFT JOIN project_databases d ON d.project_id = p.id
+           WHERE p.ref = $1 AND p.deleted_at IS NULL`, [ref]);
+      const row = rows[0];
+      if (!row) return undefined;
+      const project = toProject(row);
+      if (!row.db_host || row.db_port === null || row.db_pooler_port === null) {
+        // Provisioning has not reached write_connection yet; the project exists
+        // and has a status, and that is the whole answer.
+        return { project };
+      }
+
+      const database: DatabaseInfo = {
+        host: row.db_host,
+        port: row.db_port,
+        pooler_port: row.db_pooler_port,
+        pg_version: row.db_version ?? '17',
+      };
+
+      // The password is rendered, never stored in cleartext (credentials §2).
+      // A KEK-less API omits the strings rather than serving a URL with no
+      // credential in it, which would look like a working string and fail.
+      const password = opts.secrets
+        ? await opts.secrets.get(project.id, SECRET_NAMES.developer).catch(() => undefined)
+        : undefined;
+      if (password) {
+        const auth = `developer:${encodeURIComponent(password)}`;
+        database.connection_strings = {
+          direct: `postgres://${auth}@${database.host}:${database.port}/postgres`,
+          pooled: `postgres://${auth}@${database.host}:${database.pooler_port}/postgres`,
+        };
+      }
+      return { project, database };
     },
 
     async listProjects() {

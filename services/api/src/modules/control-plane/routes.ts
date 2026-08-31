@@ -91,9 +91,12 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
   app.get('/v1/projects/:ref', async (req) => {
     requireAuth(req.headers.authorization);
     const { ref } = req.params as { ref: string };
-    const project = await deps.store.getProject(ref);
-    if (!project) throw ApiError.notFound('Project');
-    return project;
+    // { project, database } per the platform-API contract: the database block
+    // appears once provisioning has written connection details, and carries the
+    // connection strings only while the API can decrypt the credential.
+    const detail = await deps.store.getProjectDetail(ref);
+    if (!detail) throw ApiError.notFound('Project');
+    return detail;
   });
 
   app.delete('/v1/projects/:ref', async (req, reply) => {

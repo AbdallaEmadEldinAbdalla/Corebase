@@ -111,8 +111,11 @@ describe('pg control-plane store', () => {
     expect(replay.statusCode).toBe(200);
     expect(replay.json().ref).toBe(ref);
 
+    // { project, database } per the platform-API contract; the database block is
+    // absent until provisioning writes connection details.
     const got = await app.inject({ method: 'GET', url: `/v1/projects/${ref}`, headers: auth });
-    expect(got.json().status).toBe('creating');
+    expect(got.json().project.status).toBe('creating');
+    expect(got.json().database).toBeUndefined();
 
     const del = await app.inject({ method: 'DELETE', url: `/v1/projects/${ref}`, headers: auth });
     expect(del.json().status).toBe('deleting');
