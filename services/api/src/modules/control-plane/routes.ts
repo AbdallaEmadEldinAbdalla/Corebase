@@ -1,5 +1,7 @@
 import type { FastifyInstance } from 'fastify';
-import { CreateProjectRequest, ERROR_CODES } from '@corebase/types';
+import { CreateProjectRequest, ERROR_CODES, decodeId, encodeId, InvalidIdError } from '@corebase/types';
+import { parsePageRequest, toPage } from '../../kernel/pagination.ts';
+import { serializeProject } from './serialize.ts';
 import { DELIVERY_ID_PATTERN } from '@corebase/queue';
 import { ApiError } from '../../kernel/errors.ts';
 import { generateProjectRef } from '../../kernel/ref.ts';
@@ -74,7 +76,12 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
     // every later check — otherwise a retried create collides with the project
     // its own first attempt made and returns 409 instead of 200.
     const replay = await deps.store.findByIdempotencyKey(key);
-    if (replay) return reply.status(200).send(replay);
+    if (replay) {
+      return reply
+        .status(200)
+        .header('location', `/v1/projects/${replay.ref}`)
+        .send({ project: serializeProject(replay) });
+    }
 
     const parsed = CreateProjectRequest.safeParse(req.body);
     if (!parsed.success) {
@@ -113,12 +120,40 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
         deps.onEnqueueError?.(err as Error);
       }
     }
-    return reply.status(replayed ? 200 : 202).send(project);
+    // 202 with a Location header, per the platform-API contract: the API has
+    // accepted the intent, and the resource it points at is not ready yet.
+    return reply
+      .status(replayed ? 200 : 202)
+      .header('location', `/v1/projects/${project.ref}`)
+      .send({
+        project: serializeProject(project),
+        job: { id: encodeId('job', job.id), type: job.kind, state: job.state },
+      });
   });
 
   app.get('/v1/projects', async (req) => {
     requireAuth(req.headers.authorization);
-    return { data: await deps.store.listProjects() };
+    const query = (req.query ?? {}) as Record<string, unknown>;
+    const page = parsePageRequest(query);
+
+    let organizationId: string | undefined;
+    if (typeof query['org_id'] === 'string' && query['org_id']) {
+      try {
+        organizationId = decodeId('organization', query['org_id']);
+      } catch (err) {
+        if (!(err instanceof InvalidIdError)) throw err;
+        throw ApiError.validation(err.message);
+      }
+    }
+
+    const rows = await deps.store.listProjectsPage({
+      limit: page.limit,
+      ...(page.cursor ? { cursor: page.cursor } : {}),
+      ...(organizationId ? { organizationId } : {}),
+    });
+    const { items, pagination } = toPage(rows, page.limit,
+      (p) => ({ created_at: p.created_at, id: p.id }));
+    return { projects: items.map(serializeProject), pagination };
   });
 
   app.get('/v1/projects/:ref', async (req) => {
@@ -129,7 +164,10 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
     // connection strings only while the API can decrypt the credential.
     const detail = await deps.store.getProjectDetail(ref);
     if (!detail) throw ApiError.notFound('Project');
-    return detail;
+    return {
+      project: serializeProject(detail.project),
+      ...(detail.database ? { database: detail.database } : {}),
+    };
   });
 
   app.delete('/v1/projects/:ref', async (req, reply) => {
@@ -159,6 +197,9 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
         deps.onEnqueueError?.(err as Error);
       }
     }
-    return reply.status(202).send({ project, job });
+    return reply.status(202).send({
+      project: serializeProject(project),
+      job: { id: encodeId('job', job.id), type: job.kind, state: job.state },
+    });
   });
 }

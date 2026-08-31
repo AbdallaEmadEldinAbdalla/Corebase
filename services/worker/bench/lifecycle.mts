@@ -131,7 +131,8 @@ async function oneCycle(i: number): Promise<Cycle> {
     body: JSON.stringify({ name: `lc-${process.pid}-${i}`, region: 'eu-central' }),
   });
   if (created.status !== 202) throw new Error(`create returned ${created.status}: ${await created.text()}`);
-  const { ref } = (await created.json()) as { ref: string };
+  const { project } = (await created.json()) as { project: { ref: string } };
+  const ref = project.ref;
   await waitFor(`${ref} ready`, async () => (await statusOf(ref)) === 'ready');
   const createMs = Date.now() - t0;
 

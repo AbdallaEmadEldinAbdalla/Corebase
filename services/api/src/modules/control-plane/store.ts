@@ -58,6 +58,16 @@ export interface ControlPlaneStore {
   findByIdempotencyKey(key: string): Promise<Project | undefined>;
   getProject(ref: string): Promise<Project | undefined>;
   /**
+   * One page of projects, newest first, keyset-paginated (D-039). Fetches
+   * `limit + 1` so the caller can answer `has_more` from rows rather than from a
+   * second, racing count query.
+   */
+  listProjectsPage(args: {
+    limit: number;
+    cursor?: { created_at: string; id: string };
+    organizationId?: string;
+  }): Promise<Project[]>;
+  /**
    * The project plus its connection details. Separate from getProject because
    * building it decrypts a credential, and most callers have no business doing
    * that.
@@ -80,6 +90,9 @@ export interface ControlPlaneStore {
   jobs(): Promise<JobRow[]>;
 }
 
+/** One implicit organization, for the store that has no database behind it. */
+const MEMORY_ORG_ID = '00000000-0000-4000-8000-000000000001';
+
 export function createMemoryStore(): ControlPlaneStore {
   const projects = new Map<string, Project>();          // ref -> project
   const jobs: JobRow[] = [];
@@ -98,6 +111,10 @@ export function createMemoryStore(): ControlPlaneStore {
       const project: Project = {
         id: crypto.randomUUID(),
         ref, name, region, plan,
+        // The memory store has one implicit org, same as the pg store's M0
+        // bootstrap; a stable value keeps the transport shape honest.
+        organization_id: MEMORY_ORG_ID,
+        environment: 'production',
         status: 'creating',
         created_at: new Date().toISOString(),
       };
@@ -125,6 +142,17 @@ export function createMemoryStore(): ControlPlaneStore {
       return project ? { project } : undefined;
     },
     async listProjects() { return [...projects.values()]; },
+    async listProjectsPage({ limit, cursor, organizationId }) {
+      const sorted = [...projects.values()]
+        .filter((p) => p.status !== 'deleted')
+        .filter((p) => !organizationId || p.organization_id === organizationId)
+        .sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : (a.id < b.id ? 1 : -1)));
+      const after = cursor
+        ? sorted.filter((p) => p.created_at < cursor.created_at
+            || (p.created_at === cursor.created_at && p.id < cursor.id))
+        : sorted;
+      return after.slice(0, limit + 1);
+    },
     async requestDelete(ref, _actor) {
       const project = projects.get(ref);
       if (!project) return undefined;

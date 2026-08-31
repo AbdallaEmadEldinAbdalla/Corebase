@@ -131,7 +131,7 @@ async function createProject(i: number): Promise<string> {
     body: JSON.stringify({ name: `bench-${process.pid}-${i}`, region: 'eu-central' }),
   });
   if (res.status !== 202) throw new Error(`create returned ${res.status}: ${await res.text()}`);
-  return ((await res.json()) as { ref: string }).ref;
+  return ((await res.json()) as { project: { ref: string } }).project.ref;
 }
 
 async function pollReady(ref: string, budgetMs: number): Promise<Detail> {

@@ -63,9 +63,10 @@ CREATED=$(api -X POST "$API/v1/projects" \
   -H 'content-type: application/json' \
   -H "idempotency-key: demo-$(date +%s)-$$" \
   -d "{\"name\":\"$NAME\",\"region\":\"eu-central\"}")
-REF=$(echo "$CREATED" | jq -r '.ref // empty')
+# { project, job } per the platform-API contract (OQ-175 closed in P1b).
+REF=$(echo "$CREATED" | jq -r '.project.ref // empty')
 [ -n "$REF" ] || die "create failed: $CREATED"
-ok "$REF · status $(echo "$CREATED" | jq -r .status)"
+ok "$REF · status $(echo "$CREATED" | jq -r .project.status) · id $(echo "$CREATED" | jq -r .project.id)"
 info "the API answered before the database existed; provisioning is a job"
 
 # ── 2. wait ─────────────────────────────────────────────────────────────────
@@ -133,7 +134,7 @@ fi
 # ── 4. delete ───────────────────────────────────────────────────────────────
 say "deleting it"
 DELETED=$(api -X DELETE "$API/v1/projects/$REF")
-echo "$DELETED" | jq -e '.job.kind == "delete_project"' >/dev/null \
+echo "$DELETED" | jq -e '.job.type == "delete_project"' >/dev/null \
   || die "delete did not schedule a teardown: $DELETED"
 ok "teardown scheduled"
 
@@ -144,7 +145,7 @@ while :; do
   [ "$SECONDS" -gt "$DEADLINE" ] && die "still $STATUS after 60s"
   sleep 0.5
 done
-PURGE_AT=$(api "$API/v1/projects/$REF" | jq -r '.project.purge_after // "unknown"')
+PURGE_AT=$(api "$API/v1/projects/$REF" | jq -r '.project.restorable_until // "unknown"')
 ok "soft-deleted — the container is stopped and the volume is kept"
 info "the data survives until $PURGE_AT (D-038), then a purge destroys it"
 

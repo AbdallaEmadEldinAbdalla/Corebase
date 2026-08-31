@@ -117,14 +117,14 @@ describe('pg control-plane store', () => {
       headers: { ...auth, 'idempotency-key': 'http-key-0001' }, payload: { name: 'http-app' },
     });
     expect(created.statusCode).toBe(202);
-    const { ref } = created.json();
+    const { ref } = created.json().project;
 
     const replay = await app.inject({
       method: 'POST', url: '/v1/projects',
       headers: { ...auth, 'idempotency-key': 'http-key-0001' }, payload: { name: 'http-app' },
     });
     expect(replay.statusCode).toBe(200);
-    expect(replay.json().ref).toBe(ref);
+    expect(replay.json().project.ref).toBe(ref);
 
     // { project, database } per the platform-API contract; the database block is
     // absent until provisioning writes connection details.

@@ -1,3 +1,4 @@
+export * from './ids.ts';
 import { z } from 'zod';
 
 /** Project lifecycle states (D-053 state machine; see docs/02-control-plane/03). */
@@ -32,8 +33,11 @@ export const Project = z.object({
   id: z.string().uuid(),
   ref: ProjectRef,
   name: z.string(),
+  /** Bare uuid at rest; the API prefixes it on the way out (see ids.ts). */
+  organization_id: z.string().uuid(),
   region: z.string(),
   plan: z.string(),
+  environment: z.string().default('production'),
   status: ProjectStatus,
   created_at: z.string(),
   /**

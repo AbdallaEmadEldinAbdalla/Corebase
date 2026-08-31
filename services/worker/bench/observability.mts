@@ -103,8 +103,8 @@ async function main() {
       headers: { ...auth, 'idempotency-key': `obs-${process.pid}-${String(i).padStart(3, '0')}` },
       body: JSON.stringify({ name: `obs-${process.pid}-${i}`, region: 'eu-central' }),
     });
-    const body = (await res.json()) as { ref: string };
-    refs.push(body.ref);
+    const body = (await res.json()) as { project: { ref: string } };
+    refs.push(body.project.ref);
     requestIds.push(String(res.headers.get('x-request-id')));
   }
   const allReady = await waitFor(`${COUNT} projects ready`, async () => {

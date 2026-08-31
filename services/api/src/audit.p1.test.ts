@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import { buildApp } from './app.ts';
 import { createPgStore, ensureBootstrapOrg } from './modules/control-plane/store.pg.ts';
 import { readProjectAudit } from '@corebase/audit';
+import { decodeId } from '@corebase/types';
 
 /**
  * P1b: "every mutating endpoint writes an audit row" is a Phase-1 exit criterion,
@@ -63,7 +64,9 @@ async function createProject(a = app()) {
     headers: { ...auth, 'idempotency-key': key() },
     payload: { name: `audit-app-${++seq}` },
   });
-  return res.json() as { id: string; ref: string };
+  const body = res.json() as { project: { id: string; ref: string } };
+  // Ids are prefixed in transport; audit rows key on the bare uuid.
+  return { id: decodeId('project', body.project.id), ref: body.project.ref };
 }
 
 describe('P1b — mutations write their audit row', () => {
@@ -74,7 +77,8 @@ describe('P1b — mutations write their audit row', () => {
       headers: { ...auth, 'idempotency-key': key(), 'x-request-id': 'req_audit_probe' },
       payload: { name: `audit-app-${++seq}` },
     });
-    const project = res.json() as { id: string; ref: string };
+    const body = res.json() as { project: { id: string; ref: string } };
+    const project = { id: decodeId('project', body.project.id), ref: body.project.ref };
 
     const rows = await readProjectAudit(pool, project.id);
     expect(rows).toHaveLength(1);
@@ -123,7 +127,9 @@ describe('P1b — mutations write their audit row', () => {
     const k = key();
     const first = await a.inject({ method: 'POST', url: '/v1/projects',
       headers: { ...auth, 'idempotency-key': k }, payload: { name: `audit-replay-${++seq}` } });
-    const project = first.json() as { id: string };
+    const project = {
+      id: decodeId('project', (first.json() as { project: { id: string } }).project.id),
+    };
     await a.inject({ method: 'POST', url: '/v1/projects',
       headers: { ...auth, 'idempotency-key': k }, payload: { name: `audit-replay-${seq}` } });
 

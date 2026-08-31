@@ -52,10 +52,19 @@ describe('POST /v1/projects', () => {
       headers: { ...auth, 'idempotency-key': 'key-00000001' }, payload: { name: 'my-app' },
     });
     expect(res.statusCode).toBe(202);
-    const p = res.json();
-    expect(p.status).toBe('creating');
-    expect(p.ref).toMatch(/^[a-z][a-z2-7]{19}$/);
-    expect(p.region).toBe('eu-central');
+    // { project, job } with a Location header, per the platform-API contract:
+    // the intent is accepted and the resource it points at is not ready yet.
+    expect(res.headers['location']).toMatch(/^\/v1\/projects\/[a-z][a-z2-7]{19}$/);
+    const { project, job } = res.json();
+    expect(project.status).toBe('creating');
+    expect(project.ref).toMatch(/^[a-z][a-z2-7]{19}$/);
+    expect(project.region).toBe('eu-central');
+    expect(project.environment).toBe('production');
+    // Ids are prefixed in transport for greppability.
+    expect(project.id).toMatch(/^prj_[0-9a-f-]{36}$/);
+    expect(project.org_id).toMatch(/^org_[0-9a-f-]{36}$/);
+    expect(job.type).toBe('provision_project');
+    expect(job.id).toMatch(/^job_/);
   });
 
   it('replaying an idempotency key returns the same project, not a second one', async () => {
@@ -65,9 +74,10 @@ describe('POST /v1/projects', () => {
     const second = await a.inject(body);
     expect(first.statusCode).toBe(202);
     expect(second.statusCode).toBe(200);
-    expect(second.json().ref).toBe(first.json().ref);
+    expect(second.json().project.ref).toBe(first.json().project.ref);
     const list = await a.inject({ method: 'GET', url: '/v1/projects', headers: auth });
-    expect(list.json().data).toHaveLength(1);
+    expect(list.json().projects).toHaveLength(1);
+    expect(list.json().pagination).toEqual({ next_cursor: null, has_more: false });
   });
 
   it('writes the job row in the same step as the project (two-phase enqueue, D-067)', async () => {
@@ -103,11 +113,11 @@ describe('DELETE /v1/projects/:ref', () => {
     const a = app();
     const created = await a.inject({ method: 'POST', url: '/v1/projects',
       headers: { ...auth, 'idempotency-key': 'key-00000005' }, payload: { name: 'bye-app' } });
-    const { ref } = created.json();
+    const { ref } = created.json().project;
     const res = await a.inject({ method: 'DELETE', url: `/v1/projects/${ref}`, headers: auth });
     expect(res.statusCode).toBe(202);
     expect(res.json().project.status).toBe('deleting');
-    expect(res.json().job.kind).toBe('delete_project');
+    expect(res.json().job.type).toBe('delete_project');
   });
 });
 
@@ -137,7 +147,7 @@ describe('framework-level rejections keep their status', () => {
 
   it('still reports a genuine server fault as 500', async () => {
     const broken = buildApp({
-      store: { ...createMemoryStore(), listProjects: async () => { throw new Error('boom'); } },
+      store: { ...createMemoryStore(), listProjectsPage: async () => { throw new Error('boom'); } },
       staticToken: TOKEN,
     });
     const res = await broken.inject({ method: 'GET', url: '/v1/projects', headers: auth });
@@ -153,7 +163,7 @@ describe('DELETE is idempotent by construction', () => {
     const a = app();
     const created = await a.inject({ method: 'POST', url: '/v1/projects',
       headers: { ...auth, 'idempotency-key': 'key-00000009' }, payload: { name: 'twice-app' } });
-    const { ref } = created.json();
+    const { ref } = created.json().project;
     const first = await a.inject({ method: 'DELETE', url: `/v1/projects/${ref}`, headers: auth });
     const second = await a.inject({ method: 'DELETE', url: `/v1/projects/${ref}`, headers: auth });
     expect(first.statusCode).toBe(202);

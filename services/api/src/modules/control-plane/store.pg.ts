@@ -20,18 +20,20 @@ import { writeAudit, SYSTEM, type Actor } from '@corebase/audit';
 
 const TS = (col: string) => `to_char(${col}, 'YYYY-MM-DD"T"HH24:MI:SS.MSZ')`;
 const PROJECT_COLUMNS = `
-  p.id, p.ref::text AS ref, p.name, p.region, p.plan::text AS plan,
+  p.id, p.ref::text AS ref, p.name, p.organization_id,
+  p.region, p.plan::text AS plan, p.environment::text AS environment,
   p.status::text AS status, ${TS('p.created_at')} AS created_at,
   ${TS('p.deleted_at')} AS deleted_at, ${TS('p.purge_after')} AS purge_after`;
 
 interface ProjectRowDb {
-  id: string; ref: string; name: string; region: string;
-  plan: string; status: string; created_at: string;
+  id: string; ref: string; name: string; organization_id: string; region: string;
+  plan: string; environment: string; status: string; created_at: string;
   deleted_at: string | null; purge_after: string | null;
 }
 const toProject = (r: ProjectRowDb): Project => ({
-  id: r.id, ref: r.ref, name: r.name, region: r.region,
-  plan: r.plan, status: r.status as ProjectStatus, created_at: r.created_at,
+  id: r.id, ref: r.ref, name: r.name, organization_id: r.organization_id,
+  region: r.region, plan: r.plan, environment: r.environment,
+  status: r.status as ProjectStatus, created_at: r.created_at,
   // Omitted entirely for a live project rather than serialised as null: an
   // absent field reads as "not applicable", a null reads as "we lost it".
   ...(r.deleted_at ? { deleted_at: r.deleted_at } : {}),
@@ -240,6 +242,22 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
       } finally {
         client.release();
       }
+    },
+
+    async listProjectsPage({ limit, cursor, organizationId }) {
+      // Keyset, not offset. `(created_at, id) < (…, …)` is a row comparison, so
+      // one index scan serves the page and a row inserted mid-scroll cannot shift
+      // the reader's place — which offset pagination does silently.
+      const { rows } = await pool.query<ProjectRowDb>(
+        `SELECT ${PROJECT_COLUMNS} FROM projects p
+          WHERE p.status <> 'deleted'
+            AND ($1::uuid IS NULL OR p.organization_id = $1)
+            AND ($2::timestamptz IS NULL
+                 OR (p.created_at, p.id) < ($2::timestamptz, $3::uuid))
+          ORDER BY p.created_at DESC, p.id DESC
+          LIMIT $4`,
+        [organizationId ?? null, cursor?.created_at ?? null, cursor?.id ?? null, limit + 1]);
+      return rows.map(toProject);
     },
 
     async listProjects() {
