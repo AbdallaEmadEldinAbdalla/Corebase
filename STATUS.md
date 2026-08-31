@@ -204,7 +204,7 @@ directly usable.
 ## 3. Repository map
 
 ```
-docs/                  the planning corpus — 62 documents, 16 sections (read INDEX.md)
+docs/                  the planning corpus — 66 documents, 16 sections (read INDEX.md)
 design-exports/        design system artefacts: tokens, 43 HTML components, 142 PNGs
 migrations/            plain SQL, applied in filename order, checksummed
 infra/docker/postgres/ the per-project database image (extension allowlist, auth hardening)
@@ -240,8 +240,8 @@ boot. Don't use them.
 
 ## 4. What is built, in detail
 
-Test counts are from `pnpm test` and are all currently green: **375 tests**, of
-which **212** need no infrastructure (`pnpm test:unit`).
+Test counts are from `pnpm test` and are all currently green: **379 tests**, of
+which **216** need no infrastructure (`pnpm test:unit`).
 
 Every task below has a command that proves it; they are listed with the task.
 
@@ -680,7 +680,7 @@ useless for the one job it has. It is now a label, `cbk_anon_<ref4>` (**D-218**)
 
 Two lanes, and the split is the point.
 
-**`unit`** — install, `pnpm typecheck`, `pnpm build`, `pnpm test:unit`: **212 tests
+**`unit`** — install, `pnpm typecheck`, `pnpm build`, `pnpm test:unit`: **216 tests
 across 11 packages**, no infrastructure, about a minute. The build is in this lane
 because `tsc --noEmit` is happy about plenty of things `next build` refuses. Every package got a `test:unit` script
 that excludes `**/*.e2e.test.ts`, which meant renaming the DB-dependent tests to say
@@ -693,7 +693,7 @@ fails here instead of passing by accident on a runner that happens to have some.
 D-185 auth hardening are enforced in CI, not just locally), brings up the same Docker
 staging substitute the dev loop uses, migrates, generates a master key, enables the
 application role, seeds the image onto the data node, runs `staging.sh verify`, and
-then runs the full **375-test** suite. On failure it dumps `staging.sh status` and
+then runs the full **379-test** suite. On failure it dumps `staging.sh status` and
 both containers' logs, because a red CI run with no diagnostics costs a full
 reproduce-locally cycle.
 
@@ -721,101 +721,127 @@ re-running with the database URL on a dead port produced a cache hit and printed
 "10 successful" without executing a thing. Both are fixed (**D-223**): the file is
 renamed, `test` and `test:unit` are `cache: false`, and an audit of all 32 test
 files says it was the only leak. The numbers above are from after the fix.
-### P1g — the dashboard shell · done · 9 tests
+### P1g — the dashboard shell · done · 13 tests
 
 `apps/dashboard`, a Next.js App Router app that is a pure client of the platform
 API (D-130): no API routes, no BFF, no server-side control-plane access. Session
 cookies for auth, TanStack Query as the entire data layer — the server cache *is*
 the app state, so there is no store.
 
-**It is built on the design system that already existed.** `design-exports/07-html`
-holds `tokens.css` and `components.css` rendered from the Pencil boards, and that
-turned out to be a component library covering every piece the shell needs: button,
-field, card, badge, banner, menu, switcher, empty state, table, skeleton. So the
-app uses those classes rather than Tailwind + shadcn/ui (**D-220** narrows D-025's
-UI half). Adopting Tailwind would have meant re-expressing 40 role tokens in a
-second naming system, then mapping shadcn's own `background`/`foreground`/`primary`
-onto ours as a third layer — or running both and guaranteeing that a `cb-btn` and a
-shadcn `Button` drift apart while claiming to be the same design.
+**The first version of this was rejected, and the rejection was right.** The colours
+were correct and the mechanics were not: it was a page router with panels. Three
+projects filled a screen that should hold twenty, nothing was reachable from the
+keyboard, there was no way to create an organization at all, and the design system's
+own instructions — "dense by default: 52px rows", "skeletons match the shape of the
+content they replace" — had been ignored while its tokens were honoured.
 
-Instead of diffing against the export byte-for-byte, a test enforces the two rules
-the export exists to communicate, which is a stronger guard: **no stylesheet may
-name a ramp step** (D-178 — "a component that names a ramp step directly is a bug",
-and it is a bug that looks perfectly fine in light mode and surfaces months later
-as an unreadable dark theme), and **no drop shadows** (D-179). Both were verified
-by adding a violation and watching them fail. The shadow rule had to be rewritten
-first: the original banned `box-shadow` outright and failed on the design system's
-*own* focus ring and the active nav item's 3px accent bar, which are required. The
-rule is the blur radius — a non-zero blur is elevation, a zero blur is a ring.
+The response was not a nicer set of screens. It was
+**[docs/09-dashboard/05-ux-standards.md](docs/09-dashboard/05-ux-standards.md)**:
+the interaction contract, written as rules with reasons, ending in a twenty-question
+gate. **D-224 makes it binding and makes the gate run on every UI change**, enforced
+as the `ux-review` role in [.claude/skills/](.claude/skills/ux-review/SKILL.md) and
+pointed at from [CLAUDE.md](CLAUDE.md). The reference bar is named in the document —
+Supabase's dashboard — and so is the reason it is reachable now rather than after a
+final redesign: its depth is *shell* properties, not features, and shell properties
+can be met with four pages.
 
-**What was built:** login, signup, an org switcher, the projects grid, the
-create-project flow, and the project overview. Plus a `/no-org` page, because a
-signed-in account with no organization is a real state — an unaccepted invite, a
-deleted org — and bouncing it to `/login` would be telling the user something
-untrue.
+**What the shell does**
 
-**Pieces worth naming:**
+- **Context is always visible and always switchable from where you are.** The
+  breadcrumb is `org / project` and both segments are menus, so switching either
+  never requires going up to a list page first.
+- **The chrome does not re-render on navigation.** It lives in route *layouts*, so
+  moving between project sections repaints the content region only — verified by
+  marking the sidebar and top-bar DOM nodes and confirming they survive a real
+  client-side navigation.
+- **A command palette on `⌘K`** (`Ctrl K` off macOS, detected) that navigates,
+  switches organization and project, creates either, copies a connection string or
+  a project ref, toggles the theme and signs out. Matching is *subsequence*, so
+  `grn` finds "Switch to Greenbull" — a palette that needs exact word order is one
+  you have to remember rather than guess at. **D-226 makes it a requirement**: every
+  capability a menu exposes is also in the palette, and new capabilities land there
+  first, which is also what forces every action to have a name and an invocable
+  handler for the CLI later.
+- **`g p` / `g o` / `g c` / `g k`** to jump, `?` for the shortcut sheet, `Esc` closes
+  the topmost layer. Global keys never fire while the user is typing, and `g` is a
+  prefix that expires after a second so a stray keystroke does not silently arm a
+  jump.
+- **Dense tables by default**, cards available where identity matters, and the choice
+  remembered per browser. The toggle is hidden when there is nothing to switch
+  between — a control that cannot do anything reads as broken, not as disabled.
+- **Every mutation answers.** The pressed control shows pending and refuses a second
+  submit; completion produces a toast naming what happened; copying reports through
+  the toast layer rather than by mutating its own label, because the user's eyes are
+  on the field they are about to paste into.
+- **One error surface for the whole app** — platform `code`, a sentence, and the
+  `request_id` with a copy button (D-032) — so no page can render `String(error)`
+  and drop the only thing support can act on.
+- **Motion**: 120–180 ms, `transform`/`opacity` only, fully disabled under
+  `prefers-reduced-motion` (**D-225**, resolving OQ-170).
 
-- **CORS had to exist first** (**D-219**). The dashboard is the first browser
-  client, so every call is cross-origin *with* the session cookie. Allowlist only,
-  no wildcard ever, `Vary: Origin` on every response, and **empty by default** — a
-  `localhost:3000` fallback would be convenient and would also ship to production
-  the first time someone forgot the variable, since the service starts fine either
-  way. Verified live: the dashboard origin gets the full header set,
-  `https://evil.example` gets `vary: Origin` and nothing else.
-- **One error surface for the whole app.** The design system makes it binding that
-  every error shows the platform `code`, a sentence, and the `request_id` with a
-  copy button (D-032). One component, so no page can render `String(error)` and
-  drop the id — the only thing support can act on.
-- **The idempotency key is minted once per form, not per click** (D-055). A
-  double-click, a flaky connection or an impatient reload must not produce two
-  databases.
-- **Progress is polled, not streamed** (**D-221**, resolving OQ-043 for create and
-  resume). Provisioning is ~2.5 s measured; a stream would need a
-  connection-holding endpoint and a reconnect story to answer what two GETs answer.
-  OQ-043 stays open for restore-from-backup, which takes minutes.
+**Pages**: login, signup, projects (table/cards), new project, project overview,
+Connect, API keys, new organization, and `/no-org`. Three project sections and one
+org section, all of which are real — the IA's full sidebar is Phase 2+ and none of
+it appears until it works.
 
-**The overview page is a stub, and says so on the page** (**D-222**). The IA
-specifies three zones; two of them cannot be honest yet. Per-service health needs
-PostgREST, Auth and Storage — a card reading "Auth: green" would be a claim about a
-service that is not deployed. The sparklines need a metrics path and OQ-149 has not
-chosen one; inventing it inside a component is the hardest place to change it. What
-the page does show is everything the control plane actually knows: state, region,
-plan, the recovery deadline when soft-deleted, the connection strings, and the API
-keys — `anon` in full because it is publishable by design, `service_role` as its
-`cbk_srv_<ref4>` label because revealing it is audited and that flow belongs with
-the keys page.
+**Connect** renders the same credentials four ways — URI, `psql`, `.env`, Node — with
+the selected tab in the URL, because "open Connect, then click the third tab" is the
+instruction gate question 3 exists to eliminate. **API keys** shows `anon` in full
+because it is publishable by design, and `service_role` as its label with the exact
+`curl` to read it, because the audited reveal needs a confirmation flow that states
+what the key does and that looking is recorded — a half-built version would write
+audit rows saying a key was revealed when nothing displayed it.
 
-**Two bugs the browser found that no test would have.**
+**Two guards on the visual layer**, both proven by introducing a violation and
+watching them fail: no stylesheet may name a ramp step (D-178) and there are no drop
+shadows (D-179). The shadow rule had to be rewritten first — banning `box-shadow`
+outright failed on the design system's *own* focus ring and the 3px active-nav bar,
+which are required, so the rule is the blur radius. A third guard came out of a bug
+the user spotted: **`--cb-space-5` does not exist**, the 4-point scale being
+4/8/12/16/24/32/48, and an undefined custom property with no fallback invalidates the
+whole declaration rather than falling back — so five paddings silently became zero
+and the palette's input sat flush against its edge. A test now fails on any token
+reference that would collapse.
 
-The first was mine twice over. A new project's status is **`creating`**, not
-`provisioning` — I had hand-written the list of states. The badge went neutral,
-which is cosmetic, and the overview page concluded the project was not settling and
-**stopped polling**, which is not: the page would have sat on CREATING until the
-user reloaded, on the very first thing anyone does with the product. The fix is to
-stop keeping a list — `TONE` is typed `Record<ProjectStatus, string>` against the
-enum in `@corebase/types`, so a new state is now a compile error, and a test
-asserts the settling and resting sets partition the enum with nothing left
-undecided. Verified the type bites by deleting a key and watching `tsc` fail.
+**What the first gate run found, in the code written to satisfy it**
 
-The second was a hydration mismatch: the theme script sets `data-theme` on `<html>`
-before React hydrates, by design, and React cannot tell an intentional
-pre-hydration mutation from a bug. `suppressHydrationWarning` on that one element.
+- **Q6** — the palette was missing "Copy connection string" and "Copy project ref",
+  which the projects table's row menu already had. That is precisely the decay D-226
+  exists to prevent, and there was a `void conn;` line in the palette proving I had
+  noticed and moved on.
+- **Q12** — the list ignored `pagination.next_cursor` and printed "Showing 20 of 20"
+  for an organization with 25 projects. Now an infinite query with a truthful count
+  and a Load-more.
+- **Q7** — `Esc` closed the palette but focus landed on `<body>`, because the input's
+  `autoFocus` had already moved focus by the time the layer's own effect captured
+  "what had focus before". The capture has to happen at the event that opens the
+  layer, which is now a shared hook, and both layers were re-verified by asserting
+  `document.activeElement` after Escape.
 
-Also corrected by looking at it: the org switcher had a "+ New project" row copied
-from the board — but that board is the *project* switcher. The IA gives the org
-switcher exactly one job, swapping `[slug]`, and having the create action in two
-places would make neither the obvious one.
+**Bugs found by looking at it rather than by testing it**, several of them caught by
+the user: a project's status is `creating`, not `provisioning`, so the badge went
+neutral and — much worse — the overview decided the project was not settling and
+**stopped polling**, meaning it would have sat on CREATING until reload; the state
+map is now `Record<ProjectStatus, …>` against the enum, so a new state is a compile
+error. Per-character `<span>`s in the palette's match highlighting destroyed text
+shaping, rendering "G r e e n b u l l". Anchors styled as buttons carried the
+browser's underline. "you are a owner". The org switcher had a uniform violet circle
+per row — decoration in the shape of data — now the organization's initial. Seven
+identical squares down the sidebar, now drawn glyphs. And a hydration mismatch from
+the deliberate pre-paint theme script, scoped with `suppressHydrationWarning` on the
+one element where it is true.
 
-**Verified by driving it, not by asserting about it.** Signed up through the API,
-created two orgs, then in a browser: signed in, watched the redirect land on the
-projects page, opened the org switcher, created a project, watched the state go
-`creating` → `ready` without a reload, switched to the second org and confirmed it
-shows zero projects, signed out, hit a project URL directly and landed on
-`/login?next=%2Fproject%2F…`, signed back in and arrived at that exact project. Then
-the real test: **the connection string the page displayed was pasted into `psql`,
-which created a table and inserted a row.** Both themes rendered and the toggle
-cycles dark → system → light with the stored value, attribute and label in step.
+**The logo** is the supplied artwork used verbatim — a diamond with its centre
+punched out by `fillRule="evenodd"` — recoloured to role tokens, and with the
+accessible name as an `aria-label` rather than `<title id="title">` so two marks on
+one page do not collide on ids. An earlier attempt of mine was scrapped because at
+26px it read unmistakably as a person icon.
+
+**Verified by driving it.** Signed in, switched organizations, created projects,
+watched `creating` → `ready` with no reload, opened Connect and pasted its string
+into `psql` where it created a table and inserted a row, read the keys page, ran the
+palette from the keyboard, checked focus restoration on both layers, confirmed the
+chrome survives navigation, and looked at every screen in both themes.
 
 ## 5. Rules the code follows
 
@@ -856,9 +882,9 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-Forty decisions came out of running the thing rather than planning it — D-184…D-210
-from Milestone 0, D-211…D-223 from Phase 1. Full text in the
-[decision log](docs/00-foundation/05-decision-log.md); the log holds D-001…D-223 and is
+Forty-three decisions came out of running the thing rather than planning it —
+D-184…D-210 from Milestone 0, D-211…D-226 from Phase 1. Full text in the
+[decision log](docs/00-foundation/05-decision-log.md); the log holds D-001…D-226 and is
 binding when two documents disagree.
 
 | ID | What changed | Why it surfaced |
@@ -903,6 +929,9 @@ binding when two documents disagree.
 | D-221 | Create and resume progress is polled, not streamed (resolves OQ-043 for those flows) | Provisioning is ~2.5 s; a stream needs a connection-holding endpoint and a reconnect story to answer what two GETs answer |
 | D-222 | The overview page ships without health cards or sparklines and says so on the page | "Auth: green" would be a claim about a service that is not deployed, and OQ-149 must not be settled from inside a component |
 | D-223 | Test results are never cached, and `*.e2e.test.ts` is a load-bearing filename | Turbo hashes files, not databases — a cached pass was replayed against dead ports and printed a green lane that never ran |
+| D-224 | The [UX standards](docs/09-dashboard/05-ux-standards.md) document is binding, and its 20-question gate runs on every UI change | The first shell honoured every token and had no interaction contract: right in every colour, wrong in every mechanic |
+| D-225 | Motion is 120–180 ms, transform/opacity only, disabled under `prefers-reduced-motion` (resolves OQ-170) | "No motion at all" is right for a static board and wrong for a shell — layers arriving without direction is why an interface feels abrupt |
+| D-226 | The command palette and full keyboard reachability are shell requirements; every menu capability is also in the palette | It converts "learn where the button is" into "know what it is called", and it forces every action to have a name a CLI can reuse |
 
 ## 7. Measurements
 
@@ -1000,17 +1029,31 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   and the workflow is written, but the first scheduled run is the real test. The
   same is true of the whole CI file: the recipe was replayed locally from a nuked
   stack, which is strong evidence and not the same thing.
-- The dashboard covers the shell only. No members page, no billing, no org
-  settings, no audit viewer, no table editor, no SQL editor, no keys page — so the
-  audited `service_role` reveal is not reachable from the UI. Creating an
-  *organization* has an endpoint and no screen, which is why `/no-org` can explain
-  the state but not resolve it.
-- The dashboard has no pause/resume affordance because the endpoints do not exist
-  yet (Phase 2). That also means D-131's auto-resume-on-open is not implemented,
-  and a `paused` project currently renders as a badge and nothing else.
-- No dashboard tests beyond the design-system and state-machine guards. The flows
-  were verified by driving a browser by hand; there is no Playwright suite, so a
-  regression in the login or create flow would not be caught by CI.
+- The dashboard covers the shell only: no members page, no billing, no org
+  settings, no audit viewer, no table editor, no SQL editor. The audited
+  `service_role` reveal is therefore not reachable from the UI — the keys page shows
+  the `curl` instead, deliberately, because the reveal needs a confirmation stating
+  that looking is recorded.
+- No project deletion in the UI. The endpoint exists and the recovery window is
+  visible on a deleted project, but the destructive dialog that types the project
+  name to confirm (design system §5 rule 4) is not built, so gate question 15 has
+  nothing to answer for yet.
+- No pause/resume affordance, because the endpoints are Phase 2. That also means
+  D-131's auto-resume-on-open is unimplemented and a `paused` project renders as a
+  badge and nothing else.
+- **No browser test suite.** Every flow was verified by driving a real browser by
+  hand, and the keyboard contract by asserting `document.activeElement` in the page,
+  but none of that runs in CI — so a regression in login, create, or focus
+  restoration would not be caught. This is the largest known gap in the dashboard
+  and the obvious next investment: the 20-question gate is a human process, and
+  about eight of its questions are mechanically checkable.
+- Gate questions deferred rather than passed: **Q9/Q10 have no side panel or second
+  view to judge yet** (OQ-180 leaves panel URL state undecided until there is a
+  second one), and the palette searches destinations and the user's own projects but
+  no other data (OQ-179).
+- The projects list paginates with a Load-more rather than a cursor in the URL, so a
+  second page of results is not linkable — acceptable while an org has tens of
+  projects, and a real gap against gate question 3 at hundreds.
 
 ## 9. Where to look when you pick this up
 
@@ -1032,3 +1075,5 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
 | What does the UI look like? | run the dashboard (§2), or [design-exports/07-html](design-exports/07-html) served over HTTP |
 | How does the dashboard talk to the API? | `apps/dashboard/src/lib/api.ts` — envelope, CSRF, 401, credentials, all in one place |
 | Why is the dashboard not Tailwind? | D-220 in the [decision log](docs/00-foundation/05-decision-log.md) |
+| **How must a UI change behave?** | [docs/09-dashboard/05-ux-standards.md](docs/09-dashboard/05-ux-standards.md) — §8 is the gate every change runs |
+| How do I run that gate? | the `ux-review` skill in [.claude/skills/](.claude/skills/ux-review/SKILL.md) |

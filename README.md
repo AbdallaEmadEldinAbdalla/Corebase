@@ -28,7 +28,11 @@ Every mutating call leaves a row in an append-only audit table — enforced by a
 
 Each project gets its own ES256 keypair with `anon` and `service_role` keys, and publishes `GET /v1/projects/:ref/.well-known/jwks.json` so a customer's services can verify tokens without calling us.
 
-**The dashboard shell (P1g).** A Next.js app that is a pure client of the platform API — no BFF, no server-side control-plane access. Sign in, switch organizations, see your projects, create one and watch it go `creating` → `ready` without reloading, then copy a connection string that works. It is built on the design system that already existed in `design-exports/` rather than on Tailwind + shadcn (D-220): those exports turned out to be a complete component library, and a second component system for the same design would only drift from it. Both themes ship, and a test enforces the two rules that decay silently — no stylesheet may name a ramp step, and there are no drop shadows.
+**The dashboard shell (P1g).** A Next.js app that is a pure client of the platform API — no BFF, no server-side control-plane access. Sign in, switch organizations, see your projects in a dense table, create one and watch it go `creating` → `ready` without reloading, then copy a connection string that works. Context lives in a breadcrumb where every segment is a switcher, the chrome never re-renders when you navigate inside it, and everything is reachable from the keyboard: `⌘K` for a command palette that navigates, switches, creates and copies, `g p` / `g o` / `g c` / `g k` to jump, `?` for the list.
+
+It is built on the design system that already existed in `design-exports/` rather than on Tailwind + shadcn (D-220): those exports turned out to be a complete component library, and a second component system for the same design would only drift from it. Both themes ship, and tests enforce the three rules that decay silently — no stylesheet may name a ramp step, no drop shadows, and no reference to a token that does not exist.
+
+**How the UI stays consistent.** The first version of this shell was right in every colour and wrong in every mechanic, so the fix was not nicer screens but a written interaction contract: [docs/09-dashboard/05-ux-standards.md](docs/09-dashboard/05-ux-standards.md), ending in a 20-question gate that **runs on every UI change** (D-224) as the `ux-review` role in [.claude/skills/](.claude/skills/ux-review/SKILL.md). Its first run found two real failures in the code written to satisfy it — the palette was missing two actions a row menu already had, and the project list printed "Showing 20 of 20" while hiding a second page.
 
 All three Phase-1 exit criteria are met. Above the database, the data plane is still Phase 2+: no data API (PostgREST), no end-user auth service, no storage, no realtime — and the dashboard is a shell, so there is no table editor, SQL editor, members page or billing yet.
 
@@ -63,13 +67,13 @@ There is no seeded password anywhere, so create an account on `/signup`; a new a
 
 The demo script creates a project, waits for it, connects to the database it made with the credentials the API handed back, runs real SQL, and deletes it — using only `curl` and `psql`, which is exactly what a customer has.
 
-The full suite is **375 tests**, integration included; they need the staging stack above and **fail rather than skip** without it:
+The full suite is **379 tests**, integration included; they need the staging stack above and **fail rather than skip** without it:
 
 ```bash
 pnpm test
 ```
 
-The unit lane is **212 of those** and needs no infrastructure at all — it is what CI runs first, in about a minute:
+The unit lane is **216 of those** and needs no infrastructure at all — it is what CI runs first, in about a minute:
 
 ```bash
 pnpm test:unit
