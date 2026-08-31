@@ -54,6 +54,7 @@ const env = {
   CB_NODE_HOSTNAME: 'data-1',
   CB_STATIC_TOKEN: TOKEN,
   PORT: String(PORT),
+  CB_METRICS_PORT: process.env.CB_METRICS_PORT ?? '9114',
 };
 
 const pool = new Pool({ connectionString: env.CB_CONTROL_DATABASE_URL, max: 6 });

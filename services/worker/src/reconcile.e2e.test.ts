@@ -316,7 +316,9 @@ describe('T8 — bounded repair (D-065)', () => {
     expect(rows[0]!.n).toBe(1);        // no second job piled on
   });
 
-  t('the default limit is three per hour', () => {
+  it('has a default limit of three per hour', () => {
+    // Pure constant — no staging needed, so it uses `it` rather than the
+    // staging-gated `t`.
     expect(REPAIR_LIMIT_PER_HOUR).toBe(3);
   });
 });

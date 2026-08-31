@@ -25,6 +25,16 @@ beforeAll(async () => {
     await pool.query('select 1');
     redis = createRedis(REDIS); await redis.ping();
     queue = createQueue(redis);
+    // A worker connected to the same Redis will consume the deliveries these
+    // tests assert on, and the failure looks like a queue bug rather than a
+    // second consumer. This has cost debugging time twice; name it instead.
+    const rival = await queue.getWorkers();
+    if (rival.length > 0) {
+      throw new Error(
+        `${rival.length} worker(s) are already consuming this queue — stop scripts/dev.sh ` +
+        '(or any bench harness) before running the suite; they will eat the deliveries ' +
+        'these tests are asserting on.');
+    }
     repo = createJobRepo(pool);
     const { rows } = await pool.query<{ id: string }>(
       `insert into organizations (name, slug) values ('W','w-test')
