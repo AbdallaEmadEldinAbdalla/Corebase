@@ -31,15 +31,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with: { version: 9 }
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      # No `version` here on purpose: package.json's `packageManager` field is
+      # the single source of truth, and pnpm/action-setup fails outright when both
+      # name a version. Pinning it twice is how the two drift.
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
+      - name: build
+        # The dashboard is a Next.js app: `tsc --noEmit` is happy about plenty of
+        # things `next build` refuses, from a client hook in a server component to
+        # a page that cannot prerender. A page that does not build is broken, and
+        # this is the cheapest place to find out.
+        run: pnpm build
       - name: unit tests (no infrastructure)
         # Pointed at dead ports on purpose: if anything in this lane reaches for a
         # database, it must fail here rather than pass by accident on a runner
@@ -54,10 +62,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with: { version: 9 }
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      # No `version` here on purpose: package.json's `packageManager` field is
+      # the single source of truth, and pnpm/action-setup fails outright when both
+      # name a version. Pinning it twice is how the two drift.
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
@@ -67,7 +77,7 @@ jobs:
         # The same image the worker puts on a data node: the extension allowlist
         # (D-078) and the auth hardening (D-185) are enforced at build time, so a
         # regression in either fails here rather than on a customer's database.
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: infra/docker/postgres
           tags: corebase/postgres:17.5

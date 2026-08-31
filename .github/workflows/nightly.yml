@@ -18,14 +18,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with: { version: 9 }
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      # No `version` here on purpose: package.json's `packageManager` field is
+      # the single source of truth, and pnpm/action-setup fails outright when both
+      # name a version. Pinning it twice is how the two drift.
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with: { node-version: '22', cache: pnpm }
       - run: pnpm install --frozen-lockfile
 
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: infra/docker/postgres
           tags: corebase/postgres:17.5
