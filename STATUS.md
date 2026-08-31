@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-08-31 · **Phase:** Phase 1 (the platform surface) · **Milestone 0 complete** (ten tasks + retro) · **Phase 1 complete** — P1a–P1g, all three exit criteria met
+**Last updated:** 2026-08-31 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2: P2a done**
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -862,6 +862,90 @@ into `psql` where it created a table and inserted a row, read the keys page, ran
 palette from the keyboard, checked focus restoration on both layers, confirmed the
 chrome survives navigation, and looked at every screen in both themes.
 
+---
+
+## 4c. Phase 2 — the database platform
+
+Per the [phase plan](docs/14-roadmap/01-phase-plan.md): PgBouncer per project,
+the `DATABASE_URL`/`DIRECT_DATABASE_URL` distinction, credential rotation,
+pause/resume with idle detection, disk quotas and the disk-full ladder,
+bin-packing placement, and cgroup limits.
+
+**Exit criteria** (four, and the first one is gated by D-209):
+
+1. 100 test projects on one node within RAM budget; density matches the cost model
+   or the model is corrected. **D-209 constrains what this may conclude**: the
+   planning numbers may only be re-based on a measurement with the full triplet, on
+   x86 launch-SKU-class hardware, with ≥50 co-resident projects and client load. A
+   run on this ARM laptop can inform the risk register and may not move the model.
+2. Pause after the idle threshold; resume in target time; no data loss across 50
+   pause/resume cycles.
+3. A project that fills its disk quota goes read-only and recovers when space is
+   freed; the node itself never suffers.
+4. Credential rotation works with active connections, with documented behaviour.
+
+### P2a — a private network per project · done · 8 tests
+
+Phase 2 opens with substrate rather than a feature. The pooler's rendered
+`pgbouncer.ini` says `host=db` and PostgREST's `db-uri` will say the same, so both
+need a network the project's containers share and a stable name for Postgres on it
+(**D-228**). `cb-<ref>-net`, derived from the ref rather than stored — exactly one
+exists per project and nothing allocates it, so a column would be a second place
+for the same fact to be wrong. The published host port stays, because
+`DIRECT_DATABASE_URL` is a contract.
+
+`create_network` runs before `start_container`, which joins at *create* time rather
+than attaching after start: a container that starts unattached resolves nothing for
+the first moments of its life, and for the pooler that window is exactly when it
+first reaches for `db`. `start_container` also *ensures* the network rather than
+trusting the step before it — every other step here is safe run alone, this one
+briefly was not, and the symptom was a Docker 404 from inside container start that
+reads as an infrastructure fault rather than as a skipped step.
+
+**The network's whole lifecycle is covered** (**D-229**): removed at soft-delete,
+not only at purge, because it holds no data and does hold a subnet from the node's
+address pool — finite, and otherwise held for a week per deleted project.
+`verify_gone` asserts its absence, and reconciliation gained an `orphan_network`
+drift class. That is not hypothetical: 18 leaked from failed runs in one afternoon,
+and a node that exhausts its address pool cannot create the next project's network
+at all.
+
+Proven on a real node rather than in a spec: a second container on the network
+resolves `db` and `psql` connects to Postgres through it, and a network with a
+container attached refuses removal — which is what makes the purge ordering
+load-bearing rather than stylistic.
+
+### The bug P2a uncovered, which was not P2a's
+
+Adding two saga steps turned the worker suite red, and chasing it found something
+older and much worse. **The Engine API client was using Node's global `https`
+agent, which has had `keepAlive: true` on by default since Node 19** — so every
+call parked a TLS socket without bound. A run of ~130 provisioning operations broke
+a node's listener *permanently*: every later connection was reset, from our client
+and from the `docker` CLI alike, until the whole engine was restarted.
+
+It had presented as "Docker Desktop is flaky" and is almost certainly the cause of
+the two earlier engine deaths recorded in this project. One pooled agent per client
+with `maxSockets: 8` (**D-230**), and the worker suite went from 58 failures to 0
+with the node still reachable after all 387 tests — which it had not been at any
+point that day.
+
+Two more things a live `demo.sh` run surfaced that no test covered. The demo assumed
+the account had exactly one organization, so running the API test suite broke it —
+the suite creates orgs with the same static token, and the API is right to refuse to
+guess (**D-231**; clients resolve the org explicitly now). And `--purge` looked
+broken because the purge scan defaults to an hour, which is correct in production
+and wrong in a dev loop whose whole point is watching the purge happen.
+
+**Three hand-kept lists of saga step names** in the e2e suites were replaced with
+lists read from the sagas. Inserting two steps broke all three at once — one
+silently stopped removing the network, and `verify_gone` caught it, which is exactly
+what that step exists for. Third time a duplicated list has cost time here.
+
+Verified end to end after every change: create → provision → `psql` → `CREATE
+TABLE` → soft-delete → purge in 18s, leaving the node holding only Docker's own
+three networks.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -901,10 +985,10 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-Forty-four decisions came out of running the thing rather than planning it —
-D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1. Full text in the
-[decision log](docs/00-foundation/05-decision-log.md); the log holds D-001…D-227 and is
-binding when two documents disagree.
+Forty-eight decisions came out of running the thing rather than planning it —
+D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-231 from Phase 2.
+Full text in the [decision log](docs/00-foundation/05-decision-log.md); the log holds
+D-001…D-231 and is binding when two documents disagree.
 
 | ID | What changed | Why it surfaced |
 |---|---|---|
@@ -952,6 +1036,10 @@ binding when two documents disagree.
 | D-225 | Motion is 120–180 ms, transform/opacity only, disabled under `prefers-reduced-motion` (resolves OQ-170) | "No motion at all" is right for a static board and wrong for a shell — layers arriving without direction is why an interface feels abrupt |
 | D-226 | The command palette and full keyboard reachability are shell requirements; every menu capability is also in the palette | It converts "learn where the button is" into "know what it is called", and it forces every action to have a name a CLI can reuse |
 | D-227 | No directory this repo writes to may be a compose bind-mount *source*; certs are copied out of the named volume by `docker exec cat` | On Linux the Docker daemon creates a missing bind-mount source as root, locking the scripts out; Docker Desktop remaps it, so the defect was invisible on macOS for months |
+| D-228 | Each project gets a private bridge network, `cb-<ref>-net`, with Postgres aliased `db`; the name is derived, not stored | The pooler and PostgREST both configure `host=db`, so a stable alias keeps those templates from ever learning a project's ref |
+| D-229 | The network is removed at soft-delete, not only at purge, and `verify_gone` asserts its absence | It holds no data and does hold a subnet from a finite node pool; 18 leaked in one afternoon, and an exhausted pool blocks the next project entirely |
+| D-230 | The Engine API client uses one pooled agent per node with `maxSockets: 8`; never the global agent | Node's global agent has had keepAlive on since v19, so ~130 operations broke a node's listener permanently — it read as "Docker Desktop is flaky" for weeks |
+| D-231 | No client may rely on the API's single-organization convenience default | `demo.sh` worked until the account had two orgs, which the test suite creates; the API is right to refuse to guess |
 
 ## 7. Measurements
 
@@ -994,9 +1082,12 @@ enforces it (P1b), and CI runs both suites on every PR (P1f). The dashboard shel
 (P1g) covers login, signup, the org switcher, the projects grid, the create-project
 flow and a project overview.
 
-**Next is Phase 2**, the database platform: PgBouncer and the pooled connection
-string that is currently allocated but dead, pause/resume, disk quotas, and the
-credential rotation path.
+**Phase 2 is at P2a of seven planned steps.** Done: the per-project network the
+pooler needs. Remaining: PgBouncer itself and the
+`DATABASE_URL`/`DIRECT_DATABASE_URL` contract, pause/resume with idle detection,
+credential rotation, disk quotas and the disk-full ladder, bin-packing placement,
+and the density measurement — which D-209 already constrains, since this hardware
+cannot satisfy its conditions.
 
 The measurement that would move the cost model most is the one Phase 1/2 makes
 possible:
@@ -1033,7 +1124,9 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   survive container replacement. Belongs with backups, not with provisioning.
 - No warm pool (D-071). Creates are the cold path; M-002 says that is fine for now.
 - The pooler port is allocated and recorded but nothing listens on it — PgBouncer is
-  a later task, and the `pooled` connection string will not connect until then.
+  P2b, and the `pooled` connection string will not connect until then. The network
+  it will attach to now exists (P2a), so what is missing is the container and its
+  `auth_query` setup, not the substrate.
 - `corebase_admin` exists as a role with no password; the audited dashboard path that
   needs it does not exist yet.
 - `verify-email` and `password-reset` are **absent, not stubbed** — both need the

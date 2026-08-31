@@ -8,7 +8,7 @@ Corebase is a developer-focused Backend-as-a-Service: a developer creates a proj
 
 ## Status
 
-**Milestone 0 complete; Phase 1 complete.**
+**Milestone 0 complete; Phase 1 complete; Phase 2 started.**
 
 **The provisioning spine (Milestone 0).** `POST /v1/projects` returns a real, isolated PostgreSQL 17.5 database on a data node about **2.5 seconds** later, with its own volume, cgroup limits, the full role model, envelope-encrypted credentials, and a connection string you can `psql` into immediately. Twenty consecutive creates are measured end to end.
 
@@ -33,6 +33,8 @@ Each project gets its own ES256 keypair with `anon` and `service_role` keys, and
 It is built on the design system that already existed in `design-exports/` rather than on Tailwind + shadcn (D-220): those exports turned out to be a complete component library, and a second component system for the same design would only drift from it. Both themes ship, and tests enforce the three rules that decay silently — no stylesheet may name a ramp step, no drop shadows, and no reference to a token that does not exist.
 
 **How the UI stays consistent.** The first version of this shell was right in every colour and wrong in every mechanic, so the fix was not nicer screens but a written interaction contract: [docs/09-dashboard/05-ux-standards.md](docs/09-dashboard/05-ux-standards.md), ending in a 20-question gate that **runs on every UI change** (D-224) as the `ux-review` role in [.claude/skills/](.claude/skills/ux-review/SKILL.md). Its first run found two real failures in the code written to satisfy it — the palette was missing two actions a row menu already had, and the project list printed "Showing 20 of 20" while hiding a second page.
+
+**Phase 2 (the database platform) has started.** Each project now gets a private network with Postgres aliased `db` — the substrate the connection pooler and, later, PostgREST both need, since their rendered configs say `host=db`. Chasing a test failure it caused turned up something older: the worker was opening unbounded keep-alive connections to data nodes through Node's global HTTP agent, which had been breaking the Docker engine outright and reading as "Docker Desktop is flaky" for weeks.
 
 All three Phase-1 exit criteria are met. Above the database, the data plane is still Phase 2+: no data API (PostgREST), no end-user auth service, no storage, no realtime — and the dashboard is a shell, so there is no table editor, SQL editor, members page or billing yet.
 
@@ -67,7 +69,7 @@ There is no seeded password anywhere, so create an account on `/signup`; a new a
 
 The demo script creates a project, waits for it, connects to the database it made with the credentials the API handed back, runs real SQL, and deletes it — using only `curl` and `psql`, which is exactly what a customer has.
 
-The full suite is **379 tests**, integration included; they need the staging stack above and **fail rather than skip** without it:
+The full suite is **387 tests**, integration included; they need the staging stack above and **fail rather than skip** without it:
 
 ```bash
 pnpm test
