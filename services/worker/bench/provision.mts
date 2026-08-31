@@ -28,8 +28,9 @@ const OUT_DIR = process.env.CB_BENCH_OUT ?? join(ROOT, 'docs/14-roadmap/measurem
 
 const env = {
   ...process.env,
-  CB_CONTROL_DATABASE_URL: process.env.CB_CONTROL_DATABASE_URL
-    ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control',
+  // The services run as the least-privilege app role (P1b); this harness's own
+  // queries below use the owner, because fixtures are admin work.
+  CB_CONTROL_DATABASE_URL: appDatabaseUrl(ROOT),
   CB_REDIS_URL: process.env.CB_REDIS_URL ?? 'redis://127.0.0.1:56379',
   CB_DOCKER_HOST: process.env.CB_DOCKER_HOST ?? '127.0.0.1',
   CB_DOCKER_PORT: process.env.CB_DOCKER_PORT ?? '2376',

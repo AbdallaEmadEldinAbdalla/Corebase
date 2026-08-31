@@ -25,6 +25,7 @@ import { promisify } from 'node:util';
 import { join, resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { request as httpsRequest } from 'node:https';
+import { appDatabaseUrl, ownerDatabaseUrl } from './staging-env.mts';
 import { Pool, Client } from 'pg';
 
 const exec = promisify(execFile);
@@ -40,8 +41,9 @@ const NODE_CONTAINER = process.env.CB_NR_NODE_CONTAINER ?? 'cb-data-node';
 
 const env = {
   ...process.env,
-  CB_CONTROL_DATABASE_URL: process.env.CB_CONTROL_DATABASE_URL
-    ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control',
+  // The services run as the least-privilege app role (P1b); this harness's own
+  // queries below use the owner, because fixtures are admin work.
+  CB_CONTROL_DATABASE_URL: appDatabaseUrl(ROOT),
   CB_REDIS_URL: process.env.CB_REDIS_URL ?? 'redis://127.0.0.1:56379',
   CB_DOCKER_HOST: DOCKER_HOST,
   CB_DOCKER_PORT: String(DOCKER_PORT),
@@ -63,7 +65,7 @@ const env = {
   CB_RECONCILE_INTERVAL_MS: process.env.CB_RECONCILE_INTERVAL_MS ?? '5000',
 };
 
-const pool = new Pool({ connectionString: env.CB_CONTROL_DATABASE_URL, max: 6 });
+const pool = new Pool({ connectionString: ownerDatabaseUrl(), max: 6 });
 const auth = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
 
 const tls = {

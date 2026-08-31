@@ -28,6 +28,7 @@ import { join, resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { request as httpsRequest } from 'node:https';
 import { Pool, Client } from 'pg';
+import { appDatabaseUrl, ownerDatabaseUrl } from '../bench/staging-env.mts';
 
 const ROOT = resolve(import.meta.dirname, '../../..');
 const PORT = Number(process.env.CB_KM_API_PORT ?? 8097);
@@ -39,8 +40,7 @@ const DOCKER_PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
 
 const env = {
   ...process.env,
-  CB_CONTROL_DATABASE_URL: process.env.CB_CONTROL_DATABASE_URL
-    ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control',
+  CB_CONTROL_DATABASE_URL: appDatabaseUrl(ROOT),
   CB_REDIS_URL: process.env.CB_REDIS_URL ?? 'redis://127.0.0.1:56379',
   CB_DOCKER_HOST: DOCKER_HOST,
   CB_DOCKER_PORT: String(DOCKER_PORT),
@@ -57,7 +57,7 @@ const env = {
   CB_METRICS_PORT: process.env.CB_METRICS_PORT ?? '9114',
 };
 
-const pool = new Pool({ connectionString: env.CB_CONTROL_DATABASE_URL, max: 6 });
+const pool = new Pool({ connectionString: ownerDatabaseUrl(), max: 6 });
 const auth = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
 
 // ── the data node, over the same mTLS path the worker uses ──────────────────

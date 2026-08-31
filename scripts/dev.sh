@@ -11,7 +11,21 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LOGS="$ROOT/infra/docker/staging/monitoring/logs"
 mkdir -p "$LOGS"
 
-export CB_CONTROL_DATABASE_URL="${CB_CONTROL_DATABASE_URL:-postgres://corebase:controlpass@127.0.0.1:55433/corebase_control}"
+# The services connect as the least-privilege app role (P1b), never as the schema
+# owner. Running them as the owner would mean the local stack has privileges
+# production does not, which is how a missing grant reaches production first.
+APP_ROLE_ENV="$ROOT/infra/docker/staging/app-role.env"
+if [ -z "${CB_CONTROL_DATABASE_URL:-}" ]; then
+  if [ -f "$APP_ROLE_ENV" ]; then
+    # shellcheck disable=SC1090
+    . "$APP_ROLE_ENV"
+    export CB_CONTROL_DATABASE_URL="postgres://corebase_app:${CB_APP_DB_PASSWORD}@127.0.0.1:55433/corebase_control"
+  else
+    echo "✗ no app-role credentials — run ./scripts/staging.sh app-role" >&2
+    echo "  (or set CB_CONTROL_DATABASE_URL yourself to override)" >&2
+    exit 1
+  fi
+fi
 export CB_REDIS_URL="${CB_REDIS_URL:-redis://127.0.0.1:56379}"
 export CB_DOCKER_HOST="${CB_DOCKER_HOST:-127.0.0.1}"
 export CB_DOCKER_PORT="${CB_DOCKER_PORT:-2376}"

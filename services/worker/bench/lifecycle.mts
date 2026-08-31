@@ -24,6 +24,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { request as httpsRequest } from 'node:https';
+import { appDatabaseUrl, ownerDatabaseUrl } from './staging-env.mts';
 import { Pool, Client } from 'pg';
 
 const ROOT = resolve(import.meta.dirname, '../../..');
@@ -37,8 +38,9 @@ const DOCKER_PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
 
 const env = {
   ...process.env,
-  CB_CONTROL_DATABASE_URL: process.env.CB_CONTROL_DATABASE_URL
-    ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control',
+  // The services run as the least-privilege app role (P1b); this harness's own
+  // queries below use the owner, because fixtures are admin work.
+  CB_CONTROL_DATABASE_URL: appDatabaseUrl(ROOT),
   CB_REDIS_URL: process.env.CB_REDIS_URL ?? 'redis://127.0.0.1:56379',
   CB_DOCKER_HOST: DOCKER_HOST,
   CB_DOCKER_PORT: String(DOCKER_PORT),
@@ -62,7 +64,7 @@ const env = {
   CB_PURGE_SCAN_MS: process.env.CB_PURGE_SCAN_MS ?? '2000',
 };
 
-const pool = new Pool({ connectionString: env.CB_CONTROL_DATABASE_URL, max: 6 });
+const pool = new Pool({ connectionString: ownerDatabaseUrl(), max: 6 });
 const auth = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
 
 const tls = {

@@ -65,6 +65,32 @@ cmd_kek() {
   echo "    export CB_KEK_DIR=$KEK_DIR"
 }
 
+cmd_app_role() {
+  # Enables the least-privilege application role and sets its password.
+  #
+  # Separate from the migration on purpose: a password in a migration is a
+  # password in git. Locally the secret is generated once and written to a
+  # gitignored file; in production it comes from the secret store and this script
+  # is not what does it.
+  local secret_file="$STAGING_DIR/app-role.env"
+  if [ -f "$secret_file" ]; then
+    # shellcheck disable=SC1090
+    . "$secret_file"
+    echo "  ✓ reusing the existing app-role password"
+  else
+    CB_APP_DB_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 32)"
+    printf 'CB_APP_DB_PASSWORD=%s\n' "$CB_APP_DB_PASSWORD" > "$secret_file"
+    chmod 600 "$secret_file"
+    echo "  ✓ generated an app-role password → $(basename "$secret_file") (gitignored)"
+  fi
+  docker exec -e PW="$CB_APP_DB_PASSWORD" cb-control-db \
+    psql -U corebase -d corebase_control -v ON_ERROR_STOP=1 -qc \
+    "ALTER ROLE corebase_app LOGIN PASSWORD '$CB_APP_DB_PASSWORD'" >/dev/null
+  echo "  ✓ corebase_app can log in"
+  printf '    export CB_CONTROL_DATABASE_URL=postgres://corebase_app:%s@127.0.0.1:%s/corebase_control\n' \
+    "$CB_APP_DB_PASSWORD" "$CONTROL_DB_PORT"
+}
+
 cmd_seed_images() {
   # Production pre-pulls images onto every node so provisioning is a claim, not a
   # download (D-071). Locally the data node has its own image store, so we push
@@ -140,7 +166,7 @@ cmd_idempotent() {
 }
 
 cmd_down()  { echo "▸ stopping (volumes kept)"; $DC down; }
-cmd_nuke()  { echo "▸ destroying including volumes"; $DC down -v; rm -rf "$CERTS" "$KEK_DIR"; }
+cmd_nuke()  { echo "▸ destroying including volumes"; $DC down -v; rm -rf "$CERTS" "$KEK_DIR" "$STAGING_DIR/app-role.env"; }
 cmd_status(){ $DC ps; }
 
 cmd_monitoring() {
@@ -165,6 +191,7 @@ cmd_monitoring() {
 case "${1:-}" in
   up) cmd_up ;;
   kek) cmd_kek ;;
+  app-role) cmd_app_role ;;
   seed-images) cmd_seed_images ;;
   verify) cmd_verify ;;
   idempotent) cmd_idempotent ;;
@@ -172,6 +199,6 @@ case "${1:-}" in
   nuke) cmd_nuke ;;
   status) cmd_status ;;
   monitoring) cmd_monitoring ;;
-  all) cmd_up && cmd_kek && cmd_seed_images && cmd_verify && cmd_idempotent ;;
-  *) echo "usage: $0 {up|kek|seed-images|verify|idempotent|down|nuke|status|monitoring|all}"; exit 2 ;;
+  all) cmd_up && cmd_kek && cmd_app_role && cmd_seed_images && cmd_verify && cmd_idempotent ;;
+  *) echo "usage: $0 {up|kek|app-role|seed-images|verify|idempotent|down|nuke|status|monitoring|all}"; exit 2 ;;
 esac

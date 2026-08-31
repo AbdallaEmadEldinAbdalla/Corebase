@@ -17,3 +17,4 @@ selfhost/.env
 # staging secrets: generated locally, never committed
 infra/docker/staging/certs/
 infra/docker/staging/kek.d/
+infra/docker/staging/app-role.env

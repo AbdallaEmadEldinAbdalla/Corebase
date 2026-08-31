@@ -98,6 +98,66 @@ describe('P1a — membership', () => {
   });
 });
 
+describe('P1b — the application role has only the privileges it needs', () => {
+  /**
+   * These assertions are the reason the role split exists. They read the grant
+   * matrix directly rather than trying statements as the app role, because the
+   * test suite connects as the owner — the live runs (bench, lifecycle, demo,
+   * observability) are what exercise the restricted role for real.
+   */
+  const priv = async (table: string) => {
+    const { rows } = await pool.query<{ p: string }>(
+      `select privilege_type as p from information_schema.table_privileges
+        where grantee = 'corebase_app' and table_name = $1 order by privilege_type`, [table]);
+    return rows.map((r) => r.p);
+  };
+
+  t('can read and write ordinary tables', async () => {
+    expect(await priv('projects')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+    expect(await priv('project_secrets')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+  });
+
+  t('can only append to audit_logs', async () => {
+    // The guarantee that survives someone dropping P1a's trigger: the
+    // application is not *able* to rewrite history, not merely discouraged.
+    expect(await priv('audit_logs')).toEqual(['INSERT', 'SELECT']);
+  });
+
+  t('owns nothing and cannot change the schema', async () => {
+    const { rows } = await pool.query<{ n: number }>(
+      `select count(*)::int as n from pg_class c
+         join pg_roles r on r.oid = c.relowner
+        where r.rolname = 'corebase_app'`);
+    expect(rows[0]!.n).toBe(0);
+    const { rows: attrs } = await pool.query<{ super: boolean; createdb: boolean; createrole: boolean }>(
+      `select rolsuper as super, rolcreatedb as createdb, rolcreaterole as createrole
+         from pg_roles where rolname = 'corebase_app'`);
+    expect(attrs[0]).toEqual({ super: false, createdb: false, createrole: false });
+  });
+
+  t('has no password in any migration', async () => {
+    // A password in a migration is a password in git. Enabling LOGIN is a
+    // separate, documented step that reads the secret from the environment.
+    const { readdirSync, readFileSync } = await import('node:fs');
+    const dir = new URL('../../../migrations/', import.meta.url).pathname;
+    for (const f of readdirSync(dir).filter((x) => x.endsWith('.sql'))) {
+      const sql = readFileSync(dir + f, 'utf8');
+      expect(sql).not.toMatch(/PASSWORD\s+'/i);
+    }
+  });
+
+  t('inherits the same grants on tables added later', async () => {
+    // Without default privileges, a new table arrives invisible to the
+    // application and the failure surfaces in production rather than in the
+    // migration that created it.
+    const { rows } = await pool.query<{ acl: string }>(
+      `select unnest(defaclacl)::text as acl from pg_default_acl d
+         join pg_namespace n on n.oid = d.defaclnamespace
+        where n.nspname = 'public' and d.defaclobjtype = 'r'`);
+    expect(rows.some((r) => r.acl.startsWith('corebase_app='))).toBe(true);
+  });
+});
+
 describe('P1a — api keys are hash-only (D-060)', () => {
   t('stores a hash and a prefix, with no column for the key itself', async () => {
     const { rows } = await pool.query<{ column_name: string }>(
