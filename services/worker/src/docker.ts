@@ -1,4 +1,4 @@
-import { request as httpsRequest, type RequestOptions } from 'node:https';
+import { Agent, request as httpsRequest, type RequestOptions } from 'node:https';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -51,10 +51,40 @@ export function createDocker(cfg: DockerConfig) {
     checkServerIdentity: () => undefined,
   };
 
+  /**
+   * One pooled agent per client, with a hard socket ceiling.
+   *
+   * Without this, every call goes through Node's *global* https agent — which has
+   * had `keepAlive: true` on by default since Node 19 — so a burst of calls opens
+   * an unbounded number of TLS connections to the node and leaves them parked.
+   * A test suite doing ~130 provisioning operations was enough to break the
+   * node's listener for good: every subsequent connection was reset, from our
+   * client *and* from the `docker` CLI, until the whole engine was restarted.
+   *
+   * Two reasons this is the right fix rather than a workaround for one flaky
+   * local setup. A mTLS handshake per call is real CPU on both ends, and the
+   * worker talks to its nodes constantly — reuse is the point of keepAlive. And a
+   * control plane that can open unbounded connections to a data node is a control
+   * plane that can take that node down by accident; the ceiling means a runaway
+   * loop queues instead of exhausting the far side.
+   *
+   * `maxSockets` is deliberately small: the saga is step-serial per project, and
+   * the concurrency that matters is across projects, which is bounded by the
+   * worker's own job concurrency well below this.
+   */
+  const agent = new Agent({
+    keepAlive: true,
+    keepAliveMsecs: 10_000,
+    maxSockets: 8,
+    maxFreeSockets: 4,
+    timeout: cfg.timeoutMs ?? 30_000,
+    ...tls,
+  });
+
   function call<T>(method: string, path: string, body?: unknown): Promise<T> {
     const payload = body === undefined ? undefined : JSON.stringify(body);
     const opts: RequestOptions = {
-      host: cfg.host, port: cfg.port, path, method, ...tls,
+      host: cfg.host, port: cfg.port, path, method, ...tls, agent,
       timeout: cfg.timeoutMs ?? 30_000,
       headers: payload
         ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) }
@@ -84,6 +114,12 @@ export function createDocker(cfg: DockerConfig) {
   }
 
   return {
+    /**
+     * Close parked keep-alive sockets. Tests call it in afterAll; a long-running
+     * worker never needs to, which is why it is not a lifecycle requirement.
+     */
+    close(): void { agent.destroy(); },
+
     async ping(): Promise<string> {
       const v = await call<{ Version: string }>('GET', '/version');
       return v.Version;
@@ -115,6 +151,60 @@ export function createDocker(cfg: DockerConfig) {
 
     async removeVolume(name: string): Promise<void> {
       try { await call('DELETE', `/volumes/${encodeURIComponent(name)}`); }
+      catch (e) { if (!(e instanceof DockerError && e.isNotFound)) throw e; }
+    },
+
+    /**
+     * A project's private network.
+     *
+     * Idempotent by catching 409: two workers racing the same provision must not
+     * turn "it already exists" into a failure, and the Engine has no
+     * create-if-absent. `CheckDuplicate` is not enough on its own — it races.
+     */
+    async createNetwork(name: string, labels: Record<string, string> = {}): Promise<void> {
+      try {
+        await call('POST', '/networks/create', {
+          Name: name,
+          // bridge is the only driver a single node needs; overlay would require
+          // swarm mode, which this architecture deliberately does not use (D-052).
+          Driver: 'bridge',
+          CheckDuplicate: true,
+          Labels: labels,
+          // Internal would block egress from the project's containers entirely.
+          // Postgres needs none, but PostgREST and the pooler are on this network
+          // too and a project that cannot reach a DNS server is a support ticket.
+          Internal: false,
+        });
+      } catch (e) {
+        if (e instanceof DockerError && e.statusCode === 409) return;   // already there
+        throw e;
+      }
+    },
+
+    async networkExists(name: string): Promise<boolean> {
+      try { await call('GET', `/networks/${encodeURIComponent(name)}`); return true; }
+      catch (e) { if (e instanceof DockerError && e.isNotFound) return false; throw e; }
+    },
+
+    async inspectNetwork(name: string): Promise<NetworkInspect | undefined> {
+      try { return await call<NetworkInspect>('GET', `/networks/${encodeURIComponent(name)}`); }
+      catch (e) { if (e instanceof DockerError && e.isNotFound) return undefined; throw e; }
+    },
+
+    /** Every network on the node, optionally filtered by label. */
+    async listNetworks(labelFilter?: string): Promise<NetworkSummary[]> {
+      const filters = labelFilter
+        ? `?filters=${encodeURIComponent(JSON.stringify({ label: [labelFilter] }))}` : '';
+      return await call<NetworkSummary[]>('GET', `/networks${filters}`);
+    },
+
+    /**
+     * Remove a network. A 403 means containers are still attached, which is a
+     * real condition the purge saga has to see rather than swallow — silently
+     * succeeding would leave the network behind and report it gone.
+     */
+    async removeNetwork(name: string): Promise<void> {
+      try { await call('DELETE', `/networks/${encodeURIComponent(name)}`); }
       catch (e) { if (!(e instanceof DockerError && e.isNotFound)) throw e; }
     },
 
@@ -218,6 +308,8 @@ export interface ContainerSpec {
   Image: string;
   Env: string[];
   Labels: Record<string, string>;
+  /** Optional: `Cmd` for containers whose image needs an argument list. */
+  Cmd?: string[];
   HostConfig: {
     Memory: number;
     MemorySwap: number;
@@ -227,4 +319,26 @@ export interface ContainerSpec {
     PortBindings: Record<string, Array<{ HostPort: string }>>;
   };
   ExposedPorts: Record<string, Record<string, never>>;
+  /**
+   * Joining the network at *create* time rather than connecting afterwards. A
+   * container that starts before it is attached can resolve nothing for the first
+   * moments of its life, and for the pooler that window is exactly when it tries
+   * to reach `db`.
+   */
+  NetworkingConfig?: {
+    EndpointsConfig: Record<string, { Aliases?: string[] }>;
+  };
+}
+
+export interface NetworkSummary {
+  Name: string;
+  Id: string;
+  Labels: Record<string, string> | null;
+}
+
+export interface NetworkInspect {
+  Name: string;
+  Id: string;
+  Labels: Record<string, string> | null;
+  Containers?: Record<string, { Name: string }>;
 }
