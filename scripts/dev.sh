@@ -35,6 +35,10 @@ export CB_BOOTSTRAP_SECRET="${CB_BOOTSTRAP_SECRET:-local-bootstrap-secret-012345
 export CB_PROJECT_DOMAIN="${CB_PROJECT_DOMAIN:-localhost}"
 export CB_PG_PORT_MIN="${CB_PG_PORT_MIN:-5433}"
 export CB_PG_PORT_MAX="${CB_PG_PORT_MAX:-5462}"
+# The pooler range has to match what infra/docker/staging/docker-compose.yml
+# publishes from the data node, or placement hands out a port nothing can reach.
+export CB_POOLER_PORT_MIN="${CB_POOLER_PORT_MIN:-6433}"
+export CB_POOLER_PORT_MAX="${CB_POOLER_PORT_MAX:-6462}"
 export CB_NODE_RAM_MB="${CB_NODE_RAM_MB:-16384}"
 export CB_NODE_HOSTNAME="${CB_NODE_HOSTNAME:-data-1}"
 export CB_STATIC_TOKEN="${CB_STATIC_TOKEN:-dev-token}"

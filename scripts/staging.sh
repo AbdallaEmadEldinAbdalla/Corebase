@@ -109,9 +109,23 @@ cmd_app_role() {
 cmd_seed_images() {
   # Production pre-pulls images onto every node so provisioning is a claim, not a
   # download (D-071). Locally the data node has its own image store, so we push
-  # the built image across explicitly — same intent, same effect on create time.
-  echo "▸ loading corebase/postgres:17.5 into the data node"
-  docker save corebase/postgres:17.5 | node_docker load
+  # the built images across explicitly — same intent, same effect on create time.
+  #
+  # Both images, because a project is two containers now: Postgres and its pooler
+  # (D-015). A node missing the pooler image fails provisioning at start_pooler
+  # rather than at create time, which is a much worse diagnostic.
+  for image in corebase/postgres:17.5 corebase/pgbouncer:1.23; do
+    if ! docker image inspect "$image" >/dev/null 2>&1; then
+      echo "  ✗ $image is not built locally — build it first:"
+      case "$image" in
+        *postgres*)  echo "      docker build -t $image infra/docker/postgres" ;;
+        *pgbouncer*) echo "      docker build -t $image infra/docker/pgbouncer" ;;
+      esac
+      exit 1
+    fi
+    echo "▸ loading $image into the data node"
+    docker save "$image" | node_docker load >/dev/null
+  done
   node_docker images --format '  {{.Repository}}:{{.Tag}} ({{.Size}})' | grep corebase || true
 }
 
@@ -137,7 +151,8 @@ cmd_verify() {
     echo "FAIL (unauthenticated access!)"; fail=1; else echo "PASS"; fi
 
   printf '  %-36s' "project image present on node"
-  if node_docker image inspect corebase/postgres:17.5 >/dev/null 2>&1; then echo "PASS"; else echo "SKIP (run seed-images)"; fi
+  if node_docker image inspect corebase/postgres:17.5 >/dev/null 2>&1 \
+     && node_docker image inspect corebase/pgbouncer:1.23 >/dev/null 2>&1; then echo "PASS"; else echo "SKIP (run seed-images)"; fi
 
   printf '  %-36s' "host ports published"
   if nc -z 127.0.0.1 "$CONTROL_DB_PORT" >/dev/null 2>&1 && nc -z 127.0.0.1 "$CONTROL_REDIS_PORT" >/dev/null 2>&1; then echo "PASS"; else echo "FAIL"; fail=1; fi
@@ -148,6 +163,12 @@ cmd_verify() {
   # the control plane (D-192).
   if docker port cb-data-node | grep -q '^5433/tcp'; then echo "PASS"; else
     echo "FAIL (publish PROJECT_PORT_MIN-MAX)"; fail=1; fi
+
+  printf '  %-36s' "pooler port range reachable"
+  # Same rule, second listener (P2b). A pooler on an unpublished port is a pooler
+  # the health gate cannot reach and a DATABASE_URL that cannot connect.
+  if docker port cb-data-node | grep -q '^6433/tcp'; then echo "PASS"; else
+    echo "FAIL (publish POOLER_PORT_MIN-MAX)"; fail=1; fi
 
   printf '  %-36s' "master key present"
   if ls "$KEK_DIR"/*.key >/dev/null 2>&1; then echo "PASS"; else echo "SKIP (run kek)"; fi

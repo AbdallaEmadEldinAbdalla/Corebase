@@ -13,7 +13,10 @@
 # What this substitution does NOT prove: cloud-init, real network partitions,
 # NVMe behaviour, XFS project quotas, or Hetzner-specific failure modes. Those
 # stay open until a real node exists (OQ-165).
-name: corebase-staging
+# The compose project name, which is what Docker Desktop and `docker ps` group by.
+# Plain `corebase`: this is the only stack the repo runs locally, so the "-staging"
+# suffix distinguished it from nothing and just made every container name longer.
+name: corebase
 
 services:
   control-db:
@@ -78,6 +81,12 @@ services:
       # process per port for no extra coverage. CB_PG_PORT_MIN/MAX narrow the
       # allocator to match — see placement.ts.
       - "${PROJECT_PORT_MIN:-5433}-${PROJECT_PORT_MAX:-5462}:5433-5462"
+      # And the pooler range (P2b). A project is two listeners now: Postgres on
+      # its port for DIRECT_DATABASE_URL, PgBouncer on its own for DATABASE_URL.
+      # Without this published, nothing on the host — control plane or customer —
+      # can reach a pooler, and the health gate would fail for a pooler that is
+      # actually running perfectly.
+      - "${POOLER_PORT_MIN:-6433}-${POOLER_PORT_MAX:-6462}:6433-6462"
     volumes:
       - data-node-certs:/certs
       - data-node-docker:/var/lib/docker
