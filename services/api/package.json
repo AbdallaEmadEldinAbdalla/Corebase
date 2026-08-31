@@ -14,7 +14,9 @@
     "fastify": "^5.0.0",
     "zod": "^3.23.8",
     "pg": "^8.13.1",
-    "@corebase/queue": "workspace:*"
+    "@corebase/queue": "workspace:*",
+    "@corebase/secrets": "workspace:*",
+    "@corebase/crypto": "workspace:*"
   },
   "devDependencies": {
     "@corebase/config": "workspace:*",
