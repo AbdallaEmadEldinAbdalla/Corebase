@@ -1,0 +1,318 @@
+# Corebase — Build Status
+
+**Last updated:** 2026-08-31 · **Phase:** Milestone 0 (the provisioning spine) · **T1–T5 done, T6 next**
+
+This file is the handover document. If you are picking Corebase up — new collaborator,
+future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
+plan and [docs/00-foundation/05-decision-log.md](docs/00-foundation/05-decision-log.md)
+for the binding decisions.
+
+It is kept current with every step of work. Where it says something is done, there is
+a commit, a test count, and usually a measurement behind it.
+
+---
+
+## 1. What works today, in one paragraph
+
+You can `POST /v1/projects` and get a real, isolated PostgreSQL 17.5 database on a
+data node roughly **2.5 seconds** later, provisioned by an idempotent saga through
+the Docker Engine API over mutual TLS, with its own volume, cgroup limits, the full
+role model, three envelope-encrypted credentials, and a connection string the API
+hands back that you can immediately `psql` into and create tables in. Twenty
+consecutive creates have been measured end to end
+([M-002](docs/14-roadmap/05-measurements.md#m-002--twenty-consecutive-project-creates-and-what-twenty-live-projects-cost)).
+Nothing above the database exists yet: no data API, no auth, no storage, no
+dashboard, no deletion, no crash-resume proof.
+
+## 2. Run it locally
+
+Prerequisites: Docker (Desktop is fine), Node 22+, pnpm 9.
+
+```bash
+pnpm install
+./scripts/staging.sh up            # control-db + control-redis + Docker-in-Docker data node
+./scripts/migrate-staging.sh       # apply migrations to the control plane
+./scripts/staging.sh kek           # generate the local master key (gitignored)
+docker build -t corebase/postgres:17.5 infra/docker/postgres
+./scripts/staging.sh seed-images   # push the project image onto the data node
+./scripts/staging.sh verify        # 10 checks; all must pass
+```
+
+Then run the whole test suite, or the provisioning measurement:
+
+```bash
+pnpm test
+```
+
+```bash
+pnpm --filter @corebase/worker bench
+```
+
+Tear down with `./scripts/staging.sh down` (keeps volumes) or `nuke` (destroys
+everything including the local master key — every stored credential becomes
+unreadable, which is the property being rehearsed).
+
+### Driving it by hand
+
+```bash
+./scripts/staging.sh status
+```
+
+Start the services with the staging environment (the bench harness does this for
+you; this is the manual equivalent):
+
+```bash
+export CB_CONTROL_DATABASE_URL=postgres://corebase:controlpass@127.0.0.1:55433/corebase_control
+export CB_REDIS_URL=redis://127.0.0.1:56379
+export CB_DOCKER_HOST=127.0.0.1 CB_DOCKER_PORT=2376
+export CB_DOCKER_CERT_DIR=$PWD/infra/docker/staging/certs
+export CB_KEK_DIR=$PWD/infra/docker/staging/kek.d
+export CB_BOOTSTRAP_SECRET=local-bootstrap-secret-0123456789
+export CB_PROJECT_DOMAIN=localhost CB_PG_PORT_MIN=5433 CB_PG_PORT_MAX=5462
+export CB_NODE_RAM_MB=16384 CB_STATIC_TOKEN=dev-token PORT=8099
+```
+
+`CB_PROJECT_DOMAIN=localhost` matters: connection strings come back as
+`<ref>.localhost`, which resolves to 127.0.0.1, so the string the API hands you is
+directly usable.
+
+## 3. Repository map
+
+```
+docs/                  the planning corpus — 62 documents, 16 sections (read INDEX.md)
+design-exports/        design system artefacts: tokens, 43 HTML components, 142 PNGs
+migrations/            plain SQL, applied in filename order, checksummed
+infra/docker/postgres/ the per-project database image (extension allowlist, auth hardening)
+infra/docker/staging/  the local stand-in for staging: control node + dind data node
+scripts/               staging.sh, migrate-staging.sh
+packages/
+  config/              shared tsconfig base
+  types/               shared types, error envelope, project-ref grammar
+  crypto/              envelope encryption (per-secret DEK under a file-resident KEK)
+  secrets/             credential persistence — the store-then-apply rule lives here
+  queue/               BullMQ + ioredis wiring, idempotency-keyed enqueue
+  migrate/             the migration runner (advisory lock, per-file transaction, drift check)
+services/
+  api/                 Fastify control-plane API
+  worker/              provisioning worker: job runner, placement, Docker, sagas
+  worker/bench/        the provisioning measurement harness
+```
+
+Node runs TypeScript directly with `--experimental-strip-types`; there is no build
+step. That has one consequence worth knowing: **Node only strips types, it does not
+transpile.** TypeScript features that need code generation — parameter properties,
+enums, decorators — fail at runtime while Vitest happily transpiles them in tests.
+That combination once produced 17 passing tests against a service that could not
+boot. Don't use them.
+
+## 4. What is built, in detail
+
+Test counts are from `pnpm test` and are all currently green: **139 tests**.
+
+### T1 — Repo scaffold · done
+pnpm workspaces + Turborepo. `typecheck` and `test` across every package.
+Root `test` runs `turbo run test --concurrency=1`, and each service pins
+`fileParallelism: false`, because every integration suite truncates the same
+staging control database and competes for the same host ports on the data node.
+
+### T2 — Staging infrastructure · done
+**Substitution from the plan:** the plan calls for Terraform and two Hetzner nodes.
+We reproduce the same *topology* locally — a control node (Postgres + Redis) and a
+data node exposing the Docker Engine API over TLS on 2376 — using Docker Compose
+with Docker-in-Docker. The interface the worker drives (D-052: Engine API over
+mTLS, no per-node agent) is the real one. What this does *not* prove: cloud-init,
+real network partitions, NVMe behaviour, XFS project quotas, Hetzner failure modes
+(OQ-165).
+
+`scripts/staging.sh` is the entry point: `up | kek | seed-images | verify |
+idempotent | down | nuke | status | all`. `verify` runs ten checks including
+"plaintext :2375 refused", "TLS required", "project port range reachable" and
+"node can run a project container".
+
+### T3 — Control-plane schema · done
+Two migrations, applied from empty. The DDL is copied verbatim from
+[the data model](docs/02-control-plane/01-data-model.md) so nothing is thrown away
+later: 6 enums, `organizations`, `project_groups`, `projects`, `nodes`,
+`project_databases`, `provisioning_jobs`, and (T5e) `project_secrets`.
+
+The migration runner (`@corebase/migrate`, 9 tests) takes a Postgres advisory lock,
+runs one transaction per file, records a checksum per file and refuses to proceed if
+a previously-applied file has changed. CRLF is normalised so a Windows checkout does
+not read as drift.
+
+### T4 — API skeleton · done · 17 tests
+Fastify. `POST /v1/projects`, `GET /v1/projects`, `GET /v1/projects/:ref`,
+`DELETE /v1/projects/:ref`, `/health`. Standard error envelope with `request_id`
+(D-032) from the first endpoint. One static bearer token for now.
+
+Two properties worth knowing:
+
+- **Two-phase enqueue (D-067).** The project row and its `provisioning_jobs` row are
+  written in one transaction. If the job row cannot be written, the project must not
+  exist — a project with no job silently never provisions, which is the worst
+  failure mode available. Redis is never the source of truth for job existence;
+  enqueueing is a later, retryable step the sweeper can redo.
+- **Idempotency replay short-circuits everything.** A seen `Idempotency-Key` returns
+  the original outcome *before* validation and the duplicate-name check. Ordering
+  this wrong made a retried create collide with the project its own first attempt
+  had made, returning 409 instead of the original project.
+
+**Known divergence:** `POST` returns the project bare and list returns
+`{ data: [...] }`, where the documented contract is `{ project, job }` and
+`{ projects, pagination }`. `GET /v1/projects/:ref` was brought onto the documented
+`{ project, database }` shape in T5e. **OQ-175** says fix the other two in one
+breaking change together with cursor pagination and the `api_keys` block — three
+separate shape fixes would cost three client breaks.
+
+### T5 — Worker and provisioning saga · done · 86 tests · [M-002](docs/14-roadmap/05-measurements.md)
+
+Built in six sub-steps, each committed separately.
+
+**T5a/T5b — job runner.** A job is claimed by a conditional `UPDATE … RETURNING`;
+that statement *is* the lock, so two workers racing one delivery cannot both run it.
+Heartbeats mark liveness, a checkpoint is written *after* each step so an interrupted
+step is retried rather than skipped, and a sweeper re-enqueues rows Redis never
+delivered. Each step logs its own duration.
+
+**T5c — placement.** `SELECT … FOR UPDATE` on the emptiest eligible node, book plan
+RAM (D-174: 350 MB for a Free project, not the container's 512 MB ceiling), stop at
+85% of bookable RAM (D-090), allocate a port from a range, write
+`project_databases`. `releaseNode` is the exact idempotent inverse.
+
+**T5d — container steps.** `docker.ts` is an Engine API client over mTLS written
+against `node:https` rather than a Docker SDK. `create_volume`, `start_container`
+and `wait_healthy`, each check-then-act:
+
+- `start_container` adopts a container that was created but never started — the
+  crash window — instead of failing on the name conflict, and records `container_id`
+  only once the container is actually running.
+- `wait_healthy` probes `pg_isready` *through the Engine exec API*, because the
+  worker has no network path to the project's port in production. `exec` returns
+  `exitCode: null` when the container cannot exec at all (initialising, restarting,
+  stopped); `inspect` is the authority on whether that is temporary.
+- Containers are created with **no restart policy** and promoted to
+  `unless-stopped` only once the database answers (**D-184**). Under
+  `unless-stopped`, a container that cannot initialise flaps forever and the health
+  gate sees a permanent `restarting` state instead of a dead container.
+
+**T5e — credentials and readiness.** `create_base_roles` verifies the roles the
+image creates and fails loudly if any are missing, then creates `developer` (the
+customer's role: NOSUPERUSER, NOCREATEROLE, NOBYPASSRLS, CREATE on `public` only).
+`store_credentials` generates POSTGRES / DEVELOPER / AUTHENTICATOR passwords,
+persists them envelope-encrypted, then applies them. `write_connection` records the
+customer-facing host. `mark_ready` refuses to flip the status if the database is not
+running, there is no container, no connection host, or fewer than three credentials.
+
+**T5f — the measurement.** `pnpm --filter @corebase/worker bench`. 20/20 creates
+ready *and usable*, max 3.26s against a 60s budget. Per-step attribution showed
+~85% of a create is `wait_healthy` (initdb plus a first Postgres start) and the
+control plane's own work totals 57 ms.
+
+## 5. Rules the code follows
+
+These are not style preferences; each one exists because breaking it caused a real
+bug in this repository.
+
+**Check-then-act, every saga step.** A step asks "is this already true?" before doing
+anything, so re-running it is harmless. This is what makes crash-resume possible.
+
+**Store-then-apply, every credential.** A credential is persisted to the control
+plane *before* it is applied to the project database. A crash between the two leaves
+a stored password not yet in effect, which the retry applies. The reverse order
+leaves a database whose password does not exist anywhere.
+
+**A test that cannot run must fail, never skip.** Integration suites that could not
+reach staging used to skip silently, and a skip looks like a pass — which is exactly
+how a BullMQ queue-name bug survived a green suite. They now throw, with the reason
+and the command that fixes it.
+
+**Never book what you cannot reach.** `nodes.address` is how the control plane
+reaches a node; `nodes.hostname` is only what the node calls itself (**D-192**).
+Using the second as the first works until an environment where it does not resolve.
+
+**Enforcement lives in the artefact, not the runbook.** The project image *deletes*
+`dblink`, `postgres_fdw` and `file_fdw` and fails its own build if they survive
+(D-078); an init script aborts the boot if `pg_hba.conf` grants `trust` anywhere
+(D-185). A dropped build argument has no visible symptom until someone is already
+inside.
+
+**Commits are split and tagged with the step.** `feat(M0/T5d): …`,
+`fix(M0/T5e): …`, `docs(M0/T5f): …`. One concern per commit, and the message says
+*why*, including what the alternative would have broken.
+
+## 6. Decisions made while building (not from the plan)
+
+Nine decisions came out of running the thing rather than planning it. Full text in
+the [decision log](docs/00-foundation/05-decision-log.md); the log holds
+D-001…D-192 and is binding when two documents disagree.
+
+| ID | What changed | Why it surfaced |
+|---|---|---|
+| D-184 | Containers created with no restart policy; promoted after the health gate | `unless-stopped` made a failing container flap forever and hid the failure |
+| D-185 | No `trust` auth anywhere; image builds with `--auth-local=peer --auth-host=scram-sha-256`, init script enforces it | `initdb` defaults made any in-container code execution an unauthenticated superuser login |
+| D-186 | The shared `postgresql.conf` pins no `data_directory`; PGDATA in the spec is the single source of truth | The pinned path contradicted the spec on every first boot |
+| D-187 | ChaCha20-Poly1305 (IETF) instead of XChaCha20-Poly1305 | XChaCha20 needs libsodium; each DEK encrypts exactly one secret, so a 96-bit nonce is safe |
+| D-188 | `project_secrets` uses `dek_wrapped` + text `kek_id` | Two docs described the same table differently; a text id can name a key file, an integer cannot |
+| D-189 | `developer` is granted `USAGE ON SCHEMA information_schema` | The blanket revoke left a new project un-introspectable by psql, any ORM, any migration tool |
+| D-190 | The health gate probes TCP, never the unix socket | The entrypoint's init-phase server answers on the socket, so the gate passed before the real server listened |
+| D-191 | New tables get `ENABLE ROW LEVEL SECURITY` **without** `FORCE` (supersedes D-083's FORCE half) | FORCE broke the customer's first `INSERT` on every new project while buying no isolation |
+| D-192 | `nodes.address` is the route; `hostname` is the identity | The control plane needs to open connections to nodes |
+
+## 7. Measurements
+
+Numbers the plan assumed and the build measured, in
+[docs/14-roadmap/05-measurements.md](docs/14-roadmap/05-measurements.md). Append-only —
+a superseded measurement is annotated, because the drift between assumption and
+reality is itself the finding.
+
+- **M-001** — one project Postgres, idle: 5.0 MiB anon, 87.8 MiB page cache, 102 MiB
+  cgroup peak; 27.9 MiB anon at 10 client backends.
+- **M-002** — 20 consecutive creates: p50 2463 ms, max 3264 ms, 0 over the 60s
+  budget. 21 live projects book 7350 MB and actually use 524 MiB (≈14:1). ~85% of a
+  create is `wait_healthy`; the control plane's own work is 57 ms.
+
+Both were taken on an ARM Docker VM with Postgres only — no PgBouncer, no
+PostgREST. Neither licenses raising the planned density (D-091's 150 projects/node).
+
+## 8. What is not built yet
+
+**Milestone 0, remaining:**
+
+| Task | What it needs to prove |
+|---|---|
+| **T6 Crash-resume** | SIGKILL the worker between each pair of saga steps; on restart the job converges with zero duplicate containers or volumes |
+| T7 Deletion saga | `DELETE` → stop, remove container, remove volume, mark deleted; create+delete ×20 leaves node and control plane clean |
+| T8 Reconciliation sweep | List containers on the node, diff against desired state, restart what is missing, *report* orphans without auto-deleting |
+| T9 Observability seed | Structured logs to Loki, three metrics, one Grafana panel, one alert |
+| T10 Demo script | create → poll → `psql` → delete, green end to end |
+
+Then a **Milestone-0 retro** (D-169) that corrects the cost model and density
+assumptions with the measured numbers — part of the milestone, not an afterthought.
+
+**Everything above the database** is Phase 1+: the data API (PostgREST), auth,
+storage, realtime, the dashboard, the CLI, the SDK. All planned in detail under
+[docs/](docs/INDEX.md); none started.
+
+**Known gaps in what *is* built:**
+
+- The WAL archive writes to the container filesystem, not the volume, so it does not
+  survive container replacement. Belongs with backups, not with provisioning.
+- No warm pool (D-071). Creates are the cold path; M-002 says that is fine for now.
+- The pooler port is allocated and recorded but nothing listens on it — PgBouncer is
+  a later task, and the `pooled` connection string will not connect until then.
+- `corebase_admin` exists as a role with no password; the audited dashboard path that
+  needs it does not exist yet.
+- OQ-175: two API response envelopes still diverge from the documented contract.
+
+## 9. Where to look when you pick this up
+
+| Question | File |
+|---|---|
+| What are we building and why? | [docs/INDEX.md](docs/INDEX.md), then [00-foundation](docs/00-foundation/01-vision-and-principles.md) |
+| Why is it like this? | [docs/00-foundation/05-decision-log.md](docs/00-foundation/05-decision-log.md) — binding |
+| What is deliberately unresolved? | [docs/15-risks/02-open-questions.md](docs/15-risks/02-open-questions.md) — 140 questions |
+| What is the next task, exactly? | [docs/14-roadmap/04-milestone-0.md](docs/14-roadmap/04-milestone-0.md) — includes a progress table |
+| What did we measure? | [docs/14-roadmap/05-measurements.md](docs/14-roadmap/05-measurements.md) |
+| How does provisioning actually work? | `services/worker/src/jobs/sagas.ts` — read top to bottom |
+| How does a project database get built? | `infra/docker/postgres/` — Dockerfile plus four init scripts |
+| What does the UI look like? | [design-exports/07-html](design-exports/07-html) served over HTTP |

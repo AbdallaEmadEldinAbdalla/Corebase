@@ -8,7 +8,48 @@ Corebase is a developer-focused Backend-as-a-Service: a developer creates a proj
 
 ## Status
 
-**Planning phase.** Nothing is built yet. This repository holds the two things the build will be measured against: the **planning corpus** (what to build and why) and the **design system** (what it looks like).
+**Building Milestone 0 — the provisioning spine.** `POST /v1/projects` returns a real, isolated PostgreSQL 17.5 database on a data node about **2.5 seconds** later, with its own volume, cgroup limits, the full role model, envelope-encrypted credentials, and a connection string you can `psql` into immediately. Twenty consecutive creates are measured end to end.
+
+Tasks T1–T5 of ten are done; T6 (crash-resume proof) is next. Nothing above the database exists yet — no data API, no auth, no storage, no dashboard.
+
+> **[STATUS.md](STATUS.md) is the handover document**: what works, how to run it locally, what every rule in the code is defending against, and what is not built yet. Read it before the corpus if you are here to contribute.
+
+## Run it
+
+```bash
+pnpm install
+./scripts/staging.sh up && ./scripts/migrate-staging.sh && ./scripts/staging.sh kek
+docker build -t corebase/postgres:17.5 infra/docker/postgres
+./scripts/staging.sh seed-images && ./scripts/staging.sh verify
+```
+
+Then the full suite (139 tests, integration included — they need the staging stack above and **fail rather than skip** without it):
+
+```bash
+pnpm test
+```
+
+Or measure provisioning end to end — twenty creates, each proven usable by connecting to it:
+
+```bash
+pnpm --filter @corebase/worker bench
+```
+
+Staging is Docker Compose plus Docker-in-Docker standing in for a control node and a data node. The interface the worker drives is the real one — the Docker Engine API over mutual TLS, no per-node agent (D-052) — so no step of the plan is skipped and nothing is paid for. [STATUS.md §2](STATUS.md) has the details and the environment variables.
+
+## What is built
+
+| | |
+|---|---|
+| `services/api` | Fastify control-plane API: `/v1/projects` CRUD, error envelope with `request_id`, idempotency keys, two-phase enqueue |
+| `services/worker` | Provisioning worker: job runner with checkpoints, transactional placement, Docker Engine API client over mTLS, the eight-step provisioning saga |
+| `packages/crypto` | Envelope encryption — per-secret data key wrapped by a master key that never enters the database |
+| `packages/secrets` | Credential persistence; enforces store-then-apply so a crash cannot lose a password |
+| `packages/queue` `packages/migrate` `packages/types` | BullMQ wiring, the SQL migration runner, shared types |
+| `infra/docker/postgres` | The per-project database image: extension allowlist enforced by absence, no `trust` auth anywhere, RLS on at table creation |
+| `infra/docker/staging` | The local stand-in for staging |
+
+## The planning corpus
 
 ## The planning corpus
 
@@ -37,8 +78,9 @@ The corpus covers, A to Z:
 
 ## Two registers keep the corpus honest
 
-- **[Decision log](docs/00-foundation/05-decision-log.md)** — every binding decision (D-001…D-180) with its rationale. If two documents disagree, this log wins. Overturned decisions are annotated, never deleted, so the reasoning stays auditable.
-- **[Open questions](docs/15-risks/02-open-questions.md)** — 135 questions left deliberately unresolved, each with an owning document and a decide-by trigger.
+- **[Decision log](docs/00-foundation/05-decision-log.md)** — every binding decision (D-001…D-192) with its rationale. If two documents disagree, this log wins. Overturned decisions are annotated, never deleted, so the reasoning stays auditable — D-083's FORCE-RLS half, for instance, is annotated as superseded by D-191, which the build discovered by breaking a customer's first `INSERT`.
+- **[Open questions](docs/15-risks/02-open-questions.md)** — 140 questions left deliberately unresolved, each with an owning document and a decide-by trigger.
+- **[Measurement log](docs/14-roadmap/05-measurements.md)** — every number the plan assumed and the build later measured, append-only. The drift between assumption and reality is the finding.
 
 ## The design system
 
