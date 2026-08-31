@@ -21,6 +21,9 @@ const url = process.env.CB_CONTROL_DATABASE_URL;
  * the production path — a missing URL in production is a config error the
  * deploy should catch, which is why it is logged loudly rather than silently.
  */
+/** Shared with the key endpoints, which read the same envelope-encrypted rows. */
+let secretsForApi: ReturnType<typeof createSecretStore> | undefined;
+
 const store = await (async () => {
   if (!url) {
     console.warn(JSON.stringify({
@@ -42,6 +45,7 @@ const store = await (async () => {
       kekDir, ...(process.env.CB_KEK_ID ? { kekId: process.env.CB_KEK_ID } : {}),
     });
     secrets = createSecretStore(pool, envelope);
+    secretsForApi = secrets;
   } else {
     console.warn(JSON.stringify({ level: 'warn', service: 'api',
       msg: 'CB_KEK_DIR not set — connection strings will be omitted from project detail.' }));
@@ -131,6 +135,7 @@ const app = buildApp({
   store, logger: true,
   ...(auth ? { auth } : {}),
   ...(orgs ? { orgs } : {}),
+  ...(secretsForApi ? { projectSecrets: { secrets: secretsForApi } } : {}),
   ...(orgs && auth
     ? {
         projects: {

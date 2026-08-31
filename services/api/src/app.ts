@@ -1,6 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { registerErrorHandling } from './kernel/errors.ts';
-import { registerControlPlane, type Enqueue } from './modules/control-plane/routes.ts';
+import { registerControlPlane, type Enqueue, type ControlPlaneDeps } from './modules/control-plane/routes.ts';
 import { createMemoryStore, type ControlPlaneStore } from './modules/control-plane/store.ts';
 import { registerMetrics } from './kernel/metrics.ts';
 import { registerAuth, type AuthDeps } from './modules/auth/routes.ts';
@@ -35,6 +35,12 @@ export interface BuildOptions {
    * memory store and the unit tests use.
    */
   projects?: { orgs: OrgDeps['orgs']; principals: PrincipalDeps };
+  /**
+   * Reads a project's envelope-encrypted keys for the keys and JWKS endpoints
+   * (P1e). Absent means those endpoints report the keys' prefixes and nothing
+   * more, which is the honest answer for an API with no master key.
+   */
+  projectSecrets?: { secrets: NonNullable<ControlPlaneDeps['secrets']> };
 }
 
 /** Composition root: the only place that wires modules together. */
@@ -62,6 +68,8 @@ export function buildApp(opts: BuildOptions = {}): FastifyInstance {
     staticToken: opts.staticToken ?? process.env.CB_STATIC_TOKEN ?? 'dev-token',
     ...(opts.actorUserId ? { actorUserId: opts.actorUserId } : {}),
     ...(opts.projects ? { orgs: opts.projects.orgs, principals: opts.projects.principals } : {}),
+    ...(opts.projectSecrets ? { secrets: opts.projectSecrets.secrets } : {}),
+    ...(opts.auth ? { pool: opts.auth.pool } : {}),
     ...(opts.enqueue ? { enqueue: opts.enqueue } : {}),
     ...(opts.onEnqueueError ? { onEnqueueError: opts.onEnqueueError } : {}),
   });

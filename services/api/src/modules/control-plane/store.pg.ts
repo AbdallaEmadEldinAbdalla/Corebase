@@ -249,6 +249,16 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
       }
     },
 
+    async listApiKeys(projectId) {
+      const { rows } = await pool.query<{
+        id: string; kind: 'anon' | 'service_role'; key_prefix: string; created_at: string;
+      }>(`SELECT id, kind, key_prefix, ${TS('created_at')} AS created_at
+            FROM project_api_keys
+           WHERE project_id = $1 AND revoked_at IS NULL
+           ORDER BY kind`, [projectId]);
+      return rows;
+    },
+
     async listProjectsPage({ limit, cursor, organizationId }) {
       // Keyset, not offset. `(created_at, id) < (…, …)` is a row comparison, so
       // one index scan serves the page and a row inserted mid-scroll cannot shift

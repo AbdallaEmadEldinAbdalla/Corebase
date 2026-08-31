@@ -99,6 +99,10 @@ export interface ControlPlaneStore {
    */
   findByName(name: string, organizationId?: string): Promise<Project | undefined>;
   jobs(): Promise<JobRow[]>;
+  /** The project's live API keys — hashes stay behind; prefixes are for display. */
+  listApiKeys?(projectId: string): Promise<Array<{
+    id: string; kind: 'anon' | 'service_role'; key_prefix: string; created_at: string;
+  }>>;
 }
 
 /** One implicit organization, for the store that has no database behind it. */

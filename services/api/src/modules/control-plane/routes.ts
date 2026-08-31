@@ -10,6 +10,9 @@ import type { Actor } from '@corebase/audit';
 import { resolvePrincipal, actorOf, type PrincipalDeps } from '../../kernel/principal.ts';
 import { require_, type Role } from '../../kernel/permissions.ts';
 import type { OrgStore } from '../orgs/store.ts';
+import { writeAudit } from '@corebase/audit';
+import { toJwk } from '@corebase/jwt';
+import { SECRET_NAMES, type SecretStore } from '@corebase/secrets';
 
 /**
  * Phase two of the two-phase enqueue (D-067). Phase one — the job row — is
@@ -41,6 +44,10 @@ export interface ControlPlaneDeps {
    */
   orgs?: OrgStore;
   principals?: PrincipalDeps;
+  /** Reads the project's envelope-encrypted keys (P1e). */
+  secrets?: SecretStore;
+  /** Where audit rows for key reveals go. */
+  pool?: import('pg').Pool;
 }
 
 export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDeps) {
@@ -265,6 +272,87 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
       project: serializeProject(detail.project),
       ...(detail.database ? { database: detail.database } : {}),
     };
+  });
+
+
+  /**
+   * The project's API keys.
+   *
+   * `anon` is publishable — it goes in client-side code by design — so it is
+   * returned to anyone who can read the project. `service_role` bypasses RLS, so
+   * revealing it needs `key.manage` (admin and above) and leaves an audit row
+   * naming who looked. Both are byte-identical on every read (D-214), because an
+   * anon key that changes on each view is not usable as configuration.
+   */
+  app.get('/v1/projects/:ref/keys', async (req, reply) => {
+    await requireAuth(req);
+    const { ref } = req.params as { ref: string };
+    const project = await deps.store.getProject(ref);
+    if (!project) throw ApiError.notFound('Project');
+
+    let role: Role | undefined;
+    if (deps.orgs && deps.principals) {
+      const scoped = await scope(req, encodeId('organization', project.organization_id));
+      if (scoped) { require_(scoped.role, 'project.read'); role = scoped.role; }
+    }
+
+    const rows = deps.store.listApiKeys
+      ? await deps.store.listApiKeys(project.id)
+      : [];
+
+    const reveal = (req.query as { reveal?: unknown } | undefined)?.reveal === 'true';
+    const keys: Array<Record<string, unknown>> = [];
+    for (const k of rows) {
+      const entry: Record<string, unknown> = {
+        kind: k.kind, prefix: k.key_prefix, created_at: k.created_at,
+      };
+      if (deps.secrets) {
+        const name = k.kind === 'anon' ? SECRET_NAMES.anonKey : SECRET_NAMES.serviceRoleKey;
+        if (k.kind === 'anon') {
+          // Publishable by design; hiding it behind a click teaches the wrong
+          // lesson about which of the two keys is dangerous.
+          entry['key'] = await deps.secrets.get(project.id, name).catch(() => undefined);
+        } else if (reveal) {
+          if (role !== undefined) require_(role, 'key.manage');
+          entry['key'] = await deps.secrets.get(project.id, name).catch(() => undefined);
+          if (deps.pool) {
+            const principal = deps.principals ? await resolvePrincipal(req, deps.principals) : undefined;
+            await writeAudit(deps.pool,
+              principal
+                ? actorOf(principal, req, String(reply.getHeader('x-request-id') ?? req.id))
+                : actorFor(req as never, String(reply.getHeader('x-request-id') ?? req.id)),
+              {
+                action: 'key.revealed', resourceType: 'project_api_key',
+                resourceId: k.id, organizationId: project.organization_id,
+                projectId: project.id, metadata: { kind: k.kind, key_prefix: k.key_prefix },
+              });
+          }
+        }
+      }
+      keys.push(entry);
+    }
+    return { api_keys: keys };
+  });
+
+  /**
+   * The project's JWKS (D-014), so the data plane verifies tokens without a
+   * shared secret.
+   *
+   * Unauthenticated on purpose: a public key is public, and a JWKS behind auth is
+   * a JWKS that breaks every verifier the moment a credential rotates.
+   */
+  app.get('/v1/projects/:ref/.well-known/jwks.json', async (req, reply) => {
+    const { ref } = req.params as { ref: string };
+    const project = await deps.store.getProject(ref);
+    if (!project || !deps.secrets) throw ApiError.notFound('Project');
+    const [pem, kid] = await Promise.all([
+      deps.secrets.get(project.id, SECRET_NAMES.jwtPublicKey).catch(() => undefined),
+      deps.secrets.get(project.id, SECRET_NAMES.jwtKid).catch(() => undefined),
+    ]);
+    if (!pem || !kid) throw ApiError.notFound('Project keys');
+    // Cacheable: verifiers fetch this on every cold start, and rotation is a
+    // dual-publish window measured in days (credentials §4b).
+    return reply.header('cache-control', 'public, max-age=300').send({ keys: [toJwk(pem, kid)] });
   });
 
   app.delete('/v1/projects/:ref', async (req, reply) => {
