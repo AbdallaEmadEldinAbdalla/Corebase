@@ -59,7 +59,7 @@ are stated, not glossed.
 | T5e Credentials + ready | done | envelope encryption, base roles, connection details, `mark_ready` refusals; 42 tests | — |
 | **T5 (whole)** | **done** | **[M-002](05-measurements.md#m-002--twenty-consecutive-project-creates-and-what-twenty-live-projects-actually-cost): 20/20 creates ready *and usable*, max 3.31s against the 60s budget** | Measured on the Docker substitute, ARM, Postgres only — not the triplet on x86 |
 | T6 Crash-resume proof | done | `pnpm --filter @corebase/worker kill-matrix` — SIGKILL at 11 points, 11/11 converge with zero duplicates; [M-003](05-measurements.md); 5 regression tests in the default suite | Kill matrix is a script, not part of `pnpm test`: 11 scenarios × ~35 s is a nightly/CI job, not a per-commit one |
-| T7 Deletion saga | not started | — | — |
+| T7 Deletion saga | done | `pnpm --filter @corebase/worker lifecycle` — 20 create+delete cycles, zero residue; [M-004](05-measurements.md); 16 integration tests | Two phases (soft → purge) per the state machine and D-038, not the single pass this task's own text describes; the D-066 final-backup gate exists but is off, since no backup system exists yet |
 | T8 Reconciliation sweep | not started | — | — |
 | T9 Observability seed | not started | — | — |
 | T10 Demo script | not started | — | — |

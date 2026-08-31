@@ -120,7 +120,7 @@ One `provision_project` job executes the steps below in order, persisting a curs
 2. **Disable writes**: `ALTER DATABASE ... SET default_transaction_read_only = on` if the container is running (defense in depth; the route is already dark).
 3. **Final backup**: pgBackRest full backup, labeled `final-<ref>-<date>`; **verified** (restore-check per D-019) before proceeding — an unverified final backup blocks the pipeline.
 4. **Stop containers** (Postgres, pooler, PostgREST). Volume kept. → mark `SOFT_DELETED`, set `deleted_at`, `purge_after`.
-5. *(After 7 days, purge sweeper:)* destroy volume → release node RAM reservation → delete pooler/PostgREST configs → deregister gateway route (fully) → revoke API keys → delete secrets rows → verify every resource is gone (list-and-assert) → mark `DELETED`. Backups then age out per plan retention (§35); the final backup is kept 30 days beyond purge as the last-resort escape hatch.
+5. *(After 7 days, purge sweeper enqueues `purge_project` — D-196:)* destroy volume → release node RAM reservation → delete pooler/PostgREST configs → deregister gateway route (fully) → revoke API keys → delete secrets rows → verify every resource is gone (list-and-assert) → mark `DELETED`. Backups then age out per plan retention (§35); the final backup is kept 30 days beyond purge as the last-resort escape hatch.
 
 Restore inside the window = flip to `RESUMING` and run the resume saga; nothing was destroyed.
 

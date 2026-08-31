@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-08-31 · **Phase:** Milestone 0 (the provisioning spine) · **T1–T6 done, T7 next**
+**Last updated:** 2026-08-31 · **Phase:** Milestone 0 (the provisioning spine) · **T1–T7 done, T8 next**
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -22,8 +22,11 @@ hands back that you can immediately `psql` into and create tables in. Twenty
 consecutive creates have been measured end to end
 ([M-002](docs/14-roadmap/05-measurements.md)), and the worker has been SIGKILLed at
 eleven points in that saga to prove it resumes with no duplicate anything
-([M-003](docs/14-roadmap/05-measurements.md)). Nothing above the database exists
-yet: no data API, no auth, no storage, no dashboard, and no deletion.
+([M-003](docs/14-roadmap/05-measurements.md)). Deleting a project stops it and
+keeps its data for a 7-day recovery window, then a scheduled purge destroys it and
+returns the capacity — 20 create+delete cycles leave nothing behind
+([M-004](docs/14-roadmap/05-measurements.md)). Nothing above the database exists
+yet: no data API, no auth, no storage, no dashboard.
 
 ## 2. Run it locally
 
@@ -59,6 +62,13 @@ pnpm --filter @corebase/worker kill-matrix
 `CB_KM_ONLY=start_container` narrows it to one scenario; `CB_KM_TIMELINE=1` prints
 the restarted worker's log with arrival times, which is how the 60s recovery
 mystery got solved.
+
+The full lifecycle loop — create, use, delete, purge, twenty times, then assert
+the node and control plane are empty:
+
+```bash
+pnpm --filter @corebase/worker lifecycle
+```
 
 Tear down with `./scripts/staging.sh down` (keeps volumes) or `nuke` (destroys
 everything including the local master key — every stored credential becomes
@@ -119,7 +129,7 @@ boot. Don't use them.
 
 ## 4. What is built, in detail
 
-Test counts are from `pnpm test` and are all currently green: **145 tests**.
+Test counts are from `pnpm test` and are all currently green: **165 tests**.
 
 ### T1 — Repo scaffold · done
 pnpm workspaces + Turborepo. `typecheck` and `test` across every package.
@@ -249,6 +259,38 @@ converge slowly — it did not converge at all, ever:
 
 Five fast regression tests now guard both defects inside `pnpm test`.
 
+### T7 — Deletion saga · done · [M-004](docs/14-roadmap/05-measurements.md) · 16 tests
+
+Deletion is **two operations**, not one. The M0 task text describes a single pass
+("stop/remove containers → remove volume → mark DELETED"), which contradicts
+D-038's 7-day recovery window and D-061's soft-delete model — you cannot restore
+a project whose volume you destroyed. The state machine's two-phase design is
+binding, so that is what is built:
+
+`delete_project` — **reversible.** disable_api (a no-op until the gateway exists,
+said out loud in the logs rather than silently skipped) → disable_writes (`ALTER
+DATABASE … default_transaction_read_only`, so a client on a live direct
+connection cannot write data the final backup would miss) → final_backup (a
+**gate**, not a stub: `CB_REQUIRE_FINAL_BACKUP=true` makes deletion fail loudly
+rather than quietly skip D-066, and it is off in M0 because no backup system
+exists) → stop_container (clearing the restart policy first, or `unless-stopped`
+brings it straight back) → mark_soft_deleted, with `COALESCE` on `purge_after` so
+a retry cannot slide the window forward.
+
+`purge_project` — **irreversible**, and gated. verify_purgeable refuses anything
+that is not `soft_deleted` with an expired window; that guard is what gives the
+recovery window meaning. Then remove_container (by name as well as by recorded id,
+so a container created just before a crash is not left behind) → remove_volume →
+delete_credentials → release_capacity → **verify_gone**, which lists the node and
+throws if anything remains → mark_deleted.
+
+`verify_gone` is why "delete leaves no residue" is a property of the code rather
+than of a test, and one of the 16 tests proves it can actually fail by standing a
+container back up and watching the step catch it.
+
+The purge scan (`purge-scan.ts`) closes expired windows on a timer — hourly in
+production, since the window is measured in days.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -288,7 +330,7 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-Twelve decisions came out of running the thing rather than planning it. Full text in
+Sixteen decisions came out of running the thing rather than planning it. Full text in
 the [decision log](docs/00-foundation/05-decision-log.md); the log holds
 D-001…D-192 and is binding when two documents disagree.
 
@@ -306,6 +348,10 @@ D-001…D-192 and is binding when two documents disagree.
 | D-193 | Orphan threshold derived from the heartbeat interval (3 missed beats); a bad override throws | A 90s threshold against a 30s re-delivery left crashed provisions stuck permanently |
 | D-194 | Sweeper recovery deliveries use an attempt-keyed id when the plain key is occupied | A dead worker's BullMQ lock made recovery wait 60s for a worker Postgres knew was dead at 30s |
 | D-195 | Every log line carries an ISO `ts`; every saga step logs its duration | The 60s recovery mystery was read straight off these two fields |
+| D-196 | The purge is its own job type, not a mode on delete | One row cannot carry two operations a week apart: shared checkpoints and a shared attempt budget |
+| D-197 | Delivery ids and `Idempotency-Key` are restricted to a colon-free charset | BullMQ rejects `:` in job ids; one bad key silently disabled orphan recovery fleet-wide |
+| D-198 | Framework-level 4xx keep their status; only real faults are 500 | A bodyless DELETE with a JSON content-type returned 500, blaming the server for the client's request |
+| D-199 | A soft-deleted project stays visible; only a purged one is gone | `deleted_at IS NULL` hid the project the moment it was deleted, making the recovery window unusable |
 
 ## 7. Measurements
 
@@ -322,6 +368,9 @@ reality is itself the finding.
 - **M-003** — crash recovery: SIGKILL at 11 points in the saga, 11/11 converge
   with zero duplicates. restart→ready p50 30.9s, of which 30s is the liveness
   window; re-execution itself is 0.5–3s.
+- **M-004** — 20 create+delete cycles: delete→soft_deleted p50 416ms, purge p50
+  1220ms. Residue afterwards: 0 containers, 0 volumes, 0 MB still booked, 0
+  credential rows, 0 placement rows.
 
 Both were taken on an ARM Docker VM with Postgres only — no PgBouncer, no
 PostgREST. Neither licenses raising the planned density (D-091's 150 projects/node).
@@ -332,8 +381,7 @@ PostgREST. Neither licenses raising the planned density (D-091's 150 projects/no
 
 | Task | What it needs to prove |
 |---|---|
-| **T7 Deletion saga** | `DELETE` → stop, remove container, remove volume, mark deleted; create+delete ×20 leaves node and control plane clean |
-| T8 Reconciliation sweep | List containers on the node, diff against desired state, restart what is missing, *report* orphans without auto-deleting |
+| **T8 Reconciliation sweep** | List containers on the node, diff against desired state, restart what is missing, *report* orphans without auto-deleting |
 | T9 Observability seed | Structured logs to Loki, three metrics, one Grafana panel, one alert |
 | T10 Demo script | create → poll → `psql` → delete, green end to end |
 
@@ -345,6 +393,12 @@ storage, realtime, the dashboard, the CLI, the SDK. All planned in detail under
 [docs/](docs/INDEX.md); none started.
 
 **Known gaps in what *is* built:**
+
+- Deletion has no final backup and no restore-within-window. The D-066 gate exists
+  and is off; `POST /v1/projects/:ref/restore` is not implemented, so the recovery
+  window currently protects the data without yet offering a way to get it back.
+- The deletion and purge sagas have not been through the T6 kill matrix. The
+  irreversible half of a purge is exactly where a crash matters most.
 
 - The WAL archive writes to the container filesystem, not the volume, so it does not
   survive container replacement. Belongs with backups, not with provisioning.

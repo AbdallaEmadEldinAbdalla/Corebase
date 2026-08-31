@@ -120,6 +120,41 @@ This is direct evidence for D-071: a warm pool eliminates exactly the two steps 
 
 **Next measurement to take:** the same matrix against the deletion saga once T7 lands, and node-reboot convergence for T8.
 
+## M-004 — The full lifecycle, twenty times, and what it leaves behind
+
+**Date:** 2026-08-31 · **Task:** Milestone 0, T7 (deletion saga) · **Answers:** the T7 exit criterion
+
+**Environment:** same Docker staging substitute as M-002/M-003. Recovery window compressed from 7 days to 1 second and the purge scan to 2 s; every other part of the purge path — the scan, the job row, the `verify_purgeable` guard, the saga — runs exactly as it would after seven real days.
+
+**Method:** 20 cycles of `POST /v1/projects` → `ready` → connect on the returned credential and write a row → `DELETE` → `soft_deleted` → *(window closes)* → `deleted`, all through the HTTP API and the running worker. Nothing calls a saga directly. Then list the node and the control plane and assert nothing named `cb-*` remains.
+
+**Numbers:**
+
+| | p50 | max |
+|---|---|---|
+| create → `ready` | 2450 ms | 2678 ms |
+| `DELETE` → `soft_deleted` | 416 ms | 621 ms |
+| window closed → `deleted` | 1220 ms | 3070 ms |
+
+**Residue after 20 cycles:**
+
+| | |
+|---|---|
+| containers named `cb-*` on the node | **0** |
+| volumes named `cb-*` on the node | **0** |
+| node RAM still booked | **0 MB** |
+| credential rows | **0** |
+| placement rows | **0** |
+| project rows | 20, all `deleted` |
+
+**Reading it honestly.** The soft delete is fast (416 ms) because it is cheap by design: stop a container, write two timestamps. The purge is dominated by scan latency, not work — the numbers cluster around 1.0 s and 1.2 s because the scan runs every 2 s in this configuration and the cycle lands wherever it lands. The interesting figure is the residue table, and specifically **0 MB still booked**: a 350 MB-per-project capacity leak is invisible until a node refuses to place work it has room for, and no test other than a loop like this would notice it.
+
+The `project_databases` row is deleted at purge, not retained. That is not an aesthetic choice: `UNIQUE (node_id, port)` means a retained row holds its port forever against a range of a thousand per node, so keeping placement history would slowly starve a long-lived node of ports. Project rows *are* retained, because a `ref` is never reused (D-061) and a purged project must never be confusable with a new one.
+
+**What it does not license.** Any claim about deletion under crash. The T6 kill matrix covers the provisioning saga only; the same treatment for `delete_project` and `purge_project` has not been run, and the irreversible half of a purge is where a crash matters most. It also does not exercise the real 7-day window, restore-within-window (unbuilt), or a final backup (unbuilt — the D-066 gate exists and is off).
+
+**Next measurement to take:** the kill matrix against the deletion and purge sagas, and node-reboot convergence for T8.
+
 ## How to add an entry
 
 1. Number sequentially (`M-002`, …). Never renumber.

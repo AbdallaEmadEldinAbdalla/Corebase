@@ -12,7 +12,9 @@ Corebase is a developer-focused Backend-as-a-Service: a developer creates a proj
 
 The worker has also been SIGKILLed at eleven points in that saga to prove it resumes with no duplicate containers, volumes, credentials or capacity bookings.
 
-Tasks T1–T6 of ten are done; T7 (the deletion saga) is next. Nothing above the database exists yet — no data API, no auth, no storage, no dashboard.
+Deleting a project keeps its data for a 7-day recovery window and then a scheduled purge destroys it and returns the capacity; twenty create+delete cycles leave nothing behind on the node or in the control plane.
+
+Tasks T1–T7 of ten are done; T8 (the reconciliation sweep) is next. Nothing above the database exists yet — no data API, no auth, no storage, no dashboard.
 
 > **[STATUS.md](STATUS.md) is the handover document**: what works, how to run it locally, what every rule in the code is defending against, and what is not built yet. Read it before the corpus if you are here to contribute.
 
@@ -25,7 +27,7 @@ docker build -t corebase/postgres:17.5 infra/docker/postgres
 ./scripts/staging.sh seed-images && ./scripts/staging.sh verify
 ```
 
-Then the full suite (145 tests, integration included — they need the staging stack above and **fail rather than skip** without it):
+Then the full suite (165 tests, integration included — they need the staging stack above and **fail rather than skip** without it):
 
 ```bash
 pnpm test
@@ -41,6 +43,12 @@ Or kill the worker at eleven points mid-provision and watch every one converge:
 
 ```bash
 pnpm --filter @corebase/worker kill-matrix
+```
+
+Or run twenty full create-use-delete-purge cycles and check nothing is left behind:
+
+```bash
+pnpm --filter @corebase/worker lifecycle
 ```
 
 Staging is Docker Compose plus Docker-in-Docker standing in for a control node and a data node. The interface the worker drives is the real one — the Docker Engine API over mutual TLS, no per-node agent (D-052) — so no step of the plan is skipped and nothing is paid for. [STATUS.md §2](STATUS.md) has the details and the environment variables.

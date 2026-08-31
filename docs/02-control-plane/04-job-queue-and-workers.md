@@ -127,7 +127,7 @@ BullMQ repeatables are *triggers only*: each tick materializes a normal `provisi
 | Every 30 s | Sweeper (in-process timer, **not** a queue job) | The one component that must not depend on the queue it repairs |
 | Every 5 min, jittered per node | `node_reconcile` | Drift table in the [state machine](03-provisioning-state-machine.md) |
 | Hourly | Idle-pause scan → `pause_project` per candidate (D-008) | Idle policy in [postgres provisioning](../03-database-platform/01-postgres-provisioning.md) |
-| Hourly | Purge scan: `purge_after < now()` → `delete_project` (mode=purge, D-038) | |
+| Hourly | Purge scan: `purge_after < now()` → **`purge_project`** (its own job type, D-196) | |
 | Nightly, spread per node | `create_backup` per project (D-019) | |
 
 ## Decisions
