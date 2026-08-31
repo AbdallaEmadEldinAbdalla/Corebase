@@ -53,6 +53,8 @@ export interface ControlPlaneStore {
      * history you cannot trust.
      */
     actor?: Actor;
+    /** Which organization the project belongs to; defaults to the M0 bootstrap. */
+    organizationId?: string;
   }): Promise<{ project: Project; job: JobRow; replayed: boolean }>;
   /** Replay lookup: a seen key must return the original outcome (D-063). */
   findByIdempotencyKey(key: string): Promise<Project | undefined>;
@@ -86,7 +88,16 @@ export interface ControlPlaneStore {
    */
   requestDelete(ref: string, actor?: Actor): Promise<
     { project: Project; job: JobRow; alreadyRequested: boolean } | undefined>;
-  findByName(name: string): Promise<Project | undefined>;
+  /**
+   * A project with this name in this organization, if any.
+   *
+   * Org-scoped, not global. Before P1d there was one implicit org so the
+   * distinction was invisible; with real organizations a global check means one
+   * tenant taking "api" denies it to every other tenant forever — and the 409
+   * tells them a stranger has it, which is a small cross-tenant disclosure. The
+   * globally unique identifier is the `ref`; the name is a label its owners chose.
+   */
+  findByName(name: string, organizationId?: string): Promise<Project | undefined>;
   jobs(): Promise<JobRow[]>;
 }
 
@@ -176,7 +187,10 @@ export function createMemoryStore(): ControlPlaneStore {
       projects.set(ref, next);
       return next;
     },
-    async findByName(name) { return [...projects.values()].find((p) => p.name === name); },
+    async findByName(name, organizationId) {
+      return [...projects.values()].find((p) => p.name === name
+        && (!organizationId || p.organization_id === organizationId));
+    },
     async jobs() { return [...jobs]; },
   };
 }

@@ -82,7 +82,9 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
   });
 
   return {
-    async createProject({ ref, name, region, plan, idempotencyKey, requestId, actor }) {
+    async createProject({ ref, name, region, plan, idempotencyKey, requestId, actor,
+                          organizationId: orgOverride }) {
+      const orgId = orgOverride ?? organizationId;
       const client: PoolClient = await pool.connect();
       try {
         await client.query('BEGIN');
@@ -90,7 +92,7 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
           `INSERT INTO projects (organization_id, ref, name, region, plan, status)
            VALUES ($1, $2, $3, $4, $5::project_plan, 'creating')
            RETURNING ${PROJECT_COLUMNS.replace(/p\./g, '')}`,
-          [organizationId, ref, name, region, plan],
+          [orgId, ref, name, region, plan],
         );
         const project = toProject(proj.rows[0]!);
 
@@ -108,7 +110,7 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
           action: 'project.created',
           resourceType: 'project',
           resourceId: project.ref,
-          organizationId,
+          organizationId: orgId,
           projectId: project.id,
           metadata: { name, region, plan, idempotency_key: idempotencyKey },
         });
@@ -223,7 +225,10 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
           action: 'project.delete_requested',
           resourceType: 'project',
           resourceId: ref,
-          organizationId,
+          // The *project's* org, not the store's bootstrap default. Getting this
+          // wrong files the deletion of an org-A project under org B's history,
+          // which is both a wrong answer and a small cross-tenant leak.
+          organizationId: found.rows[0].organization_id,
           projectId: found.rows[0].id,
           // The one fact a customer asking "why is my project gone" needs, and
           // the reason this row must outlive the project it describes.
@@ -278,11 +283,12 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
       return rows[0] ? toProject(rows[0]) : undefined;
     },
 
-    async findByName(name) {
+    async findByName(name, orgFilter) {
       const { rows } = await pool.query<ProjectRowDb>(
         `SELECT ${PROJECT_COLUMNS} FROM projects p
-          WHERE p.name = $1 AND p.status <> 'deleted'`,
-        [name],
+          WHERE p.name = $1 AND p.status <> 'deleted'
+            AND ($2::uuid IS NULL OR p.organization_id = $2)`,
+        [name, orgFilter ?? null],
       );
       return rows[0] ? toProject(rows[0]) : undefined;
     },

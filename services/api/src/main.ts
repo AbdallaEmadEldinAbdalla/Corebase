@@ -10,6 +10,7 @@ import { createTokenStore } from './kernel/tokens.ts';
 import { createSessionStore, createMemorySessionStore } from './kernel/sessions.ts';
 import { createRateLimiter, createMemoryRateLimiter } from './kernel/rate-limit.ts';
 import type { AuthDeps } from './modules/auth/routes.ts';
+import { createOrgStore } from './modules/orgs/store.ts';
 
 const port = Number(process.env.PORT ?? 8080);
 const url = process.env.CB_CONTROL_DATABASE_URL;
@@ -110,9 +111,41 @@ const auth: AuthDeps | undefined = await (async () => {
   };
 })();
 
+/**
+ * Organizations reuse auth's pool and principal resolution: they are the same
+ * request path, and two pools for one path is two places to run out of
+ * connections.
+ */
+const orgs = auth
+  ? {
+      orgs: createOrgStore(auth.pool),
+      users: auth.users,
+      sessions: auth.sessions,
+      tokens: auth.tokens,
+      ...(auth.staticToken ? { staticToken: auth.staticToken } : {}),
+      ...(auth.staticUserId ? { staticUserId: auth.staticUserId } : {}),
+    }
+  : undefined;
+
 const app = buildApp({
   store, logger: true,
   ...(auth ? { auth } : {}),
+  ...(orgs ? { orgs } : {}),
+  ...(orgs && auth
+    ? {
+        projects: {
+          orgs: orgs.orgs,
+          // `exactOptionalPropertyTypes` is on, so an explicit `undefined` is not
+          // the same as an absent key — spread the optional fields conditionally.
+          principals: {
+            sessions: auth.sessions,
+            tokens: auth.tokens,
+            ...(auth.staticToken ? { staticToken: auth.staticToken } : {}),
+            ...(auth.staticUserId ? { staticUserId: auth.staticUserId } : {}),
+          },
+        },
+      }
+    : {}),
   ...(actorUserId ? { actorUserId } : {}),
   ...(enqueue ? { enqueue } : {}),
 });

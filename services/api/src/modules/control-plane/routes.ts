@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { CreateProjectRequest, ERROR_CODES, decodeId, encodeId, InvalidIdError } from '@corebase/types';
 import { parsePageRequest, toPage } from '../../kernel/pagination.ts';
 import { serializeProject } from './serialize.ts';
@@ -7,6 +7,9 @@ import { ApiError } from '../../kernel/errors.ts';
 import { generateProjectRef } from '../../kernel/ref.ts';
 import type { ControlPlaneStore } from './store.ts';
 import type { Actor } from '@corebase/audit';
+import { resolvePrincipal, actorOf, type PrincipalDeps } from '../../kernel/principal.ts';
+import { require_, type Role } from '../../kernel/permissions.ts';
+import type { OrgStore } from '../orgs/store.ts';
 
 /**
  * Phase two of the two-phase enqueue (D-067). Phase one — the job row — is
@@ -31,11 +34,31 @@ export interface ControlPlaneDeps {
    * fabricated user.
    */
   actorUserId?: string | null;
+  /**
+   * Org membership, for scoping projects to the caller's organizations (P1d).
+   * Absent keeps Milestone 0's behaviour — one implicit org, no permission
+   * checks — which is what the memory store and the unit tests use.
+   */
+  orgs?: OrgStore;
+  principals?: PrincipalDeps;
 }
 
 export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDeps) {
-  const requireAuth = (auth: string | undefined) => {
-    if (auth !== `Bearer ${deps.staticToken}`) throw ApiError.unauthorized();
+  /**
+   * Authenticate the request.
+   *
+   * When principals are configured this is the full dual-mode resolution — a
+   * session cookie, a PAT, or the static token — because a project endpoint that
+   * only understands the static token is one a logged-in user cannot call. That
+   * was the bug: the org-scoped routes resolved membership from a cookie the
+   * *first* check had already rejected.
+   */
+  const requireAuth = async (req: FastifyRequest) => {
+    if (deps.principals) {
+      await resolvePrincipal(req, deps.principals);
+      return;
+    }
+    if (req.headers.authorization !== `Bearer ${deps.staticToken}`) throw ApiError.unauthorized();
   };
 
   /**
@@ -47,13 +70,59 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
    * per request; when it is absent the actor is `system`, which is honest — an
    * unattributed mutation should read as unattributed, not as somebody.
    */
+  /**
+   * The org this request acts in, and the caller's role in it.
+   *
+   * Returns undefined when org scoping is not configured, which is Milestone 0's
+   * single-implicit-org behaviour and what the unit tests exercise. When it *is*
+   * configured, a caller with no membership gets 404 rather than 403 — "you lack
+   * permission on org X" confirms org X exists.
+   */
+  async function scope(req: FastifyRequest, orgIdRaw?: unknown): Promise<
+    { orgId: string; role: Role; userId: string } | undefined
+  > {
+    if (!deps.orgs || !deps.principals) return undefined;
+    const principal = await resolvePrincipal(req, deps.principals);
+    if (!principal.userId) {
+      throw new ApiError(403, ERROR_CODES.UNAUTHORIZED,
+        'This endpoint acts within an organization and the static token is not a user.');
+    }
+    let orgId: string | undefined;
+    if (typeof orgIdRaw === 'string' && orgIdRaw) {
+      try { orgId = decodeId('organization', orgIdRaw); }
+      catch (err) {
+        if (!(err instanceof InvalidIdError)) throw err;
+        throw ApiError.validation(err.message);
+      }
+    } else {
+      // No org named: the caller's only org, or an error rather than a guess.
+      // Picking one silently is how a project lands in the wrong organization.
+      const orgs = await deps.orgs.listForUser(principal.userId);
+      if (orgs.length === 0) {
+        throw new ApiError(403, ERROR_CODES.UNAUTHORIZED,
+          'You do not belong to an organization yet. Create one with POST /v1/orgs.');
+      }
+      if (orgs.length > 1) {
+        throw ApiError.validation(
+          'You belong to more than one organization; name it with org_id.');
+      }
+      orgId = orgs[0]!.id;
+    }
+    const role = await deps.orgs.roleOf(principal.userId, orgId);
+    if (!role) {
+      throw new ApiError(404, ERROR_CODES.PROJECT_NOT_FOUND,
+        'No such organization, or you are not a member of it.');
+    }
+    return { orgId, role, userId: principal.userId };
+  }
+
   const actorFor = (req: { headers: Record<string, unknown>; ip?: string }, requestId: string): Actor =>
     deps.actorUserId
       ? { type: 'user', userId: deps.actorUserId, ip: req.ip ?? null, requestId }
       : { type: 'system', userId: null, ip: req.ip ?? null, requestId };
 
   app.post('/v1/projects', async (req, reply) => {
-    requireAuth(req.headers.authorization);
+    await requireAuth(req);
 
     // Lifecycle mutations require an idempotency key (D-063) — enforced from the
     // first endpoint, not bolted on later.
@@ -88,10 +157,18 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
       throw ApiError.validation(parsed.error.issues.map((i) => i.message).join('; '));
     }
 
-    const existing = await deps.store.findByName(parsed.data.name);
+    // A member may create a project (platform API §Roles); anyone with no
+    // membership at all cannot, which is why a fresh account must join an org
+    // first rather than silently creating in someone else's.
+    const scoped = await scope(req, (req.body as { org_id?: unknown } | undefined)?.org_id);
+    if (scoped) require_(scoped.role, 'project.create');
+
+    // Scoped to the caller's org: a name another tenant took is not the caller's
+    // problem, and telling them it is taken would disclose it.
+    const existing = await deps.store.findByName(parsed.data.name, scoped?.orgId);
     if (existing) {
       throw new ApiError(409, ERROR_CODES.PROJECT_NAME_TAKEN,
-        `A project named "${parsed.data.name}" already exists.`);
+        `A project named "${parsed.data.name}" already exists in this organization.`);
     }
 
     const { project, job, replayed } = await deps.store.createProject({
@@ -101,7 +178,11 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
       plan: parsed.data.plan,
       idempotencyKey: key,
       requestId: String(reply.getHeader('x-request-id') ?? req.id),
-      actor: actorFor(req as never, String(reply.getHeader('x-request-id') ?? req.id)),
+      ...(scoped ? { organizationId: scoped.orgId } : {}),
+      actor: scoped
+        ? { type: 'user' as const, userId: scoped.userId, ip: req.ip ?? null,
+            requestId: String(reply.getHeader('x-request-id') ?? req.id) }
+        : actorFor(req as never, String(reply.getHeader('x-request-id') ?? req.id)),
     });
 
     if (deps.enqueue) {
@@ -132,7 +213,7 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
   });
 
   app.get('/v1/projects', async (req) => {
-    requireAuth(req.headers.authorization);
+    await requireAuth(req);
     const query = (req.query ?? {}) as Record<string, unknown>;
     const page = parsePageRequest(query);
 
@@ -143,6 +224,17 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
       } catch (err) {
         if (!(err instanceof InvalidIdError)) throw err;
         throw ApiError.validation(err.message);
+      }
+    }
+
+    // Scoped to the caller's own organizations. Without this the list is every
+    // project on the platform, which is the one bug in this file that would be a
+    // cross-tenant disclosure rather than an inconvenience.
+    if (deps.orgs && deps.principals) {
+      const scoped = await scope(req, organizationId ? encodeId('organization', organizationId) : undefined);
+      if (scoped) {
+        require_(scoped.role, 'project.read');
+        organizationId = scoped.orgId;
       }
     }
 
@@ -157,13 +249,18 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
   });
 
   app.get('/v1/projects/:ref', async (req) => {
-    requireAuth(req.headers.authorization);
+    await requireAuth(req);
     const { ref } = req.params as { ref: string };
     // { project, database } per the platform-API contract: the database block
     // appears once provisioning has written connection details, and carries the
     // connection strings only while the API can decrypt the credential.
     const detail = await deps.store.getProjectDetail(ref);
     if (!detail) throw ApiError.notFound('Project');
+    if (deps.orgs && deps.principals) {
+      // A ref is guessable in principle; membership is what makes it private.
+      const scoped = await scope(req, encodeId('organization', detail.project.organization_id));
+      if (scoped) require_(scoped.role, 'project.read');
+    }
     return {
       project: serializeProject(detail.project),
       ...(detail.database ? { database: detail.database } : {}),
@@ -171,13 +268,27 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
   });
 
   app.delete('/v1/projects/:ref', async (req, reply) => {
-    requireAuth(req.headers.authorization);
+    await requireAuth(req);
     const { ref } = req.params as { ref: string };
 
     // No Idempotency-Key required here, unlike create: the job's key is derived
     // from the project, so a retried DELETE cannot produce a second teardown.
-    const result = await deps.store.requestDelete(
-      ref, actorFor(req as never, String(reply.getHeader('x-request-id') ?? req.id)));
+    // Deleting is not a member's business (platform API §Roles lists their
+    // mutations as create/pause/resume). Checked against the project's own org,
+    // not the caller's default one.
+    let actor: Actor = actorFor(req as never, String(reply.getHeader('x-request-id') ?? req.id));
+    if (deps.orgs && deps.principals) {
+      const project = await deps.store.getProject(ref);
+      if (!project) throw ApiError.notFound('Project');
+      const scoped = await scope(req, encodeId('organization', project.organization_id));
+      if (scoped) {
+        require_(scoped.role, 'project.delete');
+        actor = { type: 'user', userId: scoped.userId, ip: req.ip ?? null,
+                  requestId: String(reply.getHeader('x-request-id') ?? req.id) };
+      }
+    }
+
+    const result = await deps.store.requestDelete(ref, actor);
     if (!result) throw ApiError.notFound('Project');
     const { project, job, alreadyRequested } = result;
 

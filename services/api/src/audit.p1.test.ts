@@ -173,6 +173,14 @@ describe('P1b — the guard that keeps the exit criterion true', () => {
     'POST /v1/auth/logout',
     'POST /v1/auth/tokens',
     'DELETE /v1/auth/tokens/:id',
+    'POST /v1/orgs',
+    'PATCH /v1/orgs/:org_id',
+    'DELETE /v1/orgs/:org_id',
+    'PATCH /v1/orgs/:org_id/members/:user_id',
+    'DELETE /v1/orgs/:org_id/members/:user_id',
+    'POST /v1/orgs/:org_id/invites',
+    'DELETE /v1/orgs/:org_id/invites/:invite_id',
+    'POST /v1/invites/accept',
   ]);
 
   it('every mutating route is audited', () => {
@@ -183,6 +191,7 @@ describe('P1b — the guard that keeps the exit criterion true', () => {
     buildApp({
       staticToken: TOKEN,
       auth: {} as never,
+      orgs: {} as never,
       onRoute: (r) => routes.push(`${r.method} ${r.url}`),
     });
     const mutating = routes.filter((r) => /^(POST|PUT|PATCH|DELETE) /.test(r));

@@ -4,6 +4,8 @@ import { registerControlPlane, type Enqueue } from './modules/control-plane/rout
 import { createMemoryStore, type ControlPlaneStore } from './modules/control-plane/store.ts';
 import { registerMetrics } from './kernel/metrics.ts';
 import { registerAuth, type AuthDeps } from './modules/auth/routes.ts';
+import { registerOrgs, type OrgDeps } from './modules/orgs/routes.ts';
+import type { PrincipalDeps } from './kernel/principal.ts';
 
 export interface BuildOptions {
   store?: ControlPlaneStore;
@@ -25,6 +27,14 @@ export interface BuildOptions {
    * code against.
    */
   auth?: AuthDeps;
+  /** Organizations and membership (P1d). Same rule as auth: absent, not broken. */
+  orgs?: OrgDeps;
+  /**
+   * Org scoping for the project endpoints (P1d). Absent keeps Milestone 0's
+   * behaviour — one implicit org, no permission checks — which is what the
+   * memory store and the unit tests use.
+   */
+  projects?: { orgs: OrgDeps['orgs']; principals: PrincipalDeps };
 }
 
 /** Composition root: the only place that wires modules together. */
@@ -45,11 +55,13 @@ export function buildApp(opts: BuildOptions = {}): FastifyInstance {
   app.get('/ready', async () => ({ status: 'ready' }));
 
   if (opts.auth) registerAuth(app, opts.auth);
+  if (opts.orgs) registerOrgs(app, opts.orgs);
 
   registerControlPlane(app, {
     store: opts.store ?? createMemoryStore(),
     staticToken: opts.staticToken ?? process.env.CB_STATIC_TOKEN ?? 'dev-token',
     ...(opts.actorUserId ? { actorUserId: opts.actorUserId } : {}),
+    ...(opts.projects ? { orgs: opts.projects.orgs, principals: opts.projects.principals } : {}),
     ...(opts.enqueue ? { enqueue: opts.enqueue } : {}),
     ...(opts.onEnqueueError ? { onEnqueueError: opts.onEnqueueError } : {}),
   });
