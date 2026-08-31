@@ -100,7 +100,7 @@ const mkRef = () => 'r' + String(Date.now() % 100000) + String(++seq).padStart(1
 
 const PROVISION = [
   'allocate_node', 'create_volume', 'start_container', 'wait_healthy',
-  'create_base_roles', 'store_credentials', 'write_connection', 'mark_ready',
+  'create_base_roles', 'store_credentials', 'generate_api_keys', 'write_connection', 'mark_ready',
 ];
 
 async function runSteps(jobType: string, projectId: string, names: string[]) {

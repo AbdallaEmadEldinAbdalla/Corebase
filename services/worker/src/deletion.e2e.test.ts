@@ -125,7 +125,7 @@ async function mkProject(plan = 'free') {
 
 const PROVISION = [
   'allocate_node', 'create_volume', 'start_container', 'wait_healthy',
-  'create_base_roles', 'store_credentials', 'write_connection', 'mark_ready',
+  'create_base_roles', 'store_credentials', 'generate_api_keys', 'write_connection', 'mark_ready',
 ];
 const DELETE = ['disable_api', 'disable_writes', 'final_backup', 'stop_container', 'mark_soft_deleted'];
 const PURGE = ['verify_purgeable', 'remove_container', 'remove_volume',
@@ -188,7 +188,9 @@ describe('T7 — soft delete keeps the data', () => {
     // The whole point of D-038: the data is still there.
     expect(await docker.volumeExists(volumeNameFor(p.ref))).toBe(true);
     expect(after.placements).toBe(1);
-    expect(after.secrets).toBe(3);
+    // Three passwords + keypair (3 rows) + two minted keys: all kept, because a
+    // soft delete destroys nothing.
+    expect(after.secrets).toBe(8);
     expect(after.booked).toBe(350);      // capacity still booked; nothing reclaimed yet
 
     const inspect = await docker.inspectContainer(containerName(p.ref));

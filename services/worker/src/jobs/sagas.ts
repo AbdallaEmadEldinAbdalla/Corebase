@@ -7,6 +7,8 @@ import {
 } from '../container-spec.ts';
 import type { SecretStore } from '@corebase/secrets';
 import { SECRET_NAMES } from '@corebase/secrets';
+import { createHash } from 'node:crypto';
+import { generateKeypair, sign as signJwt, projectKeyClaims } from '@corebase/jwt';
 import {
   auditImageRoles, connectAsSuperuser, ensureDeveloperRole, setRolePassword,
   DEVELOPER_ROLE,
@@ -22,6 +24,8 @@ export interface SagaDeps {
   secrets?: SecretStore;
   /** Domain the customer's connection host is built from. */
   projectDomain?: string;
+  /** `iss` for the project's own JWTs. Defaults to the project domain. */
+  jwtIssuer?: string;
   /** Recovery window before a purge may run (D-038 default: 7 days). */
   softDeleteWindow?: string;
   /**
@@ -364,10 +368,12 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       const projectId = ctx.job.project_id!;
       const { rows } = await deps.pool.query<{
         db_status: string; connection_host: string | null; container_id: string | null;
-        secret_count: number;
+        secret_count: number; api_key_count: number;
       }>(`SELECT d.status::text AS db_status, d.connection_host, d.container_id,
                  (SELECT count(*)::int FROM project_secrets s
-                   WHERE s.project_id = d.project_id AND s.state = 'active') AS secret_count
+                   WHERE s.project_id = d.project_id AND s.state = 'active') AS secret_count,
+                 (SELECT count(*)::int FROM project_api_keys k
+                   WHERE k.project_id = d.project_id AND k.revoked_at IS NULL) AS api_key_count
             FROM project_databases d WHERE d.project_id = $1`, [projectId]);
       const row = rows[0];
       if (!row) throw new Error('no placement row — cannot mark a project ready');
@@ -376,6 +382,10 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       if (!row.container_id) problems.push('no container recorded');
       if (!row.connection_host) problems.push('no connection host');
       if (row.secret_count < 3) problems.push(`only ${row.secret_count} credentials stored`);
+      if (row.api_key_count < 2) {
+        // A ready project with no keys is one the data API cannot serve.
+        problems.push(`only ${row.api_key_count} api key(s) minted`);
+      }
       if (problems.length > 0) {
         throw new Error(`refusing to mark ready: ${problems.join('; ')}`);
       }
@@ -611,6 +621,73 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
     },
   };
 
+
+  /**
+   * The project's signing keypair and its two API keys (D-014, D-029).
+   *
+   * Runs at provision time so the role model and the keys that address it arrive
+   * together — a project that is ready but has no keys is a project the data API
+   * cannot serve, and retrofitting keys means a second code path forever.
+   *
+   * Check-then-act on the `project_api_keys` rows: if both exist, this has run,
+   * and re-minting would hand the customer new keys while their app holds the old
+   * ones.
+   */
+  const generateApiKeys: SagaStep<SagaContext> = {
+    name: 'generate_api_keys',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const secrets = requireSecrets(deps);
+      const project = await loadProject(deps.pool, projectId);
+
+      const { rows: existing } = await deps.pool.query<{ kind: string }>(
+        `SELECT kind FROM project_api_keys
+          WHERE project_id = $1 AND revoked_at IS NULL`, [projectId]);
+      if (existing.length >= 2) {
+        ctx.log('api keys already present — reusing', { kinds: existing.map((r) => r.kind) });
+        return;
+      }
+
+      // The keypair is generated once and kept; a retry after a partial run must
+      // sign with the same key or the first-minted key stops verifying.
+      let privateKeyPem = await secrets.get(projectId, SECRET_NAMES.jwtPrivateKey);
+      let kid = await secrets.get(projectId, SECRET_NAMES.jwtKid);
+      if (!privateKeyPem || !kid) {
+        const pair = generateKeypair();
+        await secrets.put(projectId, SECRET_NAMES.jwtPrivateKey, pair.privateKeyPem);
+        await secrets.put(projectId, SECRET_NAMES.jwtPublicKey, pair.publicKeyPem);
+        await secrets.put(projectId, SECRET_NAMES.jwtKid, pair.kid);
+        privateKeyPem = pair.privateKeyPem;
+        kid = pair.kid;
+        ctx.log('signing keypair generated', { kid });
+      }
+
+      const issuer = deps.jwtIssuer ?? `https://${project.ref}.${deps.projectDomain ?? 'corebase.co'}`;
+      for (const role of ['anon', 'service_role'] as const) {
+        if (existing.some((r) => r.kind === role)) continue;
+        const token = signJwt(
+          projectKeyClaims({ ref: project.ref, role, issuer }),
+          { privateKeyPem, kid });
+        const name = role === 'anon' ? SECRET_NAMES.anonKey : SECRET_NAMES.serviceRoleKey;
+        // `cbk_anon_kxqw` / `cbk_srv_kxqw`, per the platform-API example — a
+        // *label*, not a slice of the token. A literal prefix of a JWT is the
+        // base64 of its header, which is byte-identical for every key of every
+        // project and so identifies nothing: the first live run showed both keys
+        // displaying as "eyJhbGciOiJF".
+        const prefix = `cbk_${role === 'anon' ? 'anon' : 'srv'}_${project.ref.slice(0, 4)}`;
+        // Envelope-encrypted (D-214) so a reveal is byte-identical, and hashed in
+        // project_api_keys so revocation is a lookup that never needs the key.
+        await secrets.put(projectId, name, token);
+        await deps.pool.query(
+          `INSERT INTO project_api_keys (project_id, kind, key_hash, key_prefix)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (key_hash) DO NOTHING`,
+          [projectId, role, createHash('sha256').update(token).digest('hex'), prefix]);
+        ctx.log('api key minted', { role, key_prefix: prefix });
+      }
+    },
+  };
+
   return {
     provision_project: [
       allocate,                      // T5c
@@ -619,6 +696,7 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       waitHealthy,                   // T5d
       createBaseRoles,               // T5e
       storeCredentials,              // T5e
+      generateApiKeys,               // P1e
       writeConnection,               // T5e
       markReady,                     // T5e
     ],

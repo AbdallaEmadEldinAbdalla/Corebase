@@ -84,6 +84,7 @@ const sagas = buildSagas({
   pool,
   secrets,
   ...(process.env.CB_PROJECT_DOMAIN ? { projectDomain: process.env.CB_PROJECT_DOMAIN } : {}),
+  ...(process.env.CB_JWT_ISSUER ? { jwtIssuer: process.env.CB_JWT_ISSUER } : {}),
   ...(docker ? { docker } : {}),
   bootstrapSecret: process.env.CB_BOOTSTRAP_SECRET ?? '',
   healthTimeoutMs: Number(process.env.CB_HEALTH_TIMEOUT_MS ?? 60_000),

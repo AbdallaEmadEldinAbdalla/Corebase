@@ -105,7 +105,7 @@ async function mkProject(plan = 'free') {
 
 const ALL_STEPS = [
   'allocate_node', 'create_volume', 'start_container', 'wait_healthy',
-  'create_base_roles', 'store_credentials', 'write_connection', 'mark_ready',
+  'create_base_roles', 'store_credentials', 'generate_api_keys', 'write_connection', 'mark_ready',
 ];
 
 async function runSteps(projectId: string, names: string[], extra: Record<string, unknown> = {}) {
@@ -311,13 +311,19 @@ describe('T5e — credentials', () => {
     } finally { rmSync(otherDir, { recursive: true, force: true }); }
   });
 
-  t('stores exactly the three credentials the project needs, one active each', async () => {
+  t('stores every secret a ready project needs, one active version each', async () => {
     const { project } = await provision();
     const { rows } = await pool.query<{ name: string; state: string; version: number }>(
       `select name, state, version from project_secrets where project_id = $1 order by name`,
       [project.id]);
-    expect(rows.map((r) => r.name))
-      .toEqual(['AUTHENTICATOR_PASSWORD', 'DEVELOPER_PASSWORD', 'POSTGRES_PASSWORD']);
+    // Three role passwords (T5e) plus the signing keypair and the two minted API
+    // keys (P1e). The keys are stored under envelope encryption rather than
+    // re-derived, per D-214.
+    expect(rows.map((r) => r.name)).toEqual([
+      'ANON_KEY', 'AUTHENTICATOR_PASSWORD', 'DEVELOPER_PASSWORD',
+      'JWT_KID', 'JWT_PRIVATE_KEY', 'JWT_PUBLIC_KEY',
+      'POSTGRES_PASSWORD', 'SERVICE_ROLE_KEY',
+    ]);
     expect(rows.every((r) => r.state === 'active' && r.version === 1)).toBe(true);
   });
 
