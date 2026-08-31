@@ -64,7 +64,11 @@ async function wipeNode() {
   for (const c of await docker.listContainers(`${LABEL_MANAGED}=true`)) {
     await docker.removeContainer(c.Id).catch(() => {});
   }
-  for (const v of await docker.listVolumes(`${LABEL_MANAGED}=true`)) {
+  // Every volume, not just the labelled ones: the reconciler reports unlabelled
+  // volumes too (a container started without a mount leaves one behind), so a
+  // fixture that only clears labelled volumes leaves drift the "clean report"
+  // tests would rightly fail on. The staging data node holds nothing else.
+  for (const v of await docker.listVolumes()) {
     await docker.removeVolume(v.Name).catch(() => {});
   }
 }
@@ -324,7 +328,7 @@ describe('T8 — bounded repair (D-065)', () => {
 });
 
 describe('T8 — unlabelled residue', () => {
-  t('reports a volume with no label and no row', async () => {
+  t('reports a labelled volume with no row', async () => {
     // Volumes created before the label existed, or by hand during an incident.
     await registerNode(pool, { hostname: 'data-1', ramTotalMb: 16384, diskTotalGb: 200, address: HOST });
     const stray = 'cb-stray-manual-pgdata';
@@ -337,6 +341,26 @@ describe('T8 — unlabelled residue', () => {
       expect(await docker.volumeExists(stray)).toBe(true);
     } finally {
       await docker.removeVolume(stray);
+    }
+  });
+
+  t('reports an unlabelled volume, which a filtered list could not see', async () => {
+    // What a container started without a mount leaves behind: the project image
+    // declares a VOLUME, so Docker creates an anonymous volume with no labels at
+    // all. It occupies disk forever and was invisible to a label-filtered list —
+    // found by noticing four of them accumulating in staging.
+    await registerNode(pool, { hostname: 'data-1', ramTotalMb: 16384, diskTotalGb: 200, address: HOST });
+    const anon = 'aaaa1111bbbb2222cccc3333dddd4444';
+    await docker.createVolume(anon, {});
+    try {
+      const report = await reconciler().reconcileOnce();
+      const d = report.drift.find((x) => x.class === 'orphan_volume');
+      expect(d).toBeDefined();
+      expect(d!.action).toBe('alert_only');
+      expect(d!.detail).toContain(anon);
+      expect(await docker.volumeExists(anon)).toBe(true);
+    } finally {
+      await docker.removeVolume(anon);
     }
   });
 

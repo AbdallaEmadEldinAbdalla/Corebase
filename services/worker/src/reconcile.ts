@@ -174,7 +174,12 @@ export function createReconciler(opts: ReconcileOptions) {
         });
       }
 
-      const volumes = await opts.docker.listVolumes(`${LABEL_MANAGED}=true`);
+      // Every volume, not just the labelled ones. An anonymous volume — what a
+      // container started without a mount leaves behind, since the project image
+      // declares a VOLUME — carries no labels at all and was therefore invisible
+      // to a filtered list, while still occupying disk forever. On a dedicated
+      // data node nothing legitimate creates one.
+      const volumes = await opts.docker.listVolumes();
       const placedRefs = new Set(desired.filter((d) => d.container_id !== undefined).map((d) => d.ref));
       const { rows: placements } = await opts.pool.query<{ ref: string }>(
         `SELECT p.ref::text AS ref FROM project_databases d JOIN projects p ON p.id = d.project_id`);
@@ -182,6 +187,20 @@ export function createReconciler(opts: ReconcileOptions) {
       for (const v of volumes) {
         const ref = v.Labels?.[LABEL_REF];
         if (ref && placedRefs.has(ref)) continue;
+        if (!ref && !v.Name.startsWith('cb-')) {
+          // Unlabelled and not ours by name. Reported, never removed — it is
+          // still somebody's bytes, and the point of this class is that a human
+          // decides.
+          log('error', 'drift found: unlabelled volume — NOT removed, needs an operator', {
+            volume: v.Name,
+          });
+          drift.push({
+            class: 'orphan_volume', action: 'alert_only',
+            detail: `volume ${v.Name} has no Corebase label and no matching name — ` +
+              'likely a container started without a mount; occupies disk forever',
+          });
+          continue;
+        }
         // Never auto-delete (D-065). This is someone's database.
         log('error', 'drift found: orphan volume — NOT removed, needs an operator', {
           volume: v.Name, ref: ref ?? 'unlabelled',

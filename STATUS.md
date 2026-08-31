@@ -176,7 +176,7 @@ boot. Don't use them.
 
 ## 4. What is built, in detail
 
-Test counts are from `pnpm test` and are all currently green: **197 tests**.
+Test counts are from `pnpm test` and are all currently green: **198 tests**.
 
 Every task below has a command that proves it; they are listed with the task.
 
@@ -362,7 +362,7 @@ alone.
 | project `ready`, container stopped or absent | enqueue the provisioning saga (**D-200**), bounded at 3/hour then mark `failed` and alert |
 | container running, project `soft_deleted`/`paused` | stop it and alert — a billing and security leak |
 | managed container with no project row | **alert only**, never removed |
-| `cb-*` volume with no placement row | **alert only**, never removed |
+| `cb-*` volume with no placement row, **or any unlabelled volume** | **alert only**, never removed |
 | `nodes.ram_reserved_mb` ≠ Σ plan bookings on that node | recompute from the rows |
 
 Repair goes through the provisioning saga rather than a bespoke restart path

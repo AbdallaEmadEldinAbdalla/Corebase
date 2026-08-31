@@ -118,7 +118,11 @@ cmd_verify() {
       if node_docker exec cb-smoke pg_isready -U postgres -q >/dev/null 2>&1; then ok=1; break; fi
       sleep 1
     done
-    node_docker rm -f cb-smoke >/dev/null 2>&1 || true
+    # -v matters: the project image declares VOLUME /var/lib/postgresql/data, so a
+    # container started without a mount gets an anonymous volume. Without -v this
+    # check leaked ~60 MB of unreferenced volume every time it ran, which is
+    # exactly the slow disk leak T8 exists to catch.
+    node_docker rm -f -v cb-smoke >/dev/null 2>&1 || true
     [ "$ok" -eq 1 ] && echo "PASS" || { echo "FAIL (never became ready)"; fail=1; }
   else echo "FAIL (could not start)"; fail=1; fi
 

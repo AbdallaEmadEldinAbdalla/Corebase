@@ -43,7 +43,7 @@ Then start the services and watch the whole thing work in about five seconds:
 
 It creates a project, waits for it, connects to the database it made with the credentials the API handed back, runs real SQL, and deletes it — using only `curl` and `psql`, which is exactly what a customer has.
 
-The full suite is 197 tests, integration included; they need the staging stack above and **fail rather than skip** without it:
+The full suite is 198 tests, integration included; they need the staging stack above and **fail rather than skip** without it:
 
 ```bash
 pnpm test
