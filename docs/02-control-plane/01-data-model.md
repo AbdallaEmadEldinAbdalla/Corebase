@@ -193,18 +193,27 @@ CREATE TABLE project_api_keys (                                        -- §47
 );
 CREATE INDEX idx_api_keys_project ON project_api_keys(project_id) WHERE revoked_at IS NULL;
 
+-- D-188: column names follow the credentials doc; `kek_id` is text because the
+-- master key is a file named <kek_id>.key, and an integer version cannot name one.
 CREATE TABLE project_secrets (                                         -- §48, D-035
-  id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  project_id          uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  name                text NOT NULL CHECK (name ~ '^[A-Z][A-Z0-9_]{0,127}$'),
-  ciphertext          bytea NOT NULL,   -- secret encrypted under the data key
-  data_key_ciphertext bytea NOT NULL,   -- per-secret data key, encrypted under master key
-  key_version         integer NOT NULL, -- which master-key version wrapped the data key
-  created_by          uuid REFERENCES users(id),
-  created_at          timestamptz NOT NULL DEFAULT now(),
-  updated_at          timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (project_id, name)
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id   uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name         text NOT NULL CHECK (name ~ '^[A-Z][A-Z0-9_]{0,127}$'),
+  version      integer NOT NULL DEFAULT 1 CHECK (version > 0),
+  ciphertext   bytea NOT NULL,   -- secret encrypted under the data key (AAD: project_id, name, version)
+  dek_wrapped  bytea NOT NULL,   -- per-secret data key, encrypted under the master key
+  kek_id       text NOT NULL,    -- which master key wrapped this DEK (enables KEK rotation)
+  state        text NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'retiring')),
+  created_by   uuid REFERENCES users(id),
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  updated_at   timestamptz NOT NULL DEFAULT now(),
+  rotated_at   timestamptz,
+  UNIQUE (project_id, name, version)
 );
+-- Exactly one active version per name, enforced by the database: two active rows
+-- means the dashboard renders a connection string that may or may not work.
+CREATE UNIQUE INDEX project_secrets_one_active
+  ON project_secrets (project_id, name) WHERE state = 'active';
 ```
 
 *Rationale:* envelope encryption per D-035 — decryption requires the KMS master key, so a control-plane DB dump alone leaks nothing. `key_version` makes master-key rotation a background re-wrap job (`rotate_credentials` in [job queue](04-job-queue-and-workers.md)) instead of a migration. API keys: the full key is shown exactly once at creation; thereafter only `key_prefix` is displayable. Verification at the gateway is JWT-signature-based (D-029/D-014); `key_hash` exists for revocation lookups.
@@ -213,9 +222,11 @@ CREATE TABLE project_secrets (                                         -- §48, 
 -- ============================================================
 -- Fleet: nodes & project databases
 -- ============================================================
+-- D-192: `address` is the route the control plane uses; `hostname` is identity.
 CREATE TABLE nodes (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   hostname      text NOT NULL UNIQUE,
+  address       text,                    -- how the control plane reaches it (D-192)
   region        text NOT NULL DEFAULT 'eu-central',
   status        node_status NOT NULL DEFAULT 'active',
   ram_total_mb  integer NOT NULL CHECK (ram_total_mb > 0),
@@ -238,7 +249,8 @@ CREATE TABLE project_databases (                                       -- §58
   volume_name   text NOT NULL,            -- survives pause (D-008)
   port          integer NOT NULL CHECK (port BETWEEN 1024 AND 65535),
   pooler_port   integer NOT NULL,
-  pg_version    text NOT NULL DEFAULT '17',       -- D-037
+  pg_version    text NOT NULL DEFAULT '17',                            -- D-037
+  connection_host text,                   -- customer-facing name, written at provision time
   status        database_status NOT NULL DEFAULT 'provisioning',
   ram_limit_mb  integer NOT NULL,         -- the cgroup limit; sums into node accounting
   paused_at     timestamptz,

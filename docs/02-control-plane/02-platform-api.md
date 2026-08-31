@@ -215,6 +215,7 @@ Design rule without its own D number: not-found and no-permission collapse to `4
 
 - OQ-043: Ready-notification transport for the dashboard — poll `GET /v1/projects/:ref` vs an SSE `/v1/events` stream. Polling ships first; decide SSE before the dashboard's project-creation UX is finalized ([dashboard IA](../09-dashboard/01-dashboard-ia.md)).
 - OQ-044: Exact rate-limit numbers per plan tier (table above is a placeholder) — settle with [pricing & plans](../12-business/02-pricing-and-plans.md) and load testing.
+- OQ-175: **Response-envelope alignment.** M0's implementation returns the project object bare from `POST /v1/projects` and `{ data: [...] }` from the list endpoint, while this doc specifies `{ project, job }` and `{ projects, pagination }`. `GET /v1/projects/:ref` was brought onto the documented `{ project, database }` shape in T5e; the other two are still divergent. Fix them in one breaking change together with cursor pagination and the `api_keys` block, rather than shape-by-shape — every fix is a client break, so they should cost one break in total.
 - OQ-065: PAT lifetime policy — indefinite-by-default with revocation, or forced expiry (90 days) with refresh via `corebase login`? Security prefers expiry; CI ergonomics prefer indefinite.
 
 ## Dependencies
