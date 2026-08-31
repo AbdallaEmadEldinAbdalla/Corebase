@@ -17,7 +17,8 @@
     "test": {
       "dependsOn": [
         "^build"
-      ]
+      ],
+      "cache": false
     },
     "lint": {},
     "dev": {
@@ -27,7 +28,8 @@
     "test:unit": {
       "dependsOn": [
         "^build"
-      ]
+      ],
+      "cache": false
     }
   }
 }
