@@ -73,6 +73,13 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
+      # `cache-to: type=gha` is not supported by buildx's default *docker* driver,
+      # which is what a runner has out of the box — the build fails outright with
+      # "Cache export is not supported for the docker driver". setup-buildx-action
+      # creates a docker-container builder, which supports both the GitHub cache
+      # and `load: true` into the local image store.
+      - uses: docker/setup-buildx-action@v4
+
       - name: build the project database image
         # The same image the worker puts on a data node: the extension allowlist
         # (D-078) and the auth hardening (D-185) are enforced at build time, so a

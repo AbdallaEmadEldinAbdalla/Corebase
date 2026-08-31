@@ -27,6 +27,8 @@ jobs:
         with: { node-version: '22', cache: pnpm }
       - run: pnpm install --frozen-lockfile
 
+      # See ci.yml: the default docker driver cannot export a cache.
+      - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
         with:
           context: infra/docker/postgres
