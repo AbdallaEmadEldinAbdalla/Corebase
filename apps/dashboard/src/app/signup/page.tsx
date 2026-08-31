@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { api, setCsrfToken, ApiError } from '../../lib/api.ts';
 import { ErrorSurface, FieldError } from '../../components/ErrorSurface.tsx';
+import { Logo } from '../../components/Logo.tsx';
 import { ThemeToggle } from '../../components/ThemeToggle.tsx';
 
 /** Mirrors MIN_PASSWORD_LENGTH in @corebase/crypto. Checked here so the user
@@ -49,7 +50,7 @@ export default function SignupPage() {
       <div style={{ position: 'fixed', top: 16, right: 16 }}><ThemeToggle /></div>
       <div className="auth__panel">
         <div className="auth__brand">
-          <span className="topbar__mark" aria-hidden="true" />
+          <Logo size={26} />
           Corebase
         </div>
         <h1 className="auth__title">Create an account</h1>

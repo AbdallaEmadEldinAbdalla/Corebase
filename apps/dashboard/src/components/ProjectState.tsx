@@ -40,12 +40,27 @@ export const SETTLING: ReadonlySet<string> = new Set<ProjectStatus>([
 /** What the label says. `soft_deleted` reads badly in a badge; the rest are fine. */
 const LABEL: Partial<Record<ProjectStatus, string>> = { soft_deleted: 'DELETED' };
 
-export function ProjectStateBadge({ status }: { status: string }): ReactElement {
+export function ProjectStateBadge({ status, compact }: {
+  status: string;
+  /** Dot only, with the word as the accessible name — for menus and dense rows
+   *  where the label would not fit. D-180 still holds: the word is present, it is
+   *  just carried by the title/aria rather than by pixels. */
+  compact?: boolean;
+}): ReactElement {
   // An unknown state renders neutral under its own name rather than being mapped
   // to something reassuring. Inventing "ready" for a state this build does not
   // know is the one failure mode that actually matters here.
   const tone = TONE[status as ProjectStatus] ?? '';
   const label = LABEL[status as ProjectStatus] ?? status.replace(/_/g, ' ');
+  if (compact) {
+    return (
+      <span className={`cb-badge ${tone}`.trim()} title={label.toUpperCase()}
+            style={{ padding: 0, width: 16, height: 16, justifyContent: 'center', background: 'none' }}>
+        <span className="cb-dot" aria-hidden="true" />
+        <span className="cb-sr">{label}</span>
+      </span>
+    );
+  }
   return (
     <span className={`cb-badge ${tone}`.trim()}>
       <span className="cb-dot" aria-hidden="true" />

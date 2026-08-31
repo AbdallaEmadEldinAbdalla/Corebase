@@ -1,0 +1,284 @@
+/* The application shell (P1g redesign).
+   components.css draws the components; this places them. Everything here is
+   layout, layering and motion — no colour that is not a role token (D-178), no
+   drop shadows (D-179), and every transition bounded by D-225. */
+
+/* ── the frame ────────────────────────────────────────────────────────────────
+   Fixed top bar, fixed sidebar, scrolling content. The chrome is outside the
+   route that changes, so navigating within a context repaints only the content
+   region — UX standard §1. */
+.shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 232px 1fr;
+  grid-template-rows: 48px 1fr;
+  grid-template-areas: "bar bar" "nav main";
+}
+.shell--noNav {
+  grid-template-columns: 1fr;
+  grid-template-areas: "bar" "main";
+}
+
+.bar {
+  grid-area: bar;
+  display: flex; align-items: center; gap: var(--cb-space-3);
+  padding: 0 var(--cb-space-4);
+  background: var(--cb-surface);
+  border-bottom: 1px solid var(--cb-border);
+  position: sticky; top: 0; z-index: 30;
+}
+.bar__mark {
+  width: 20px; height: 20px; border-radius: var(--cb-radius-sm);
+  background: var(--cb-accent); flex: none;
+}
+.bar__spacer { flex: 1; }
+
+/* ── breadcrumb, where every segment is a switcher (§1) ───────────────────── */
+.crumbs { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.crumbs__sep { color: var(--cb-text-muted); font: var(--cb-body-s); padding: 0 2px; }
+
+.crumb {
+  display: flex; align-items: center; gap: var(--cb-space-2);
+  height: 30px; padding: 0 var(--cb-space-2) 0 var(--cb-space-3);
+  border: 1px solid transparent; border-radius: var(--cb-radius-sm);
+  background: none; color: var(--cb-text); font: var(--cb-body-s); font-weight: 500;
+  cursor: pointer; max-width: 220px;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+.crumb:hover { background: var(--cb-surface-alt); border-color: var(--cb-border); }
+.crumb[aria-expanded="true"] { background: var(--cb-surface-alt); border-color: var(--cb-border-strong); }
+.crumb__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crumb__caret { color: var(--cb-text-muted); font-size: 10px; flex: none; }
+
+/* ── the sidebar ──────────────────────────────────────────────────────────── */
+.nav {
+  grid-area: nav;
+  background: var(--cb-surface);
+  border-right: 1px solid var(--cb-border);
+  padding: var(--cb-space-3) var(--cb-space-2);
+  display: flex; flex-direction: column; gap: 2px;
+  position: sticky; top: 48px; align-self: start;
+  height: calc(100vh - 48px);
+  overflow-y: auto;
+}
+.nav__label {
+  font: var(--cb-caption); letter-spacing: var(--cb-tracking-caption);
+  text-transform: uppercase; color: var(--cb-text-muted);
+  padding: var(--cb-space-3) var(--cb-space-3) var(--cb-space-1);
+}
+.nav .cb-nav-item { height: 34px; transition: background 140ms ease; }
+.nav__foot { margin-top: auto; padding: var(--cb-space-2); }
+.nav__hint {
+  display: flex; align-items: center; justify-content: space-between;
+  font: var(--cb-caption); color: var(--cb-text-muted);
+}
+
+/* ── content ──────────────────────────────────────────────────────────────── */
+.main { grid-area: main; min-width: 0; }
+.wrap { max-width: 1120px; padding: var(--cb-space-6) var(--cb-space-6) var(--cb-space-12); }
+.wrap--narrow { max-width: 620px; }
+
+.head { display: flex; align-items: flex-start; gap: var(--cb-space-4); margin-bottom: var(--cb-space-6); }
+.head__title { font: var(--cb-heading-1); letter-spacing: var(--cb-tracking-heading-1); margin: 0; }
+.head__sub { font: var(--cb-body-s); color: var(--cb-text-secondary); margin: 6px 0 0; }
+.head__actions { margin-left: auto; display: flex; align-items: center; gap: var(--cb-space-2); }
+
+.section { margin-bottom: var(--cb-space-8); }
+.section__head {
+  display: flex; align-items: baseline; gap: var(--cb-space-3);
+  margin-bottom: var(--cb-space-3); flex-wrap: wrap;
+}
+/* The title never wraps to make room for its own note — a two-line heading beside
+   a one-line explanation reads as a layout accident. */
+.section__title { flex: none; }
+.section__title { font: var(--cb-heading-3); margin: 0; white-space: nowrap; }
+.section__note { font: var(--cb-body-s); color: var(--cb-text-muted); margin: 0; flex: 1; min-width: 220px; }
+
+.card {
+  background: var(--cb-surface); border: 1px solid var(--cb-border);
+  border-radius: var(--cb-radius-lg); overflow: hidden;
+}
+.card__body { padding: var(--cb-space-6); }
+.card__foot {
+  padding: var(--cb-space-3) var(--cb-space-6);
+  border-top: 1px solid var(--cb-border); background: var(--cb-surface-alt);
+  font: var(--cb-body-s); color: var(--cb-text-secondary);
+  display: flex; align-items: center; gap: var(--cb-space-3);
+}
+
+/* Definition rows. Label column is fixed so values line up across cards. */
+.facts { display: grid; grid-template-columns: 160px 1fr; gap: var(--cb-space-3) var(--cb-space-6); }
+.facts__k {
+  font: var(--cb-caption); letter-spacing: var(--cb-tracking-caption);
+  text-transform: uppercase; color: var(--cb-text-muted); padding-top: 3px;
+}
+.facts__v { font: var(--cb-body-m); min-width: 0; }
+.facts__v code { font: var(--cb-code); overflow-wrap: anywhere; }
+
+/* ── tables ───────────────────────────────────────────────────────────────── */
+.tablewrap {
+  background: var(--cb-surface); border: 1px solid var(--cb-border);
+  border-radius: var(--cb-radius-lg); overflow: hidden;
+}
+.tablewrap .cb-table tbody tr:last-child td { border-bottom: 0; }
+.tablewrap .cb-table tbody tr { cursor: pointer; }
+.tablecount {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: var(--cb-space-3) var(--cb-space-4);
+  border-top: 1px solid var(--cb-border); background: var(--cb-surface-alt);
+  font: var(--cb-body-s); color: var(--cb-text-secondary);
+}
+.td-actions { width: 44px; text-align: right; }
+
+/* Row menu trigger: visible on hover *and* on focus, and in the DOM either way,
+   so it is never a pointer-only affordance (§2). */
+.rowbtn {
+  width: 28px; height: 28px; display: grid; place-items: center;
+  border: 1px solid transparent; border-radius: var(--cb-radius-sm);
+  background: none; color: var(--cb-text-muted); cursor: pointer;
+  opacity: 0; transition: opacity 140ms ease;
+}
+tr:hover .rowbtn, .rowbtn:focus-visible, .rowbtn[aria-expanded="true"] { opacity: 1; }
+.rowbtn:hover { background: var(--cb-surface); border-color: var(--cb-border); color: var(--cb-text); }
+
+/* ── project cards (identity view) ────────────────────────────────────────── */
+.cards { display: grid; gap: var(--cb-space-4); grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); }
+
+/* ── the segmented view toggle ────────────────────────────────────────────── */
+.seg { display: inline-flex; padding: 2px; background: var(--cb-surface-alt);
+       border: 1px solid var(--cb-border); border-radius: var(--cb-radius-md); }
+.seg button {
+  height: 28px; padding: 0 var(--cb-space-3); border: 0; background: none;
+  border-radius: var(--cb-radius-sm); font: var(--cb-body-s); font-weight: 500;
+  color: var(--cb-text-secondary); cursor: pointer; transition: background 140ms ease;
+}
+.seg button[aria-pressed="true"] { background: var(--cb-surface); color: var(--cb-text); }
+
+/* ── layers: scrim, dialog, palette ───────────────────────────────────────── */
+.layer {
+  position: fixed; inset: 0; z-index: 50;
+  background: var(--cb-scrim);
+  display: grid; place-items: start center;
+  padding: 12vh var(--cb-space-4) var(--cb-space-4);
+  animation: layer-in 140ms ease;
+}
+.layer--center { place-items: center; padding: var(--cb-space-4); }
+
+.palette {
+  width: 100%; max-width: 560px;
+  background: var(--cb-surface-raised); border: 1px solid var(--cb-border-strong);
+  border-radius: var(--cb-radius-lg); overflow: hidden;
+  animation: rise-in 160ms ease;
+}
+.palette__input {
+  width: 100%; height: 52px; padding: 0 var(--cb-space-4);
+  border: 0; border-bottom: 1px solid var(--cb-border);
+  background: none; color: var(--cb-text); font: var(--cb-body-l);
+}
+.palette__input:focus { outline: none; }
+.palette__input::placeholder { color: var(--cb-text-muted); }
+.palette__list { max-height: 46vh; overflow-y: auto; padding: var(--cb-space-1); }
+.palette__group {
+  font: var(--cb-caption); letter-spacing: var(--cb-tracking-caption);
+  text-transform: uppercase; color: var(--cb-text-muted);
+  padding: var(--cb-space-3) var(--cb-space-3) var(--cb-space-1);
+}
+.palette__item {
+  display: flex; align-items: center; gap: var(--cb-space-3);
+  width: 100%; height: 38px; padding: 0 var(--cb-space-3);
+  border: 0; border-radius: var(--cb-radius-sm); background: none;
+  color: var(--cb-text); font: var(--cb-body-m); text-align: left; cursor: pointer;
+}
+/* Selection is driven by the keyboard cursor, not by :hover, so the pointer and
+   the arrow keys never disagree about which row will run. */
+.palette__item[data-active="true"] { background: var(--cb-accent-subtle); }
+.palette__item mark { background: none; color: var(--cb-accent); font-weight: 600; }
+.palette__hint { margin-left: auto; font: var(--cb-code); color: var(--cb-text-muted); flex: none; }
+.palette__empty { padding: var(--cb-space-6) var(--cb-space-3); font: var(--cb-body-s); color: var(--cb-text-muted); text-align: center; }
+.palette__foot {
+  display: flex; gap: var(--cb-space-4); padding: var(--cb-space-3) var(--cb-space-4);
+  border-top: 1px solid var(--cb-border); background: var(--cb-surface-alt);
+  font: var(--cb-caption); color: var(--cb-text-muted);
+}
+
+.kbd {
+  display: inline-grid; place-items: center; min-width: 20px; height: 20px;
+  padding: 0 5px; border: 1px solid var(--cb-border-strong);
+  border-radius: var(--cb-radius-sm); background: var(--cb-surface);
+  font: var(--cb-code); font-size: 11px; color: var(--cb-text-secondary);
+}
+
+/* ── toasts ───────────────────────────────────────────────────────────────── */
+.toasts {
+  position: fixed; z-index: 60; bottom: var(--cb-space-6); right: var(--cb-space-6);
+  display: flex; flex-direction: column; gap: var(--cb-space-2);
+}
+.toasts .cb-toast { animation: rise-in 160ms ease; }
+
+/* ── the menu, positioned ─────────────────────────────────────────────────── */
+.pop { position: relative; }
+.pop__menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 40; animation: rise-in 140ms ease; }
+.pop__menu--right { left: auto; right: 0; }
+.pop__menu .cb-menu { margin-top: 0; }
+.cb-menu__item { cursor: pointer; width: 100%; border: 0; background: none; text-align: left; }
+.cb-menu__item:hover, .cb-menu__item:focus-visible { background: var(--cb-surface-alt); }
+.cb-menu__item.is-active { background: var(--cb-accent-subtle); }
+.cb-menu__sep { height: 1px; margin: 4px; background: var(--cb-border); }
+.cb-menu__check { margin-left: auto; color: var(--cb-accent); flex: none; }
+
+/* ── code, full width in a page context ───────────────────────────────────── */
+.codeblock { max-width: none; }
+.codeblock pre {
+  margin: 0; padding: var(--cb-space-4);
+  font: var(--cb-code); color: var(--cb-code-text);
+  /* Wrap rather than scroll. A connection URI is one very long token, and a
+     horizontal scrollbar that macOS only draws while you are scrolling means the
+     user sees a truncated string with no sign there is more of it — they copy what
+     they can see. Every snippet here has short lines, so wrapping costs nothing. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.codeblock .tok-key { color: var(--cb-code-keyword); }
+.codeblock .tok-str { color: var(--cb-code-string); }
+.codeblock .tok-com { color: var(--cb-code-comment); }
+
+/* ── motion (D-225) ───────────────────────────────────────────────────────── */
+@keyframes layer-in { from { opacity: 0 } to { opacity: 1 } }
+@keyframes rise-in  { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: none } }
+
+/* Not a nicety: unbounded motion is an accessibility failure, not a taste
+   question. Everything above is decoration over a layout that already works. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Visually hidden but announced. Used where a badge is a dot only: D-180 says
+   state is never colour alone, and this is how the word survives without pixels. */
+.cb-sr {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* components.css caps .cb-empty at 340px, which is right on a reference board and
+   wrong in a 1120px content column — it leaves the empty state floating in the
+   top-left corner looking like a stray card. Centre it and give it room, without
+   editing the exported component. */
+.emptywrap { display: grid; place-items: center; padding: var(--cb-space-12) var(--cb-space-4); }
+.emptywrap .cb-empty { max-width: 420px; }
+
+/* An anchor that looks like a control must not carry a text underline.
+   components.css never needed this because the boards only ever drew <button>;
+   the app uses <a> wherever a control also navigates, so that ⌘-click and
+   middle-click open a new tab like anywhere else on the web. The underline is the
+   only thing that gave the difference away, and it looked like a mistake. */
+a.cb-btn,
+a.cb-menu__item,
+a.cb-card__link,
+a.section__note { text-decoration: none; }
+
+/* Inline text links keep their underline — inside a paragraph it is the only
+   thing marking them as links, and colour alone is not enough. */

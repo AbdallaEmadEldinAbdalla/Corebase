@@ -1,6 +1,6 @@
 'use client';
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type Org } from './api.ts';
 import { SETTLING } from '../components/ProjectState.tsx';
 
@@ -28,12 +28,30 @@ export function useOrgBySlug(slug: string) {
   return { ...query, org };
 }
 
+/**
+ * An organization's projects, paginated.
+ *
+ * Infinite rather than a single page because the API's default limit is 20 and the
+ * first version of the list ignored `pagination.next_cursor` entirely — so an
+ * organization with 25 projects saw 20 of them under a footer reading "Showing 20
+ * of 20". That is the exact failure the UX standard forbids: a list that shows part
+ * of the data must say how much and offer the rest (§4), and silent truncation reads
+ * as "you have seen everything".
+ *
+ * Callers that only need names — the breadcrumb switcher, the command palette — read
+ * `projects` and get whatever pages are loaded, which is the first page until
+ * someone asks for more. That is the right answer for a switcher.
+ */
 export function useProjects(orgId: string | undefined) {
-  return useQuery({
+  const query = useInfiniteQuery({
     queryKey: keys.projects(orgId ?? 'none'),
-    queryFn: () => api.projects(orgId as string),
+    queryFn: ({ pageParam }) => api.projects(orgId as string, pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.pagination?.next_cursor ?? undefined,
     enabled: Boolean(orgId),
   });
+  const projects = query.data?.pages.flatMap((p) => p.projects) ?? [];
+  return { ...query, projects };
 }
 
 /**
@@ -65,6 +83,14 @@ export function useProjectKeys(ref: string, enabled = true) {
     queryKey: keys.projectKeys(ref),
     queryFn: () => api.projectKeys(ref),
     enabled,
+  });
+}
+
+export function useCreateOrg() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ name, slug }: { name: string; slug: string }) => api.createOrg(name, slug),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: keys.orgs }); },
   });
 }
 

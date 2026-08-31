@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useRouter, usePathname } from 'next/navigation';
 import { ApiError, setUnauthenticatedHandler } from '../lib/api.ts';
+import { ToastProvider } from '../components/Toasts.tsx';
 
 /**
  * TanStack Query is the whole data layer (D-130): the server cache *is* the app
@@ -53,5 +54,9 @@ export function Providers({ children }: { children: ReactNode }) {
     return () => setUnauthenticatedHandler(() => {});
   }, [router, pathname]);
 
-  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  return (
+    <QueryClientProvider client={client}>
+      <ToastProvider>{children}</ToastProvider>
+    </QueryClientProvider>
+  );
 }

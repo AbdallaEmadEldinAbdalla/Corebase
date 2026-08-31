@@ -3,6 +3,7 @@ import { Providers } from './providers.tsx';
 import '../styles/tokens.css';
 import '../styles/components.css';
 import '../styles/app.css';
+import '../styles/shell.css';
 
 export const metadata = {
   title: 'Corebase',

@@ -1,33 +1,32 @@
 'use client';
 
+import Link from 'next/link';
 import { AppShell } from '../../components/AppShell.tsx';
 
 /**
- * A signed-in account with no organization. A real state — an invite that was
- * never accepted, or an org that was deleted — and it gets a page rather than a
- * redirect loop back to login, which is what "you are not signed in" would be
- * telling the user, untruthfully.
+ * A signed-in account with no organization: an account created moments ago, an
+ * invite never accepted, or an org that was deleted.
  *
- * Creating an org from here needs `POST /v1/orgs`, which exists. It is not
- * offered yet because the shell's scope is login → switch → list → create
- * project → overview; an org-creation flow with a slug rule and a danger zone is
- * its own task, and a half-built one here would be the worse outcome.
+ * It carries the action that resolves it. The first version of this page only
+ * *explained* the state, which made it a dead end — the endpoint had existed since
+ * P1d with no screen, so the only way out of a fresh account was curl. An empty
+ * state without its action is a dead end (UX standard §6), and this was the
+ * clearest one in the product.
  */
 export default function NoOrgPage() {
   return (
     <AppShell>
-      <main className="page">
-        <div className="page__inner">
-          <div className="cb-empty">
+      <div className="wrap">
+          <div className="emptywrap"><div className="cb-empty">
             <div className="cb-empty__icon" aria-hidden="true">·</div>
             <div className="cb-empty__title">No organizations yet</div>
             <div className="cb-empty__text">
-              Your account is not a member of any organization. If you were invited,
-              open the invitation link you were sent to accept it.
+              Organizations own projects. Create one to get started, or open the
+              invitation link you were sent if someone added you to theirs.
             </div>
-          </div>
-        </div>
-      </main>
+            <Link className="cb-btn" href="/new-org">New organization</Link>
+          </div></div>
+      </div>
     </AppShell>
   );
 }

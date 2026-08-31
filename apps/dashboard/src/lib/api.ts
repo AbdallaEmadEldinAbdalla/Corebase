@@ -232,9 +232,13 @@ export const api = {
 
   orgs: () => request<{ orgs: Org[] }>('/v1/orgs'),
 
-  projects: (orgId: string) =>
+  createOrg: (name: string, slug: string) =>
+    request<{ org: Org }>('/v1/orgs', { method: 'POST', body: { name, slug } }),
+
+  projects: (orgId: string, cursor?: string) =>
     request<{ projects: Project[]; pagination: Pagination }>(
-      `/v1/projects?org_id=${encodeURIComponent(orgId)}`),
+      `/v1/projects?org_id=${encodeURIComponent(orgId)}`
+      + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : '')),
 
   project: (ref: string) =>
     request<{ project: Project; database?: DatabaseInfo }>(

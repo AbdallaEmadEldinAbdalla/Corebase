@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { api, setCsrfToken, ApiError } from '../../lib/api.ts';
 import { ErrorSurface } from '../../components/ErrorSurface.tsx';
+import { Logo } from '../../components/Logo.tsx';
 import { ThemeToggle } from '../../components/ThemeToggle.tsx';
 
 /**
@@ -83,7 +84,7 @@ function LoginForm() {
       <div style={{ position: 'fixed', top: 16, right: 16 }}><ThemeToggle /></div>
       <div className="auth__panel">
         <div className="auth__brand">
-          <span className="topbar__mark" aria-hidden="true" />
+          <Logo size={26} />
           Corebase
         </div>
         <h1 className="auth__title">Sign in</h1>
