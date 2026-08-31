@@ -285,6 +285,14 @@ The single authoritative register of every locked decision in the corpus, ADR-st
 | D-179 | No drop shadows (elevation = surface tint + border weight); type families frozen at two — Inter for interface, JetBrains Mono for anything copyable | [design system](../09-dashboard/04-design-system.md) |
 | D-180 | State is never colour alone: every project state carries a text label, selection uses a left accent bar | [design system](../09-dashboard/04-design-system.md) |
 
+## Self-hosting (from 10-cli-and-sdk/04)
+
+| ID | Decision | Detail |
+|---|---|---|
+| D-181 | The dashboard ships in self-host in **single-project mode** (`CB_SELFHOST=true`) behind a `meta` introspection service and a control-plane shim serving a documented endpoint subset; org/billing/usage/team routes compiled out, unimplemented routes return `501 not_available_in_selfhost` | [self-hosting](../10-cli-and-sdk/04-self-hosting.md) |
+| D-182 | Postgres is not published to the host by default (pooler on 6543 is the only DB entry point); dashboard protected by basic auth with docs mandating a reverse proxy | [self-hosting](../10-cli-and-sdk/04-self-hosting.md) |
+| D-183 | Every self-host secret is a required variable with no default — the stack refuses to boot rather than run on a known-weak credential | [self-hosting](../10-cli-and-sdk/04-self-hosting.md) |
+
 ## How to add a decision
 
 1. Propose it in the owning doc's **Decisions** section with rationale.

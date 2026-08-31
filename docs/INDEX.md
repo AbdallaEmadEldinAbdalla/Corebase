@@ -106,6 +106,7 @@ The complete A-to-Z plan for Corebase. Every doc follows the template **Purpose 
 | [01 CLI spec](10-cli-and-sdk/01-cli-spec.md) | Full command surface, auth/link model, config files |
 | [02 Local development](10-cli-and-sdk/02-local-development.md) | `corebase dev` Docker Compose stack, local↔remote parity |
 | [03 SDK spec](10-cli-and-sdk/03-sdk-spec.md) | `@corebase/core` API surface |
+| [04 Self-hosting](10-cli-and-sdk/04-self-hosting.md) | Docker Compose self-host stack, dashboard in single-project mode, hardening deltas |
 
 ## 11 — Infrastructure
 
@@ -140,6 +141,7 @@ The complete A-to-Z plan for Corebase. Every doc follows the template **Purpose 
 | [02 V1 scope & cut list](14-roadmap/02-v1-scope-and-cutlist.md) | V1 in/out, explicit cuts with reasons, MVP success criteria |
 | [03 Post-V1 roadmap](14-roadmap/03-post-v1-roadmap.md) | V1.1 → V3: OAuth, realtime, functions, multi-region, enterprise |
 | [04 Milestone 0](14-roadmap/04-milestone-0.md) | The very first milestone, task-by-task, ready to execute |
+| [05 Measurement log](14-roadmap/05-measurements.md) | Assumed vs measured numbers; the evidence the M0 retro reads |
 
 ## 15 — Risks
 

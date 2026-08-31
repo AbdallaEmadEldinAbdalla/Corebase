@@ -131,7 +131,7 @@ Because every tier runs the identical container triplet, upgrades are a *resched
 ## Open Questions
 
 - **OQ-050** — Gateway behavior for a request hitting a PAUSED project: hold the request while triggering resume (nice UX, but hostage connections if resume is slow), or return `503 + Retry-After` with the SDK auto-retrying? Needs a measured cold-resume time first. Owner: [postgres provisioning](../03-database-platform/01-postgres-provisioning.md) + [SDK spec](../10-cli-and-sdk/03-sdk-spec.md). **Resolved by D-172:** never-hold; immediate 503 + `Retry-After: 5`, `project_resuming`.
-- **OQ-056** — Benchmark the real idle RSS of the triplet under PG 17 with plan-sized `shared_buffers`, and PostgREST under schema-cache load, before the cost model's numbers are locked. The 350 MB planning figure (D-091) is literature + analogy, not measurement.
+- **OQ-056** *(first data: [M-001](../14-roadmap/05-measurements.md) — Postgres alone idles at 5 MiB anon / 102 MiB peak on ARM; triplet on target hardware still needed)* — Benchmark the real idle RSS of the triplet under PG 17 with plan-sized `shared_buffers`, and PostgREST under schema-cache load, before the cost model's numbers are locked. The 350 MB planning figure (D-091) is literature + analogy, not measurement.
 - **OQ-061** — Free-plan CPU: weight-only (bursty but fair-ish) vs. hard `cpu.max` quota (predictable, but makes the free tier feel slow even on an idle node)? Interacts with the "first five minutes" DX target. Owner: [postgres provisioning](../03-database-platform/01-postgres-provisioning.md).
 
 ## Dependencies

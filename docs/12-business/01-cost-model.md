@@ -169,7 +169,7 @@ These are operating rules, not aspirations. Breach ⇒ page/alert and a schedule
 
 ## Open Questions
 
-- **OQ-090:** Actual measured RSS of the tuned per-project stack (Postgres 17 + PgBouncer + PostgREST) under realistic idle and light load — the 350 MB planning number needs a benchmark before node purchase.
+- ***(first data: [M-001](../14-roadmap/05-measurements.md))* OQ-090:** Actual measured RSS of the tuned per-project stack (Postgres 17 + PgBouncer + PostgREST) under realistic idle and light load — the 350 MB planning number needs a benchmark before node purchase.
 - **OQ-091:** Resume latency target and its cost: does sub-5-second resume require keeping page-cache-warm snapshots or pre-started shells, and what does that do to effective density? (Owned jointly with [postgres provisioning](../03-database-platform/01-postgres-provisioning.md).)
 - **OQ-092:** Hetzner fair-use bandwidth reality: at what sustained per-node egress do we get throttled or a call from Hetzner, and does that force a CDN-in-front-of-API posture earlier than planned?
 
