@@ -4,6 +4,7 @@ import { DELIVERY_ID_PATTERN } from '@corebase/queue';
 import { ApiError } from '../../kernel/errors.ts';
 import { generateProjectRef } from '../../kernel/ref.ts';
 import type { ControlPlaneStore } from './store.ts';
+import type { Actor } from '@corebase/audit';
 
 /**
  * Phase two of the two-phase enqueue (D-067). Phase one — the job row — is
@@ -22,12 +23,32 @@ export interface ControlPlaneDeps {
   onEnqueueError?: (err: Error) => void;
   /** M0: one static token (T4). Real dual-mode auth is D-062. */
   staticToken: string;
+  /**
+   * The user every static-token mutation is attributed to, until P1c brings real
+   * sessions. Absent means mutations are recorded as `system` rather than as a
+   * fabricated user.
+   */
+  actorUserId?: string | null;
 }
 
 export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDeps) {
   const requireAuth = (auth: string | undefined) => {
     if (auth !== `Bearer ${deps.staticToken}`) throw ApiError.unauthorized();
   };
+
+  /**
+   * Who to record as the actor.
+   *
+   * The static bearer token is Milestone 0's stand-in for a session, so every
+   * mutation is attributed to the bootstrap user (P1c replaces this with the
+   * session's real user). `actorUserId` is resolved once at startup rather than
+   * per request; when it is absent the actor is `system`, which is honest — an
+   * unattributed mutation should read as unattributed, not as somebody.
+   */
+  const actorFor = (req: { headers: Record<string, unknown>; ip?: string }, requestId: string): Actor =>
+    deps.actorUserId
+      ? { type: 'user', userId: deps.actorUserId, ip: req.ip ?? null, requestId }
+      : { type: 'system', userId: null, ip: req.ip ?? null, requestId };
 
   app.post('/v1/projects', async (req, reply) => {
     requireAuth(req.headers.authorization);
@@ -73,6 +94,7 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
       plan: parsed.data.plan,
       idempotencyKey: key,
       requestId: String(reply.getHeader('x-request-id') ?? req.id),
+      actor: actorFor(req as never, String(reply.getHeader('x-request-id') ?? req.id)),
     });
 
     if (deps.enqueue) {
@@ -116,7 +138,8 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
 
     // No Idempotency-Key required here, unlike create: the job's key is derived
     // from the project, so a retried DELETE cannot produce a second teardown.
-    const result = await deps.store.requestDelete(ref);
+    const result = await deps.store.requestDelete(
+      ref, actorFor(req as never, String(reply.getHeader('x-request-id') ?? req.id)));
     if (!result) throw ApiError.notFound('Project');
     const { project, job, alreadyRequested } = result;
 

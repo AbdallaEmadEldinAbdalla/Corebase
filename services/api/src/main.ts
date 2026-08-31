@@ -57,7 +57,29 @@ if (!redisUrl) {
     msg: 'CB_REDIS_URL not set — jobs will only be delivered by the worker sweeper.' }));
 }
 
-const app = buildApp({ store, logger: true, ...(enqueue ? { enqueue } : {}) });
+/**
+ * The user static-token mutations are attributed to, resolved once. Absent — a
+ * database with no bootstrap user — records mutations as `system` rather than
+ * inventing an actor.
+ */
+const actorUserId = await (async () => {
+  if (!url) return null;
+  try {
+    const probe = new Pool({ connectionString: url, max: 1 });
+    const { rows } = await probe.query<{ id: string }>(
+      `select id from users where email = 'dev@corebase.local'`);
+    await probe.end();
+    return rows[0]?.id ?? null;
+  } catch {
+    return null;
+  }
+})();
+
+const app = buildApp({
+  store, logger: true,
+  ...(actorUserId ? { actorUserId } : {}),
+  ...(enqueue ? { enqueue } : {}),
+});
 app.listen({ port, host: '0.0.0.0' }).catch((err) => {
   app.log.error(err);
   process.exit(1);

@@ -3,6 +3,7 @@ import type { Project, ProjectStatus } from '@corebase/types';
 import type { ControlPlaneStore, JobRow, DatabaseInfo } from './store.ts';
 import type { SecretStore } from '@corebase/secrets';
 import { SECRET_NAMES } from '@corebase/secrets';
+import { writeAudit, SYSTEM, type Actor } from '@corebase/audit';
 
 /**
  * Postgres implementation of the control-plane store (T4 on T3's schema).
@@ -79,7 +80,7 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
   });
 
   return {
-    async createProject({ ref, name, region, plan, idempotencyKey, requestId }) {
+    async createProject({ ref, name, region, plan, idempotencyKey, requestId, actor }) {
       const client: PoolClient = await pool.connect();
       try {
         await client.query('BEGIN');
@@ -99,6 +100,17 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
           [project.id, idempotencyKey,
            JSON.stringify({ project_id: project.id, ref, ...(requestId ? { request_id: requestId } : {}) })],
         );
+        // Same transaction as the project and the job. All three land or none
+        // do — an audited history with holes in it is not evidence.
+        await writeAudit(client, actor ?? { ...SYSTEM, requestId: requestId ?? null }, {
+          action: 'project.created',
+          resourceType: 'project',
+          resourceId: project.ref,
+          organizationId,
+          projectId: project.id,
+          metadata: { name, region, plan, idempotency_key: idempotencyKey },
+        });
+
         await client.query('COMMIT');
         return { project, job: jobFromDb(job.rows[0]!), replayed: false };
       } catch (err) {
@@ -169,7 +181,7 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
       return { project, database };
     },
 
-    async requestDelete(ref) {
+    async requestDelete(ref, actor) {
       const client: PoolClient = await pool.connect();
       try {
         await client.query('BEGIN');
@@ -205,6 +217,17 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
            RETURNING id, job_type, project_id, idempotency_key, state::text AS state`,
           [found.rows[0].id, key,
            JSON.stringify({ project_id: found.rows[0].id, ref })]);
+        await writeAudit(client, actor ?? SYSTEM, {
+          action: 'project.delete_requested',
+          resourceType: 'project',
+          resourceId: ref,
+          organizationId,
+          projectId: found.rows[0].id,
+          // The one fact a customer asking "why is my project gone" needs, and
+          // the reason this row must outlive the project it describes.
+          metadata: { previous_status: found.rows[0].status },
+        });
+
         await client.query('COMMIT');
         return {
           project: toProject(updated.rows[0]!),

@@ -17,7 +17,8 @@
     "@corebase/queue": "workspace:*",
     "@corebase/secrets": "workspace:*",
     "@corebase/crypto": "workspace:*",
-    "@corebase/metrics": "workspace:*"
+    "@corebase/metrics": "workspace:*",
+    "@corebase/audit": "workspace:*"
   },
   "devDependencies": {
     "@corebase/config": "workspace:*",

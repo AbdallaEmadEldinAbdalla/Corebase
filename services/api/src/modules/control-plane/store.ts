@@ -1,4 +1,5 @@
 import type { Project, ProjectStatus, JobPayload } from '@corebase/types';
+import type { Actor } from '@corebase/audit';
 
 /**
  * What a ready project exposes to its owner (platform-api contract). Assembled
@@ -45,6 +46,13 @@ export interface ControlPlaneStore {
      * Loki query (D-147: request_id lives in the line, never in a label).
      */
     requestId?: string;
+    /**
+     * Who asked. Passed into the store rather than audited by the route,
+     * because the audit row is written inside the same transaction as the
+     * mutation — a mutation that can succeed without its audit row produces the
+     * history you cannot trust.
+     */
+    actor?: Actor;
   }): Promise<{ project: Project; job: JobRow; replayed: boolean }>;
   /** Replay lookup: a seen key must return the original outcome (D-063). */
   findByIdempotencyKey(key: string): Promise<Project | undefined>;
@@ -66,7 +74,7 @@ export interface ControlPlaneStore {
    * collapse onto one job by construction rather than by the caller remembering
    * to send a key.
    */
-  requestDelete(ref: string): Promise<
+  requestDelete(ref: string, actor?: Actor): Promise<
     { project: Project; job: JobRow; alreadyRequested: boolean } | undefined>;
   findByName(name: string): Promise<Project | undefined>;
   jobs(): Promise<JobRow[]>;
@@ -117,7 +125,7 @@ export function createMemoryStore(): ControlPlaneStore {
       return project ? { project } : undefined;
     },
     async listProjects() { return [...projects.values()]; },
-    async requestDelete(ref) {
+    async requestDelete(ref, _actor) {
       const project = projects.get(ref);
       if (!project) return undefined;
       const key = `delete_${project.id}`;
