@@ -52,6 +52,9 @@ const env = {
   CB_NODE_HOSTNAME: 'data-1',
   CB_STATIC_TOKEN: TOKEN,
   PORT: String(PORT),
+  // Its own metrics port: a harness must not fight a worker someone is already
+  // running from scripts/dev.sh for the same port.
+  CB_METRICS_PORT: process.env.CB_METRICS_PORT ?? '9112',
   // The recovery window, compressed. Everything else about the purge path — the
   // scan, the job row, the verify_purgeable guard — runs exactly as it would
   // after seven real days.

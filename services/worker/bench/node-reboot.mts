@@ -55,6 +55,9 @@ const env = {
   CB_NODE_HOSTNAME: 'data-1',
   CB_STATIC_TOKEN: TOKEN,
   PORT: String(PORT),
+  // Its own metrics port: a harness must not fight a worker someone is already
+  // running from scripts/dev.sh for the same port.
+  CB_METRICS_PORT: process.env.CB_METRICS_PORT ?? '9113',
   // Sweep fast so the drill finishes in a minute rather than five. The interval
   // is a policy number; what is under test is whether the sweep converges at all.
   CB_RECONCILE_INTERVAL_MS: process.env.CB_RECONCILE_INTERVAL_MS ?? '5000',
