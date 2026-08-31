@@ -69,6 +69,8 @@ export const ERROR_CODES = {
   CAPACITY_UNAVAILABLE: 'CAPACITY_UNAVAILABLE',
   /** The recovery window closed and the project's data is gone (D-038). */
   PROJECT_PURGED: 'PROJECT_PURGED',
+  /** An organization must keep at least one owner (platform API §Roles). */
+  LAST_OWNER: 'LAST_OWNER',
   INTERNAL: 'INTERNAL',
 } as const;
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];

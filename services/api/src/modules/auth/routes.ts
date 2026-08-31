@@ -60,7 +60,7 @@ export function registerAuth(app: FastifyInstance, deps: AuthDeps) {
   const requestIdOf = (reply: { getHeader(n: string): unknown }, fallback: string) =>
     String(reply.getHeader('x-request-id') ?? fallback);
 
-  const parse = <T>(schema: z.ZodType<T>, body: unknown): T => {
+  const parse = <S extends z.ZodTypeAny>(schema: S, body: unknown): z.infer<S> => {
     const result = schema.safeParse(body);
     if (!result.success) {
       throw ApiError.validation(result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '));
