@@ -10,7 +10,9 @@ Corebase is a developer-focused Backend-as-a-Service: a developer creates a proj
 
 **Building Milestone 0 — the provisioning spine.** `POST /v1/projects` returns a real, isolated PostgreSQL 17.5 database on a data node about **2.5 seconds** later, with its own volume, cgroup limits, the full role model, envelope-encrypted credentials, and a connection string you can `psql` into immediately. Twenty consecutive creates are measured end to end.
 
-Tasks T1–T5 of ten are done; T6 (crash-resume proof) is next. Nothing above the database exists yet — no data API, no auth, no storage, no dashboard.
+The worker has also been SIGKILLed at eleven points in that saga to prove it resumes with no duplicate containers, volumes, credentials or capacity bookings.
+
+Tasks T1–T6 of ten are done; T7 (the deletion saga) is next. Nothing above the database exists yet — no data API, no auth, no storage, no dashboard.
 
 > **[STATUS.md](STATUS.md) is the handover document**: what works, how to run it locally, what every rule in the code is defending against, and what is not built yet. Read it before the corpus if you are here to contribute.
 
@@ -23,7 +25,7 @@ docker build -t corebase/postgres:17.5 infra/docker/postgres
 ./scripts/staging.sh seed-images && ./scripts/staging.sh verify
 ```
 
-Then the full suite (139 tests, integration included — they need the staging stack above and **fail rather than skip** without it):
+Then the full suite (145 tests, integration included — they need the staging stack above and **fail rather than skip** without it):
 
 ```bash
 pnpm test
@@ -33,6 +35,12 @@ Or measure provisioning end to end — twenty creates, each proven usable by con
 
 ```bash
 pnpm --filter @corebase/worker bench
+```
+
+Or kill the worker at eleven points mid-provision and watch every one converge:
+
+```bash
+pnpm --filter @corebase/worker kill-matrix
 ```
 
 Staging is Docker Compose plus Docker-in-Docker standing in for a control node and a data node. The interface the worker drives is the real one — the Docker Engine API over mutual TLS, no per-node agent (D-052) — so no step of the plan is skipped and nothing is paid for. [STATUS.md §2](STATUS.md) has the details and the environment variables.

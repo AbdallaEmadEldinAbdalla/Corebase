@@ -58,7 +58,7 @@ are stated, not glossed.
 | T5d Container steps | done | Engine API client over mTLS, cgroup limits, TCP health gate; 16 integration tests | — |
 | T5e Credentials + ready | done | envelope encryption, base roles, connection details, `mark_ready` refusals; 42 tests | — |
 | **T5 (whole)** | **done** | **[M-002](05-measurements.md#m-002--twenty-consecutive-project-creates-and-what-twenty-live-projects-actually-cost): 20/20 creates ready *and usable*, max 3.31s against the 60s budget** | Measured on the Docker substitute, ARM, Postgres only — not the triplet on x86 |
-| T6 Crash-resume proof | not started | — | — |
+| T6 Crash-resume proof | done | `pnpm --filter @corebase/worker kill-matrix` — SIGKILL at 11 points, 11/11 converge with zero duplicates; [M-003](05-measurements.md); 5 regression tests in the default suite | Kill matrix is a script, not part of `pnpm test`: 11 scenarios × ~35 s is a nightly/CI job, not a per-commit one |
 | T7 Deletion saga | not started | — | — |
 | T8 Reconciliation sweep | not started | — | — |
 | T9 Observability seed | not started | — | — |

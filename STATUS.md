@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-08-31 · **Phase:** Milestone 0 (the provisioning spine) · **T1–T5 done, T6 next**
+**Last updated:** 2026-08-31 · **Phase:** Milestone 0 (the provisioning spine) · **T1–T6 done, T7 next**
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -20,9 +20,10 @@ the Docker Engine API over mutual TLS, with its own volume, cgroup limits, the f
 role model, three envelope-encrypted credentials, and a connection string the API
 hands back that you can immediately `psql` into and create tables in. Twenty
 consecutive creates have been measured end to end
-([M-002](docs/14-roadmap/05-measurements.md#m-002--twenty-consecutive-project-creates-and-what-twenty-live-projects-cost)).
-Nothing above the database exists yet: no data API, no auth, no storage, no
-dashboard, no deletion, no crash-resume proof.
+([M-002](docs/14-roadmap/05-measurements.md)), and the worker has been SIGKILLed at
+eleven points in that saga to prove it resumes with no duplicate anything
+([M-003](docs/14-roadmap/05-measurements.md)). Nothing above the database exists
+yet: no data API, no auth, no storage, no dashboard, and no deletion.
 
 ## 2. Run it locally
 
@@ -47,6 +48,17 @@ pnpm test
 ```bash
 pnpm --filter @corebase/worker bench
 ```
+
+The crash-resume matrix is a separate script because 11 scenarios × ~35s is a
+nightly job, not a per-commit one:
+
+```bash
+pnpm --filter @corebase/worker kill-matrix
+```
+
+`CB_KM_ONLY=start_container` narrows it to one scenario; `CB_KM_TIMELINE=1` prints
+the restarted worker's log with arrival times, which is how the 60s recovery
+mystery got solved.
 
 Tear down with `./scripts/staging.sh down` (keeps volumes) or `nuke` (destroys
 everything including the local master key — every stored credential becomes
@@ -107,7 +119,7 @@ boot. Don't use them.
 
 ## 4. What is built, in detail
 
-Test counts are from `pnpm test` and are all currently green: **139 tests**.
+Test counts are from `pnpm test` and are all currently green: **145 tests**.
 
 ### T1 — Repo scaffold · done
 pnpm workspaces + Turborepo. `typecheck` and `test` across every package.
@@ -208,6 +220,35 @@ ready *and usable*, max 3.26s against a 60s budget. Per-step attribution showed
 ~85% of a create is `wait_healthy` (initdb plus a first Postgres start) and the
 control plane's own work totals 57 ms.
 
+### T6 — Crash-resume proof · done · [M-003](docs/14-roadmap/05-measurements.md)
+
+`pnpm --filter @corebase/worker kill-matrix` SIGKILLs the worker at eleven points
+in the saga — seven step boundaries plus four mid-step windows where no
+checkpoint exists — restarts it, and asserts convergence with **exactly one**
+container, volume, placement row, credential set and RAM booking, and a database
+usable on the credential the API hands out. 11/11 pass; restart→ready p50 30.9s,
+of which 30s is the liveness window and ~1s is the actual re-execution.
+
+SIGKILL rather than SIGTERM on purpose: SIGTERM runs the graceful drain, which is
+the case that cannot fail.
+
+**This task found the worst bug in the project so far.** The first run did not
+converge slowly — it did not converge at all, ever:
+
+1. The orphan threshold (90s) outlived BullMQ's own re-delivery (~30s). The
+   re-delivery arrived while the row still looked healthy, `claim` refused it,
+   and BullMQ marked that delivery *complete*. Nothing retried. A worker crash
+   mid-provision left the project `creating` permanently. Fixed by **D-193**:
+   the threshold is now derived from the heartbeat interval (three missed beats),
+   and the runner throws on any override under two intervals.
+2. Even once the row was recognised as orphaned, the sweeper's re-enqueue was a
+   no-op against the dead worker's delivery record, and waiting for that record's
+   lock to expire cost the full 60s `lockDuration`. Fixed by **D-194**: recovery
+   deliveries carry their own attempt-keyed id, used only when the plain key is
+   occupied. Safe because the `claim` UPDATE — not Redis — is the mutex.
+
+Five fast regression tests now guard both defects inside `pnpm test`.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -226,6 +267,11 @@ reach staging used to skip silently, and a skip looks like a pass — which is e
 how a BullMQ queue-name bug survived a green suite. They now throw, with the reason
 and the command that fixes it.
 
+**Liveness thresholds are derived, never chosen.** The orphan threshold is three
+heartbeat intervals, computed from the interval. Two independently-chosen numbers
+with a correctness relationship between them will drift, and T6 showed what that
+costs: a project that never provisions, with no error anywhere.
+
 **Never book what you cannot reach.** `nodes.address` is how the control plane
 reaches a node; `nodes.hostname` is only what the node calls itself (**D-192**).
 Using the second as the first works until an environment where it does not resolve.
@@ -242,7 +288,7 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-Nine decisions came out of running the thing rather than planning it. Full text in
+Twelve decisions came out of running the thing rather than planning it. Full text in
 the [decision log](docs/00-foundation/05-decision-log.md); the log holds
 D-001…D-192 and is binding when two documents disagree.
 
@@ -257,6 +303,9 @@ D-001…D-192 and is binding when two documents disagree.
 | D-190 | The health gate probes TCP, never the unix socket | The entrypoint's init-phase server answers on the socket, so the gate passed before the real server listened |
 | D-191 | New tables get `ENABLE ROW LEVEL SECURITY` **without** `FORCE` (supersedes D-083's FORCE half) | FORCE broke the customer's first `INSERT` on every new project while buying no isolation |
 | D-192 | `nodes.address` is the route; `hostname` is the identity | The control plane needs to open connections to nodes |
+| D-193 | Orphan threshold derived from the heartbeat interval (3 missed beats); a bad override throws | A 90s threshold against a 30s re-delivery left crashed provisions stuck permanently |
+| D-194 | Sweeper recovery deliveries use an attempt-keyed id when the plain key is occupied | A dead worker's BullMQ lock made recovery wait 60s for a worker Postgres knew was dead at 30s |
+| D-195 | Every log line carries an ISO `ts`; every saga step logs its duration | The 60s recovery mystery was read straight off these two fields |
 
 ## 7. Measurements
 
@@ -270,6 +319,9 @@ reality is itself the finding.
 - **M-002** — 20 consecutive creates: p50 2463 ms, max 3264 ms, 0 over the 60s
   budget. 21 live projects book 7350 MB and actually use 524 MiB (≈14:1). ~85% of a
   create is `wait_healthy`; the control plane's own work is 57 ms.
+- **M-003** — crash recovery: SIGKILL at 11 points in the saga, 11/11 converge
+  with zero duplicates. restart→ready p50 30.9s, of which 30s is the liveness
+  window; re-execution itself is 0.5–3s.
 
 Both were taken on an ARM Docker VM with Postgres only — no PgBouncer, no
 PostgREST. Neither licenses raising the planned density (D-091's 150 projects/node).
@@ -280,8 +332,7 @@ PostgREST. Neither licenses raising the planned density (D-091's 150 projects/no
 
 | Task | What it needs to prove |
 |---|---|
-| **T6 Crash-resume** | SIGKILL the worker between each pair of saga steps; on restart the job converges with zero duplicate containers or volumes |
-| T7 Deletion saga | `DELETE` → stop, remove container, remove volume, mark deleted; create+delete ×20 leaves node and control plane clean |
+| **T7 Deletion saga** | `DELETE` → stop, remove container, remove volume, mark deleted; create+delete ×20 leaves node and control plane clean |
 | T8 Reconciliation sweep | List containers on the node, diff against desired state, restart what is missing, *report* orphans without auto-deleting |
 | T9 Observability seed | Structured logs to Loki, three metrics, one Grafana panel, one alert |
 | T10 Demo script | create → poll → `psql` → delete, green end to end |

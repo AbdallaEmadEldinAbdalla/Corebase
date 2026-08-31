@@ -93,6 +93,33 @@ This is direct evidence for D-071: a warm pool eliminates exactly the two steps 
 
 **Next measurement to take:** the full triplet under light request load on x86, with 10 and 50 projects co-resident; and a create-latency run *after* the warm pool exists, to see what D-071 actually buys against the 2463 ms cold p50.
 
+## M-003 — Crash recovery: how long a killed provision takes to converge
+
+**Date:** 2026-08-31 · **Task:** Milestone 0, T6 (crash-resume proof) · **Answers:** the T6 exit criterion; corrects the heartbeat/orphan figures in [job queue & workers](../02-control-plane/04-job-queue-and-workers.md)
+
+**Environment:** same Docker staging substitute as M-002 (ARM Docker Desktop VM, one dind data node). Worker heartbeat 10 s, orphan threshold 30 s, sweep interval 10 s, BullMQ `lockDuration` 60 s.
+
+**Method:** for each of 11 points in the provisioning saga, `SIGKILL` the worker at that exact moment (matched on its own step logs), restart it, and measure time-to-`ready` from the restart. Seven points are step boundaries (a checkpoint exists); four are mid-step, where no checkpoint exists and the whole step must re-run. Every run then asserts: exactly one container, one volume, one `project_databases` row, three credential rows, `ram_reserved_mb` booked exactly once, and a database usable on the credential the API hands out.
+
+**Numbers:**
+
+| | min | p50 | max |
+|---|---|---|---|
+| restart → `ready` | 30.5 s | 30.9 s | 33.2 s |
+
+11/11 converged with every invariant held.
+
+**Reading it honestly.** The 30 s floor is not work — it is the liveness window. A worker cannot be declared dead faster than the threshold that defines death, and the threshold is three missed 10 s heartbeats (D-193). Actual re-execution after the row is declared orphaned is 0.5–3 s, the same as a cold create. So recovery latency is a *policy* number: shortening it means shortening the heartbeat, and the floor moves with it.
+
+**What it cost to get here.** The first run of this matrix did not fail slowly — it failed permanently. Two defects, neither visible to any test that existed:
+
+1. The orphan threshold (90 s) outlived BullMQ's re-delivery (~30 s), so the re-delivery arrived while the row still looked healthy, `claim` refused it, and BullMQ marked that delivery *complete*. Nothing retried. The project stayed `creating` forever. (**D-193**)
+2. The sweeper's re-enqueue was a no-op against the dead worker's delivery record, so even once the row was recognised as orphaned it could not be re-delivered. Once fixed by waiting for the lock, recovery cost 60 s — the full `lockDuration` — for a worker Postgres had known was dead for 30. (**D-194**)
+
+**What it does not license.** Claiming crash-safety for the *deletion* saga (T7) or for pause/resume, neither of which exists. It also does not prove behaviour under a node reboot, where containers vanish rather than a worker — that is T8.
+
+**Next measurement to take:** the same matrix against the deletion saga once T7 lands, and node-reboot convergence for T8.
+
 ## How to add an entry
 
 1. Number sequentially (`M-002`, …). Never renumber.
