@@ -57,12 +57,23 @@ api "$API/health" >/dev/null 2>&1 \
 ok "API is up at $API"
 
 # ── 1. create ───────────────────────────────────────────────────────────────
+# Name the organization explicitly rather than relying on the API's
+# single-organization convenience. That default disappears the moment the account
+# belongs to two orgs — which happens as soon as the test suite has run, since it
+# creates orgs with the same static token — and the API is right to refuse to
+# guess. A real client resolves the org; so does this.
+say "resolving the organization"
+ORGS=$(api "$API/v1/orgs")
+ORG_ID=$(echo "$ORGS" | jq -r '(.orgs[] | select(.slug == "dev") | .id) // (.orgs[0].id) // empty')
+[ -n "$ORG_ID" ] || die "no organization for this token: $ORGS"
+ok "$(echo "$ORGS" | jq -r --arg id "$ORG_ID" '.orgs[] | select(.id == $id) | .name') · $ORG_ID"
+
 say "creating a project"
 START=$(date +%s)
 CREATED=$(api -X POST "$API/v1/projects" \
   -H 'content-type: application/json' \
   -H "idempotency-key: demo-$(date +%s)-$$" \
-  -d "{\"name\":\"$NAME\",\"region\":\"eu-central\"}")
+  -d "{\"name\":\"$NAME\",\"region\":\"eu-central\",\"org_id\":\"$ORG_ID\"}")
 # { project, job } per the platform-API contract (OQ-175 closed in P1b).
 REF=$(echo "$CREATED" | jq -r '.project.ref // empty')
 [ -n "$REF" ] || die "create failed: $CREATED"

@@ -778,6 +778,7 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       disableWrites,                 // T7
       finalBackup,                   // T7 (gate, unimplemented in M0 — D-066)
       stopContainer,                 // T7
+      removeNetwork,                 // P2a — holds no data; frees the subnet
       markSoftDeleted,               // T7
     ],
     // Phase two — irreversible, and gated on the window having closed.

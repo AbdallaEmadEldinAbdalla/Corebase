@@ -48,6 +48,10 @@ export CB_SECURE_COOKIES="${CB_SECURE_COOKIES:-false}"
 # the service — see services/api/src/kernel/cors.ts.
 export CB_DASHBOARD_ORIGINS="${CB_DASHBOARD_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}"
 export CB_RECONCILE_INTERVAL_MS="${CB_RECONCILE_INTERVAL_MS:-30000}"
+# The purge scan defaults to an hour, which is right in production and wrong for a
+# dev loop: `demo.sh --purge` expires the recovery window and then waits for this
+# scan, so an hour makes the flag look broken. Fifteen seconds here.
+export CB_PURGE_SCAN_MS="${CB_PURGE_SCAN_MS:-15000}"
 
 if [ ! -d "$CB_KEK_DIR" ] || ! ls "$CB_KEK_DIR"/*.key >/dev/null 2>&1; then
   echo "✗ no master key in $CB_KEK_DIR — run ./scripts/staging.sh kek" >&2
