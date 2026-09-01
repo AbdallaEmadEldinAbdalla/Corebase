@@ -18,3 +18,8 @@ selfhost/.env
 infra/docker/staging/certs/
 infra/docker/staging/kek.d/
 infra/docker/staging/app-role.env
+# The object-store endpoint and its keys (P3a). Discovered per environment and
+# secret, so it is generated rather than committed.
+infra/docker/staging/backup-store.env
+# The object store's self-signed TLS material — generated per environment.
+infra/docker/staging/object-store-certs/

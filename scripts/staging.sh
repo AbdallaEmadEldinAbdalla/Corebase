@@ -106,6 +106,87 @@ cmd_app_role() {
     "$CB_APP_DB_PASSWORD" "$CONTROL_DB_PORT"
 }
 
+cmd_backup_store() {
+  # Creates the backup bucket and writes the endpoint the worker will use.
+  #
+  # The endpoint is *discovered*, not configured: project containers reach the
+  # object store through the data node's NAT egress, and inside the node the
+  # compose service name does not resolve — the node's embedded DNS has never
+  # heard of it. An IP is what a project container can actually dial, and the
+  # same field in production holds `<account>.r2.cloudflarestorage.com`, so the
+  # shape of the config is identical either way.
+  local bucket="${BACKUP_BUCKET:-corebase-backups-eu-central}"
+  local key="${BACKUP_ACCESS_KEY:-corebase-backup}"
+  local secret="${BACKUP_SECRET_KEY:-corebase-backup-secret}"
+
+  # Self-signed TLS for the store, generated once. pgBackRest talks S3 over HTTPS
+  # and has no plain-HTTP mode, so the substitute has to serve TLS the way R2 does.
+  # Verification is switched off on the client side instead of building a CA chain
+  # into every project container — the property under test is that backups reach
+  # object storage, not that we can operate a PKI twice in one stack.
+  local cert_dir="$STAGING_DIR/object-store-certs"
+  if [ ! -s "$cert_dir/public.crt" ]; then
+    mkdir -p "$cert_dir"
+    docker run --rm -v "$cert_dir:/out" alpine/openssl:latest \
+      req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
+      -keyout /out/private.key -out /out/public.crt \
+      -subj "/CN=cb-object-store" \
+      -addext "subjectAltName=DNS:cb-object-store,DNS:object-store,DNS:localhost,IP:127.0.0.1" \
+      >/dev/null 2>&1
+    [ -s "$cert_dir/public.crt" ] || { echo "  ✗ could not generate the store's certificate"; return 1; }
+    echo "  ✓ generated a self-signed certificate for the object store"
+    docker restart cb-object-store >/dev/null
+    sleep 4
+  fi
+
+  # `--insecure` throughout: the store's certificate is self-signed, and mc
+  # verifying it would only be testing our own CA plumbing rather than the store.
+  docker exec cb-object-store mc --insecure alias set local https://127.0.0.1:9000 "$key" "$secret" >/dev/null 2>&1 \
+    || { echo "  ✗ cannot reach the object store over TLS"; return 1; }
+  if docker exec cb-object-store mc --insecure ls "local/$bucket" >/dev/null 2>&1; then
+    echo "  ✓ bucket $bucket already exists"
+  else
+    docker exec cb-object-store mc --insecure mb "local/$bucket" >/dev/null
+    echo "  ✓ created bucket $bucket"
+  fi
+
+  local ip
+  ip="$(docker inspect cb-object-store \
+        --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' | head -c 32)"
+  if [ -z "$ip" ]; then echo "  ✗ could not resolve the object store's address"; return 1; fi
+
+  local env_file="$STAGING_DIR/backup-store.env"
+  cat > "$env_file" <<EOF
+CB_BACKUP_S3_ENDPOINT=$ip
+CB_BACKUP_S3_PORT=9000
+CB_BACKUP_S3_BUCKET=$bucket
+CB_BACKUP_S3_KEY=$key
+CB_BACKUP_S3_SECRET=$secret
+CB_BACKUP_S3_REGION=auto
+CB_BACKUP_S3_URI_STYLE=path
+CB_BACKUP_S3_VERIFY_TLS=n
+EOF
+  chmod 600 "$env_file"
+  echo "  ✓ endpoint https://$ip:9000 → $(basename "$env_file") (gitignored)"
+
+  # Proves the path a project container will actually take: its own private
+  # network inside the node, out through NAT. A green check here and a failure at
+  # archive-push time would otherwise be indistinguishable from a bad cipher-pass.
+  # `bash`, not `sh`: /dev/tcp is a bash builtin and the image's /bin/sh is dash,
+  # where the redirect is a syntax error — which fails the probe for a reason that
+  # has nothing to do with routing and reads exactly like a routing failure.
+  if docker exec cb-data-node sh -c \
+      "docker network create cb-egress-probe >/dev/null 2>&1; \
+       docker run --rm --network cb-egress-probe --entrypoint bash corebase/postgres:17.5 \
+         -c 'exec 3<>/dev/tcp/${ip}/9000' >/dev/null 2>&1; r=\$?; \
+       docker network rm cb-egress-probe >/dev/null 2>&1; exit \$r"; then
+    echo "  ✓ reachable from a project's private network (NAT egress, as in production)"
+  else
+    echo "  ✗ NOT reachable from a project network — archiving would fail silently"
+    return 1
+  fi
+}
+
 cmd_seed_images() {
   # Production pre-pulls images onto every node so provisioning is a claim, not a
   # download (D-071). Locally the data node has its own image store, so we push
@@ -228,6 +309,7 @@ case "${1:-}" in
   up) cmd_up ;;
   kek) cmd_kek ;;
   app-role) cmd_app_role ;;
+  backup-store) cmd_backup_store ;;
   seed-images) cmd_seed_images ;;
   verify) cmd_verify ;;
   idempotent) cmd_idempotent ;;
@@ -235,6 +317,6 @@ case "${1:-}" in
   nuke) cmd_nuke ;;
   status) cmd_status ;;
   monitoring) cmd_monitoring ;;
-  all) cmd_up && cmd_kek && cmd_app_role && cmd_seed_images && cmd_verify && cmd_idempotent ;;
+  all) cmd_up && cmd_kek && cmd_app_role && cmd_backup_store && cmd_seed_images && cmd_verify && cmd_idempotent ;;
   *) echo "usage: $0 {up|kek|app-role|seed-images|verify|idempotent|down|nuke|status|monitoring|all}"; exit 2 ;;
 esac

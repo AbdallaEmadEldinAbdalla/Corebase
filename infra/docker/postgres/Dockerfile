@@ -13,11 +13,13 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
       postgresql-17-pgvector \
+      pgbackrest \
       build-essential=12.9 \
       ca-certificates \
     ; \
     apt-get purge -y --auto-remove build-essential; \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/*; \
+    pgbackrest version
 
 # D-078 is "denied by absence", so absence has to be real: the base image's
 # contrib set includes extensions that reach the filesystem and the network.
@@ -41,7 +43,14 @@ RUN set -eux; \
 # db postgres) without handing that out to any other process; every host
 # connection, including 127.0.0.1, needs scram. init/40-auth-hardening.sql fails
 # the boot if this ever regresses.
-ENV POSTGRES_INITDB_ARGS="--auth-local=peer --auth-host=scram-sha-256"
+#
+# `--data-checksums` is the third argument and it was missing. Provisioning §3
+# says initdb runs with it and the restore-verification checks in backups & PITR
+# §7 *require* it — page-level corruption is invisible without it, so a
+# verification pass would have reported a healthy restore of a rotting cluster.
+# Postgres 18 turns checksums on by default; 17 does not, and the difference is
+# silent in both directions.
+ENV POSTGRES_INITDB_ARGS="--auth-local=peer --auth-host=scram-sha-256 --data-checksums"
 
 # Config template. Small-tenant defaults: max_connections is 20 because the
 # pooler multiplexes in front of it (D-074's 3 reserved / 7 PostgREST / 8 pooler
@@ -49,9 +58,26 @@ ENV POSTGRES_INITDB_ARGS="--auth-local=peer --auth-host=scram-sha-256"
 COPY postgresql.base.conf /etc/corebase/postgresql.base.conf
 COPY init/ /docker-entrypoint-initdb.d/
 
-# archive_command target; the pgBackRest sidecar consumes this directory.
-RUN mkdir -p /var/lib/postgresql/wal_archive \
-    && chown -R postgres:postgres /var/lib/postgresql/wal_archive /etc/corebase
+# pgBackRest's working directories (P3a).
+#
+# `/etc/pgbackrest` holds the per-project stanza config, rendered at provision
+# time and carrying the repo cipher-pass — so it is 0600 and owned by postgres.
+# The doc says "root-only", which is a node-side statement: here the process that
+# must read it *is* postgres (archive_command runs as the server's own user), and
+# a file only root can read is a file archiving cannot use. Container-per-project
+# already gives the isolation that root ownership would buy on a shared node.
+#
+# `spool` is for `archive-async=y`. It lives on the project's volume mount point
+# rather than in the image so the spool counts against the tenant's disk quota: a
+# runaway spool has to be the tenant's ceiling, not the node's (backups §1).
+#
+# The old local `wal_archive` directory stays for now — nothing writes to it once
+# archive_command points at pgBackRest, and removing it is a separate change from
+# the one that makes archiving real.
+RUN mkdir -p /var/lib/postgresql/wal_archive /etc/pgbackrest /var/log/pgbackrest \
+    && chown -R postgres:postgres \
+         /var/lib/postgresql/wal_archive /etc/corebase /etc/pgbackrest /var/log/pgbackrest \
+    && chmod 700 /etc/pgbackrest
 
 USER postgres
 CMD ["postgres", "-c", "config_file=/etc/corebase/postgresql.base.conf"]
