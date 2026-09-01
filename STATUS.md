@@ -1280,11 +1280,16 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   per-role `CONNECTION LIMIT` on `developer`. A customer can still point an
   application fleet at `DIRECT_DATABASE_URL` and exhaust the direct headroom; it
   fails visibly, which is the intended behaviour, but nothing caps it.
-- **Idle detection is missing its first signal.** The doc requires both "no
-  data-plane traffic" and "no database connections"; only the second exists, because
-  the first needs a gateway. It is sufficient today — a client connection is the only
-  way to use a project — and becomes wrong, silently, the moment PostgREST lands
-  (D-236). The scan takes a second input already.
+- **Idle detection is missing its first signal**, deliberately. The doc requires both
+  "no data-plane traffic" and "no database connections"; only the second exists,
+  because the first needs a gateway. It is sufficient today — a client connection is
+  the only way to use a project — and would become wrong the moment PostgREST lands.
+  It is not scheduled to be built before its source exists, because code with no
+  input is untestable and rots. What guards it is a **tripwire**: a test asserts a
+  project is exactly two containers, so adding PostgREST, auth, storage or a gateway
+  fails with instructions to implement the traffic signal first (D-236). The scan
+  already takes the second input. Verified by adding a third container spec and
+  watching the guard fail.
 - No warning email at day 5 of the idle window, and no dashboard banner. The pause
   will arrive unannounced until Phase 4's sender exists.
 - Resume onto a node that filled up while the project slept **fails** with the node
