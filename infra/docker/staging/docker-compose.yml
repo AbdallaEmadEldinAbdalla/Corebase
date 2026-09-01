@@ -90,18 +90,26 @@ services:
       # them in its own namespace, so the range has to be republished to be
       # reachable from the control plane running on the host.
       #
-      # Thirty ports, not the fleet's thousand (PG_PORT_RANGE): enough to hold
-      # T5f's twenty simultaneous projects with headroom, while publishing 1000
-      # through Docker Desktop's proxy would cost seconds of startup and a
+      # Thirty ports by default, not the fleet's thousand (PG_PORT_RANGE): enough
+      # to hold T5f's twenty simultaneous projects with headroom, while publishing
+      # 1000 through Docker Desktop's proxy would cost seconds of startup and a
       # process per port for no extra coverage. CB_PG_PORT_MIN/MAX narrow the
       # allocator to match — see placement.ts.
-      - "${PROJECT_PORT_MIN:-5433}-${PROJECT_PORT_MAX:-5462}:5433-5462"
+      #
+      # Both sides of the mapping use the same variables, and must: the
+      # container-side range was pinned to 5433-5462 while the host side was
+      # parameterised, so widening the range for P2g's density run failed with
+      # "invalid ranges specified for container and host Ports" — the two sides
+      # have to be the same width, and there is no reason for them to differ at
+      # all when the allocator is narrowed to match. P2g runs with
+      # PROJECT_PORT_MAX=5532 and POOLER_PORT_MAX=6532 for 100 projects.
+      - "${PROJECT_PORT_MIN:-5433}-${PROJECT_PORT_MAX:-5462}:${PROJECT_PORT_MIN:-5433}-${PROJECT_PORT_MAX:-5462}"
       # And the pooler range (P2b). A project is two listeners now: Postgres on
       # its port for DIRECT_DATABASE_URL, PgBouncer on its own for DATABASE_URL.
       # Without this published, nothing on the host — control plane or customer —
       # can reach a pooler, and the health gate would fail for a pooler that is
       # actually running perfectly.
-      - "${POOLER_PORT_MIN:-6433}-${POOLER_PORT_MAX:-6462}:6433-6462"
+      - "${POOLER_PORT_MIN:-6433}-${POOLER_PORT_MAX:-6462}:${POOLER_PORT_MIN:-6433}-${POOLER_PORT_MAX:-6462}"
     volumes:
       - data-node-certs:/certs
       - data-node-docker:/var/lib/docker

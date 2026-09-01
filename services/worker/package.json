@@ -13,7 +13,8 @@
     "node-reboot": "node --experimental-strip-types bench/node-reboot.mts",
     "observability": "node --experimental-strip-types bench/observability.mts",
     "test:unit": "vitest run --exclude '**/*.e2e.test.ts' --passWithNoTests",
-    "pause-bench": "node --experimental-strip-types bench/pause.mts"
+    "pause-bench": "node --experimental-strip-types bench/pause.mts",
+    "density": "node --experimental-strip-types bench/density.mts"
   },
   "dependencies": {
     "@corebase/types": "workspace:*",

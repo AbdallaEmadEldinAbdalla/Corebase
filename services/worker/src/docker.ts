@@ -380,6 +380,26 @@ export function createDocker(cfg: DockerConfig) {
     },
 
     /**
+     * One memory/CPU sample for a container.
+     *
+     * `one-shot` on purpose. Without it the engine holds the request open for a
+     * second so it can compute a CPU delta for you, which at two containers per
+     * project and a hundred projects is over three minutes of waiting to read two
+     * hundred numbers. CPU is cumulative in the payload, so two one-shot samples
+     * a known interval apart give the same delta without the engine pausing for
+     * each one.
+     *
+     * On cgroup v2 `usage` includes page cache, which is the wrong number for
+     * "what does a project cost" — cache is reclaimable, and a node under
+     * pressure gets it back. `stats.anon` is the working set that cannot be
+     * reclaimed, and it is what M-001 measured, so it stays comparable.
+     */
+    async containerStats(id: string): Promise<ContainerStats> {
+      return call<ContainerStats>(
+        'GET', `/containers/${encodeURIComponent(id)}/stats?stream=false&one-shot=true`);
+    },
+
+    /**
      * A stopped container's output. Same stdcopy framing as exec.
      *
      * Used by the node capability probe, which needs a value out of a container
@@ -438,6 +458,16 @@ export interface ContainerInspect {
     PidsLimit?: number; BlkioWeight?: number;
     RestartPolicy: { Name: string };
   };
+}
+/** The subset of Docker's stats payload this codebase reads. */
+export interface ContainerStats {
+  memory_stats?: {
+    usage?: number;
+    limit?: number;
+    stats?: Record<string, number>;
+  };
+  cpu_stats?: { cpu_usage?: { total_usage?: number } };
+  pids_stats?: { current?: number };
 }
 export interface VolumeSummary {
   Name: string; Labels: Record<string, string> | null;
