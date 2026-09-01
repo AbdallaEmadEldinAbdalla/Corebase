@@ -1,0 +1,111 @@
+# `promtool test rules` — the alert catalog's backup thresholds, asserted.
+#
+# This is what "alerts fire (tested)" means for Phase 3's third exit criterion.
+# Validating that the rule file parses proves nothing about whether it fires; these
+# drive synthetic series through the real expressions and assert which alerts come
+# out, deterministically and without a running Prometheus.
+rule_files:
+  - rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # A healthy idle Free project. archive_timeout closes a segment every 300s, but
+  # nothing waits to be pushed, so lag is 0 — and this test is the guard against
+  # the tempting definition that would make it 300 and page forever.
+  - interval: 1m
+    input_series:
+      - series: 'corebase_backup_wal_archive_lag_seconds{node="data-1",project_ref="healthy"}'
+        values: '0+0x10'
+      - series: 'corebase_backup_check_ok{node="data-1",project_ref="healthy"}'
+        values: '1+0x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: WalArchiveLagWarn
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: BackupRepoUnreachable
+        exp_alerts: []
+
+  # Lag climbing past the RPO promise. Warn at >300s, and the page follows at
+  # >900s — both from the same series, so a mistake in either bound shows here.
+  - interval: 1m
+    input_series:
+      - series: 'corebase_backup_wal_archive_lag_seconds{node="data-1",project_ref="rotting"}'
+        values: '60+120x14'
+    alert_rule_test:
+      # 4 min in: lag is 60+120*4 = 540s, over the warn line, and `for: 1m` has
+      # been satisfied since the previous evaluation.
+      - eval_time: 5m
+        alertname: WalArchiveLagWarn
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              node: data-1
+              project_ref: rotting
+            exp_annotations:
+              summary: 'WAL for rotting is 11m 0s behind its repo'
+              description: >-
+                The oldest closed WAL segment has been waiting 11m 0s. This project's PITR window has stopped advancing.
+      # Still only a warn well below 900s.
+      - eval_time: 5m
+        alertname: WalArchiveLagCritical
+        exp_alerts: []
+      # 10 min in: 60+120*10 = 1260s, past the page threshold.
+      - eval_time: 11m
+        alertname: WalArchiveLagCritical
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              node: data-1
+              project_ref: rotting
+            exp_annotations:
+              summary: 'WAL for rotting has not reached the repo in 15 minutes'
+
+  # The repo refusing a backup while WAL happens not to be waiting: zero lag and a
+  # failing check. Lag alone would call this project healthy, which is the reason
+  # `pgbackrest check` is a separate signal rather than a confirmation of the same one.
+  - interval: 1m
+    input_series:
+      - series: 'corebase_backup_wal_archive_lag_seconds{node="data-1",project_ref="badcreds"}'
+        values: '0+0x10'
+      - series: 'corebase_backup_check_ok{node="data-1",project_ref="badcreds"}'
+        values: '0+0x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: WalArchiveLagWarn
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: BackupRepoUnreachable
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              node: data-1
+              project_ref: badcreds
+            exp_annotations:
+              summary: 'pgbackrest check is failing for badcreds'
+              description: >-
+                The repo will not accept a backup. Until this clears, the project has no PITR regardless of what its lag says.
+
+  # Nothing archived in over 26 hours (D-019: absent backups are fiction).
+  #
+  # `interval: 1m`, not 1h, and the reason is worth keeping: with hourly samples
+  # the series is *stale* for 55 minutes out of every 60 (Prometheus' lookback is
+  # 5 minutes), so the alert kept going inactive between points and its `for: 5m`
+  # was never satisfied. The rule was correct and the test was measuring the
+  # sample density instead — which is exactly the failure a synthetic-series test
+  # is prone to, and worth knowing before writing the next one.
+  - interval: 1m
+    input_series:
+      - series: 'corebase_backup_last_success_ts{node="data-1",project_ref="stale"}'
+        values: '0+0x1650'
+    alert_rule_test:
+      - eval_time: 27h
+        alertname: BackupLastSuccessStale
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              node: data-1
+              project_ref: stale
+            exp_annotations:
+              summary: 'Nothing has been archived for stale in over 26 hours'

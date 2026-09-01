@@ -11,10 +11,12 @@ import { createSweeper } from './sweeper.ts';
 import { createPurgeScan } from './purge-scan.ts';
 import { createIdleScan } from './idle-scan.ts';
 import { createDiskScan } from './disk-scan.ts';
+import { createWalScan } from './wal-scan.ts';
 import { createReconciler } from './reconcile.ts';
 import {
   startMetricsServer, registerControlPlaneCollectors,
   jobSeconds, stepSeconds, jobsTotal, reconcileDriftTotal, reconcilePassSeconds,
+  backupWalArchiveLagSeconds, backupWalPending, backupLastSuccessTs, backupCheckOk,
 } from './metrics.ts';
 
 const dbUrl = process.env.CB_CONTROL_DATABASE_URL;
@@ -175,6 +177,61 @@ if (secrets) {
   }, diskMs);
 }
 
+/**
+ * WAL-archive lag (P3b). Every 2 minutes by default.
+ *
+ * More often than the disk ladder, because the thing being watched moves faster and
+ * matters sooner: the alert fires at 5 minutes of lag, and a sweep interval near
+ * the threshold means the alert learns about it up to a full interval late. Two
+ * minutes gives the >5-min warn two samples before it can be true.
+ *
+ * The `pgbackrest check` inside it is spent on its own 15-minute schedule per
+ * project (backups §1) rather than every sweep — it costs a WAL switch, and paying
+ * that every two minutes for every project would be the monitoring generating most
+ * of the WAL it monitors.
+ */
+const walMs = Number(process.env.CB_WAL_SCAN_MS ?? 120_000);
+let walTimer: NodeJS.Timeout | undefined;
+if (secrets) {
+  const store = secrets;
+  const walScan = createWalScan({
+    pool, docker,
+    checkIntervalMs: Number(process.env.CB_BACKUP_CHECK_MS ?? 900_000),
+    log: (l, m, e) => log(l, m, e),
+    onSample: ({ ref, node, sample, state }) => {
+      backupWalArchiveLagSeconds.set({ node, project_ref: ref }, sample.lagSeconds);
+      backupWalPending.set({ node, project_ref: ref }, sample.pending);
+      if (sample.lastArchivedAt) {
+        backupLastSuccessTs.set(
+          { node, project_ref: ref }, Math.floor(sample.lastArchivedAt.getTime() / 1000));
+      }
+      void state;
+    },
+  });
+  walTimer = setInterval(() => {
+    void walScan.scanOnce({
+      superuserPasswordsFor: (projectId) => superuserCandidates(
+        { pool, secrets: store, bootstrapSecret: process.env.CB_BOOTSTRAP_SECRET } as never,
+        projectId),
+    }).then((r) => {
+      // The gauge is set from the row rather than the check's return value so it
+      // also covers projects whose check was not due this sweep — otherwise a
+      // project's `check_ok` series would flap to nothing between checks and the
+      // alert would read the gap as recovery.
+      void r;
+      return pool.query<{ ref: string; hostname: string; ok: boolean | null }>(
+        `SELECT p.ref::text AS ref, n.hostname, d.backup_check_ok AS ok
+           FROM projects p JOIN project_databases d ON d.project_id = p.id
+           JOIN nodes n ON n.id = d.node_id
+          WHERE d.status = 'running' AND d.backup_check_ok IS NOT NULL`);
+    }).then((res) => {
+      for (const row of res.rows) {
+        backupCheckOk.set({ node: row.hostname, project_ref: row.ref }, row.ok ? 1 : 0);
+      }
+    }).catch((e) => log('error', 'wal scan failed', { error: (e as Error).message }));
+  }, walMs);
+}
+
 // Node reconciliation (D-065/D-173): 5 minutes, jittered so a fleet of workers
 // does not hit every node's Engine API at the same second. Container crashes are
 // Docker's restart policy to handle; this is the backstop that catches what the
@@ -222,6 +279,7 @@ log('info', 'worker started', {
   sweepMs, purgeMs, reconcileMs, metricsPort,
   idle: idleTimer ? { scanMs: idleMs, days: idleDays } : 'disabled (no secret store)',
   disk: diskTimer ? { scanMs: diskMs } : 'disabled (no secret store)',
+  wal: walTimer ? { scanMs: walMs } : 'disabled (no secret store)',
 });
 
 const shutdown = async (signal: string) => {

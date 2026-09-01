@@ -33,3 +33,54 @@ groups:
         labels: { severity: warn }
         annotations:
           summary: 'No reconciliation sweep for {{ $labels.node }} in 15 minutes'
+
+  # ── backups (P3b) ─────────────────────────────────────────────────────────
+  # A project whose WAL is not reaching object storage keeps serving, keeps
+  # saying `ready`, and stops being recoverable. Nothing about that is visible
+  # from the outside, which is the entire reason these exist.
+  - name: corebase-backups
+    interval: 15s
+    rules:
+      # >5 min is the RPO promise (D-148) already broken, not an early warning.
+      #
+      # The metric is the age of the *oldest unarchived segment*, not the time
+      # since the last push — with archive_timeout forcing a switch every 300s on
+      # Free, the naive definition sits every healthy idle project permanently on
+      # this line and the alert becomes noise nobody reads.
+      - alert: WalArchiveLagWarn
+        expr: corebase_backup_wal_archive_lag_seconds > 300
+        for: 1m
+        labels: { severity: warn }
+        annotations:
+          summary: 'WAL for {{ $labels.project_ref }} is {{ $value | humanizeDuration }} behind its repo'
+          description: >-
+            The oldest closed WAL segment has been waiting {{ $value | humanizeDuration }}.
+            This project's PITR window has stopped advancing.
+
+      - alert: WalArchiveLagCritical
+        expr: corebase_backup_wal_archive_lag_seconds > 900
+        for: 1m
+        labels: { severity: page }
+        annotations:
+          summary: 'WAL for {{ $labels.project_ref }} has not reached the repo in 15 minutes'
+
+      # A different question from lag, and one lag cannot answer: a project can
+      # have nothing waiting and a repo whose credentials expired last week.
+      - alert: BackupRepoUnreachable
+        expr: corebase_backup_check_ok == 0
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: 'pgbackrest check is failing for {{ $labels.project_ref }}'
+          description: >-
+            The repo will not accept a backup. Until this clears, the project has
+            no PITR regardless of what its lag says.
+
+      # D-019: untested or absent backups are fiction. The alert catalog puts
+      # last-success age at >26h — a nightly full plus two hours of slack.
+      - alert: BackupLastSuccessStale
+        expr: time() - corebase_backup_last_success_ts > 93600
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: 'Nothing has been archived for {{ $labels.project_ref }} in over 26 hours'

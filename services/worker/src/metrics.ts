@@ -87,6 +87,49 @@ export const reconcileDriftTotal = registry.register(new Counter({
   labelNames: ['class', 'action'],
 }));
 
+/**
+ * WAL-archive lag, per project (P3b). The pair the alert catalog names.
+ *
+ * `project_ref` is a ×N label and D-146's cardinality budget counts it — these two
+ * are on the budget's ✅ list precisely because they page: a fleet-level average
+ * archive lag is useless, since one project's PITR rotting is invisible in an
+ * average of ten thousand healthy ones.
+ *
+ * Lag is the age of the oldest WAL segment closed but not yet archived, **not**
+ * time since the last successful push. With `archive_timeout` forcing a switch
+ * every 300s on Free, the naive definition puts every healthy idle project
+ * permanently at the 5-minute warn line.
+ */
+export const backupWalArchiveLagSeconds = registry.register(new Gauge({
+  name: 'corebase_backup_wal_archive_lag_seconds',
+  help: 'Age of the oldest WAL segment closed but not yet archived (0 if none waiting).',
+  labelNames: ['node', 'project_ref'],
+}));
+
+export const backupLastSuccessTs = registry.register(new Gauge({
+  name: 'corebase_backup_last_success_ts',
+  help: 'Unix time of the last WAL segment successfully archived for a project.',
+  labelNames: ['node', 'project_ref'],
+}));
+
+/**
+ * Whether the project's repo would accept a backup at all — a different question
+ * from whether WAL is flowing, and one a lag gauge cannot answer: a project can
+ * have nothing waiting and a repo whose credentials expired last week.
+ */
+export const backupCheckOk = registry.register(new Gauge({
+  name: 'corebase_backup_check_ok',
+  help: '1 if the last pgbackrest check for this project succeeded, 0 if it failed.',
+  labelNames: ['node', 'project_ref'],
+}));
+
+/** Segments waiting. Distinguishes a slow push from a repo that stopped accepting. */
+export const backupWalPending = registry.register(new Gauge({
+  name: 'corebase_backup_wal_pending_segments',
+  help: 'WAL segments closed and waiting to be pushed to the repo.',
+  labelNames: ['node', 'project_ref'],
+}));
+
 export const reconcilePassSeconds = registry.register(new Histogram({
   name: 'corebase_reconcile_pass_seconds',
   help: 'Duration of one reconciliation sweep.',
