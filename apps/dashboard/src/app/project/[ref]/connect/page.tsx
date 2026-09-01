@@ -4,7 +4,7 @@ import { use, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ErrorSurface } from '../../../../components/ErrorSurface.tsx';
 import { CopyButton } from '../../../../components/Copy.tsx';
-import { useProject } from '../../../../lib/queries.ts';
+import { useProjectCredentials } from '../../../../lib/queries.ts';
 import type { DatabaseInfo } from '../../../../lib/api.ts';
 
 /**
@@ -38,7 +38,9 @@ export default function ConnectPage({ params }: { params: Promise<{ ref: string 
 }
 
 function Connect({ projectRef }: { projectRef: string }) {
-  const q = useProject(projectRef);
+  // This page is the credentials page, so it reveals — which the API records once
+  // per hour per person. The overview deliberately does not.
+  const q = useProjectCredentials(projectRef);
   const router = useRouter();
   const search = useSearchParams();
 
@@ -87,8 +89,8 @@ function Connect({ projectRef }: { projectRef: string }) {
           <div className="cb-tabs" role="tablist" aria-label="Connection format">
             {TABS.map((t) => (
               <button key={t.id} type="button" role="tab" className="cb-tab"
-                      aria-selected={tab === t.id}
-                      onClick={() => setTab(t.id)}>{t.label}</button>
+                aria-selected={tab === t.id}
+                onClick={() => setTab(t.id)}>{t.label}</button>
             ))}
           </div>
 
@@ -192,8 +194,8 @@ function Snippet({ tab, db, name }: { tab: TabId; db: DatabaseInfo; name: string
       <div className="cb-code__header">
         <span className="cb-code__lang">{lang}</span>
         <button type="button" className="cb-code__copy"
-                onClick={() => { void navigator.clipboard?.writeText(text); }}
-                aria-hidden="true" tabIndex={-1} style={{ visibility: 'hidden' }}>copy</button>
+          onClick={() => { void navigator.clipboard?.writeText(text); }}
+          aria-hidden="true" tabIndex={-1} style={{ visibility: 'hidden' }}>copy</button>
         {/* The real control, so the copy goes through the toast layer. */}
         <CopyButton value={text} what={`${lang} snippet`} variant="ghost" />
       </div>

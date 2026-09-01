@@ -4,7 +4,6 @@ import Link from 'next/link';
 import { use } from 'react';
 import { ErrorSurface } from '../../../components/ErrorSurface.tsx';
 import { ProjectStateBadge, SETTLING } from '../../../components/ProjectState.tsx';
-import { CopyButton } from '../../../components/Copy.tsx';
 import { useProject } from '../../../lib/queries.ts';
 
 /**
@@ -28,9 +27,8 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
   const p = q.data?.project;
   const db = q.data?.database;
   const settling = Boolean(p && SETTLING.has(p.status));
-  // The pooled string, because that is what an application should use (D-015).
-  // The overview answers "how do I connect my app"; Connect answers the rest.
-  const pooled = db?.connection_strings?.pooled;
+  // Deliberately not the connection strings: this page polls, and revealing
+  // credentials is audited (see the project detail route). Connect reveals.
 
   return (
     <div className="wrap">
@@ -110,16 +108,17 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
         </div>
         <div className="card">
           <div className="card__body">
-            {pooled ? (
-              <>
-                <div className="facts__k" style={{ marginBottom: 6 }}>DATABASE_URL</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--cb-space-3)' }}>
-                  <code style={{ flex: 1, minWidth: 0, font: 'var(--cb-code)', overflowWrap: 'anywhere' }}>
-                    {pooled}
-                  </code>
-                  <CopyButton value={pooled} what="DATABASE_URL" />
+            {db ? (
+              <div className="facts">
+                <div className="facts__k">Host</div>
+                <div className="facts__v"><code>{db.host}:{db.port}</code></div>
+                <div className="facts__k">Pooled port</div>
+                <div className="facts__v"><code>{db.pooler_port}</code></div>
+                <div className="facts__k">Credentials</div>
+                <div className="facts__v">
+                  <Link href={`/project/${ref}/connect`}>Show connection strings →</Link>
                 </div>
-              </>
+              </div>
             ) : q.isLoading ? (
               <div className="cb-skeleton" style={{ height: 20, width: '80%' }} />
             ) : (
@@ -130,11 +129,10 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
               </p>
             )}
           </div>
-          {pooled ? (
+          {db ? (
             <div className="card__foot">
-              Pooled, for your application. Migrations and <code>psql</code> want
-              <code> DIRECT_DATABASE_URL</code> — both are on Connect. Contains the
-              database password; treat it like one.
+              Connection strings live on Connect, not here — taking them is recorded
+              against your account, so this page shows only where the database is.
             </div>
           ) : null}
         </div>

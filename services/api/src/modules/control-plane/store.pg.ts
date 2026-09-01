@@ -201,6 +201,15 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
       return { project, database };
     },
 
+    async countProjectsInOrg(organizationId) {
+      // `deleted` is the only status that has given its resources back; a
+      // soft-deleted project still holds a volume and a port for the window.
+      const { rows } = await pool.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM projects
+          WHERE organization_id = $1 AND status <> 'deleted'`, [organizationId]);
+      return rows[0]?.n ?? 0;
+    },
+
     /**
      * Pause or resume (P2c, D-008).
      *

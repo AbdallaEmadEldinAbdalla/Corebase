@@ -240,9 +240,22 @@ export const api = {
       `/v1/projects?org_id=${encodeURIComponent(orgId)}`
       + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : '')),
 
+  /**
+   * Status and details, without credentials. Safe to poll — and it must be, since
+   * the overview polls it while a project settles.
+   */
   project: (ref: string) =>
     request<{ project: Project; database?: DatabaseInfo }>(
       `/v1/projects/${encodeURIComponent(ref)}`),
+
+  /**
+   * The same thing *with* connection strings. A separate call because taking
+   * credentials is a deliberate act that the API records — polling this would
+   * write an audit row an hour forever and teach nobody anything.
+   */
+  projectCredentials: (ref: string) =>
+    request<{ project: Project; database?: DatabaseInfo }>(
+      `/v1/projects/${encodeURIComponent(ref)}?reveal=true`),
 
   projectKeys: (ref: string) =>
     request<{ api_keys: ApiKey[] }>(`/v1/projects/${encodeURIComponent(ref)}/keys`),

@@ -138,7 +138,7 @@ async function oneCycle(i: number): Promise<Cycle> {
 
   // Prove it is a real database before deleting it, so a cycle that "worked"
   // cannot mean "created something broken and then removed it".
-  const detail = await fetch(`http://127.0.0.1:${PORT}/v1/projects/${ref}`, { headers: auth })
+  const detail = await fetch(`http://127.0.0.1:${PORT}/v1/projects/${ref}?reveal=true`, { headers: auth })
     .then((r) => r.json() as Promise<{ database?: { connection_strings?: { direct: string } } }>);
   const url = detail.database?.connection_strings?.direct;
   if (!url) throw new Error(`${ref} is ready with no connection string`);

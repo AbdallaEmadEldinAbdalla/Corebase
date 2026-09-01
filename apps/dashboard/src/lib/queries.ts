@@ -78,6 +78,23 @@ export function useProject(ref: string) {
   });
 }
 
+/**
+ * A project's connection strings, fetched only when a page actually shows them.
+ *
+ * `staleTime: Infinity` and no refetch-on-focus: the API records a reveal, so
+ * re-fetching because a window regained focus would write audit rows for nothing.
+ * The credentials do not change on their own — a rotation invalidates this key.
+ */
+export function useProjectCredentials(ref: string, enabled = true) {
+  return useQuery({
+    queryKey: [...keys.project(ref), 'credentials'] as const,
+    queryFn: () => api.projectCredentials(ref),
+    enabled,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+}
+
 export function useProjectKeys(ref: string, enabled = true) {
   return useQuery({
     queryKey: keys.projectKeys(ref),

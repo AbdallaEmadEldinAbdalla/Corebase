@@ -117,7 +117,7 @@ async function waitFor(what: string, ok: () => Promise<boolean>, budgetMs = CONV
 
 /** Can this project actually serve a query right now? */
 async function usable(ref: string): Promise<boolean> {
-  const detail = await fetch(`http://127.0.0.1:${PORT}/v1/projects/${ref}`, { headers: auth })
+  const detail = await fetch(`http://127.0.0.1:${PORT}/v1/projects/${ref}?reveal=true`, { headers: auth })
     .then((r) => r.json() as Promise<{ database?: { connection_strings?: { direct: string } } }>)
     .catch(() => ({} as { database?: undefined }));
   const url = detail.database?.connection_strings?.direct;

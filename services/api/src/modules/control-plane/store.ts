@@ -89,6 +89,14 @@ export interface ControlPlaneStore {
   requestDelete(ref: string, actor?: Actor): Promise<
     { project: Project; job: JobRow; alreadyRequested: boolean } | undefined>;
   /**
+   * Live projects in an organization, for the per-org ceiling.
+   *
+   * Counts everything that still holds resources on a node, including
+   * soft-deleted projects: they keep a volume, a port and a disk reservation for
+   * the recovery window, so they are as real to the node as running ones.
+   */
+  countProjectsInOrg?(organizationId: string): Promise<number>;
+  /**
    * Pause or resume (P2c, D-008).
    *
    * Three outcomes rather than two, because "this project is in the wrong state"

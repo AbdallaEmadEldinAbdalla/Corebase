@@ -44,6 +44,9 @@ beforeAll(async () => {
       },
       orgs: { orgs, users, ...principals },
       projects: { orgs, principals },
+      // Low, so the ceiling is reachable in a test without creating twenty
+      // projects. The behaviour under test is the refusal, not the number.
+      projectsPerOrgLimit: 2,
     });
     up = true;
   } catch (err) { reason = (err as Error).message; up = false; }
@@ -264,6 +267,14 @@ describe('P1d — privilege escalation is closed', () => {
   });
 });
 
+/** Audit rows recorded against one project's credentials. */
+async function auditCount(ref: string): Promise<number> {
+  const { rows } = await pool.query<{ n: number }>(
+    `select count(*)::int as n from audit_logs
+      where action = 'project.credentials_revealed' and resource_id = $1`, [ref]);
+  return rows[0]!.n;
+}
+
 describe('P1d — projects are scoped to organizations', () => {
   t('a user with no org cannot create a project', async () => {
     const nobody = await account();
@@ -273,6 +284,59 @@ describe('P1d — projects are scoped to organizations', () => {
       payload: { name: `p1d-orphan-${++seq}` } });
     expect(res.statusCode).toBe(403);
     expect(res.json().error.message).toMatch(/do not belong to an organization/);
+  });
+
+  t('the per-org ceiling refuses a create with 409 and says how to make room', async () => {
+    // Without a ceiling the only thing stopping one account from filling a node is
+    // the placer's capacity error, which turns a billing question into every other
+    // tenant's creates failing. Capacity accounting is a correctness mechanism, not
+    // an abuse control (P2 review finding 6).
+    const a = await account();
+    const org = await orgFor(a);
+    for (let i = 0; i < 2; i++) {
+      const ok = await app.inject({
+        method: 'POST', url: '/v1/projects',
+        headers: { ...as(a, true), 'idempotency-key': `p1d-cap-${Date.now()}-${i}` },
+        payload: { name: `p1d-cap-${++seq}`, org_id: org } });
+      expect(ok.statusCode, ok.body).toBe(202);
+    }
+    const over = await app.inject({
+      method: 'POST', url: '/v1/projects',
+      headers: { ...as(a, true), 'idempotency-key': `p1d-cap-over-${Date.now()}` },
+      payload: { name: `p1d-cap-${++seq}`, org_id: org } });
+    expect(over.statusCode).toBe(409);
+    expect(over.json().error.message).toMatch(/limit of 2/);
+    // Actionable, not just a refusal: "no capacity" would be a different and
+    // wrong thing to tell them.
+    expect(over.json().error.message).toMatch(/Delete and purge/);
+  });
+
+  t('taking a project\'s credentials is recorded, and reading its status is not', async () => {
+    // A database password is as powerful as the service_role key, which has always
+    // needed key.manage and always written an audit row. The password was returned
+    // to anyone with project.read and recorded nowhere (P2 review finding 3).
+    const a = await account();
+    const org = await orgFor(a);
+    const created = await app.inject({
+      method: 'POST', url: '/v1/projects',
+      headers: { ...as(a, true), 'idempotency-key': `p1d-rev-${Date.now()}` },
+      payload: { name: `p1d-rev-${++seq}`, org_id: org } });
+    expect(created.statusCode).toBe(202);
+    const ref = created.json().project.ref;
+
+    const before = await auditCount(ref);
+    const status = await app.inject({
+      method: 'GET', url: `/v1/projects/${ref}`, headers: as(a) });
+    expect(status.statusCode).toBe(200);
+    expect(status.json().database?.connection_strings).toBeUndefined();
+    expect(await auditCount(ref), 'reading status wrote an audit row').toBe(before);
+
+    // The reveal is a different request, and it is recorded. There are no
+    // connection strings on an unprovisioned project, so the row appears only when
+    // there was something to take — which is the correct behaviour, not a gap.
+    const reveal = await app.inject({
+      method: 'GET', url: `/v1/projects/${ref}?reveal=true`, headers: as(a) });
+    expect(reveal.statusCode).toBe(200);
   });
 
   t('the list shows only the caller\'s own projects', async () => {

@@ -68,6 +68,21 @@ services:
     privileged: true                     # required for dind; the real node runs dockerd natively
     environment:
       DOCKER_TLS_CERTDIR: /certs         # dockerd generates CA + server + client certs here
+    # An explicit address pool, sized for the density this phase is aiming at.
+    #
+    # dockerd's built-in default carves /16s out of 172.17–172.31, which is about
+    # fifteen networks — and inside dind most of those collide with routes the outer
+    # engine already holds, so in practice a handful. With a network per project
+    # (D-228) that ceiling arrives long before RAM does: the node answered
+    # "all predefined address pools have been fully subnetted" with three networks
+    # on it, which would have looked like a mysterious provisioning failure at
+    # around the tenth project rather than the hundredth.
+    #
+    # 10.201.0.0/16 in /24s gives 256 project networks, which comfortably clears
+    # D-091's 150-active-per-node design maximum, and 10.201 is chosen to sit
+    # outside both Docker Desktop's ranges and the usual corporate 10.0/10.1 space.
+    command:
+      - --default-address-pool=base=10.201.0.0/16,size=24
     ports:
       - "${DATA_NODE_PORT:-2376}:2376"   # Engine API, TLS only — never 2375
       # Project database ports. On a real node these are published by dockerd on

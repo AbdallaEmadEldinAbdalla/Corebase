@@ -47,6 +47,8 @@ export interface BuildOptions {
    * none — see kernel/cors.ts for why that is the default rather than localhost.
    */
   corsOrigins?: readonly string[];
+  /** Overrides the per-org project ceiling; tests set it low. */
+  projectsPerOrgLimit?: number;
 }
 
 /** Composition root: the only place that wires modules together. */
@@ -84,6 +86,8 @@ export function buildApp(opts: BuildOptions = {}): FastifyInstance {
     ...(opts.projects ? { orgs: opts.projects.orgs, principals: opts.projects.principals } : {}),
     ...(opts.projectSecrets ? { secrets: opts.projectSecrets.secrets } : {}),
     ...(opts.auth ? { pool: opts.auth.pool } : {}),
+    ...(opts.projectsPerOrgLimit !== undefined
+      ? { projectsPerOrgLimit: opts.projectsPerOrgLimit } : {}),
     ...(opts.enqueue ? { enqueue: opts.enqueue } : {}),
     ...(opts.onEnqueueError ? { onEnqueueError: opts.onEnqueueError } : {}),
   });

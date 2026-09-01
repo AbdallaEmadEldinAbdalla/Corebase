@@ -25,6 +25,8 @@ export type Enqueue = (job: {
 }) => Promise<void>;
 
 export interface ControlPlaneDeps {
+  /** Overrides the per-org project ceiling; tests set it low. */
+  projectsPerOrgLimit?: number;
   store: ControlPlaneStore;
   /** Optional: without it the sweeper is the only delivery path (slower, still correct). */
   enqueue?: Enqueue;
@@ -50,7 +52,48 @@ export interface ControlPlaneDeps {
   pool?: import('pg').Pool;
 }
 
+/**
+ * Live projects one organization may hold. Generous for the audience V1 targets
+ * (indie developers and startups, D-003) and far below what one node holds, so it
+ * bounds abuse without being a ceiling a real user meets.
+ */
+export const PROJECTS_PER_ORG_LIMIT = Number(process.env.CB_PROJECTS_PER_ORG ?? 20);
+
+/**
+ * Record that someone took a project's database credentials, at most once per
+ * actor per project per hour.
+ *
+ * The window is the whole point. A credential reveal is worth an audit row; a
+ * dashboard polling project detail is not, and writing one per poll would bury the
+ * deliberate reveals under thousands of incidental ones. Deduplicating on the
+ * *existing rows* rather than in memory means it holds across restarts and across
+ * several API instances, which an in-process cache would not.
+ */
+async function recordCredentialReveal(
+  pool: import('pg').Pool,
+  args: { actor: Actor; organizationId: string; projectId: string; ref: string },
+): Promise<void> {
+  const { rows } = await pool.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM audit_logs
+      WHERE action = 'project.credentials_revealed'
+        AND project_id = $1
+        AND actor_user_id IS NOT DISTINCT FROM $2
+        AND created_at > now() - interval '1 hour'`,
+    [args.projectId, args.actor.userId ?? null]);
+  if ((rows[0]?.n ?? 0) > 0) return;
+  await writeAudit(pool, args.actor, {
+    action: 'project.credentials_revealed',
+    resourceType: 'project',
+    resourceId: args.ref,
+    organizationId: args.organizationId,
+    projectId: args.projectId,
+    // No value, obviously. What matters is who, when, and that it happened.
+    metadata: { deduplicated_window: '1 hour' },
+  });
+}
+
 export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDeps) {
+  const projectsPerOrgLimit = deps.projectsPerOrgLimit ?? PROJECTS_PER_ORG_LIMIT;
   /**
    * Authenticate the request.
    *
@@ -174,6 +217,31 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
     const scoped = await scope(req, (req.body as { org_id?: unknown } | undefined)?.org_id);
     if (scoped) require_(scoped.role, 'project.create');
 
+    /**
+     * A ceiling on live projects per organization.
+     *
+     * Without one, the only thing stopping an account from creating projects
+     * until a node is full is the placer's capacity error — which means one
+     * tenant can consume a node's entire RAM budget and every other tenant's
+     * creates start failing. Capacity accounting is a correctness mechanism, not
+     * an abuse control, and using it as one makes a billing question into an
+     * outage.
+     *
+     * Soft-deleted projects count, deliberately: they still hold a volume, a
+     * port and a disk reservation for seven days (D-038), so they are as real to
+     * the node as running ones. The error says how to get room back rather than
+     * only that there is none.
+     */
+    if (scoped) {
+      const live = await deps.store.countProjectsInOrg?.(scoped.orgId);
+      if (live !== undefined && live >= projectsPerOrgLimit) {
+        throw new ApiError(409, ERROR_CODES.VALIDATION_FAILED,
+          `This organization already has ${live} projects, which is the limit of ` +
+          `${projectsPerOrgLimit}. Delete and purge one to make room, or contact ` +
+          'support to raise the limit.');
+      }
+    }
+
     // Scoped to the caller's org: a name another tenant took is not the caller's
     // problem, and telling them it is taken would disclose it.
     const existing = await deps.store.findByName(parsed.data.name, scoped?.orgId);
@@ -259,22 +327,70 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
     return { projects: items.map(serializeProject), pagination };
   });
 
-  app.get('/v1/projects/:ref', async (req) => {
+  /**
+   * A project's detail, and — only when asked for — its connection strings.
+   *
+   * The strings used to come back on every read, which left an audit gap worth
+   * naming plainly: revealing the `service_role` key requires `key.manage` and
+   * writes an audit row, while the *database password* was returned to anyone with
+   * `project.read` and recorded nowhere. Both grant complete access to the
+   * customer's data, so gating one and not the other made the gate close to
+   * decorative, and left no answer to "who took these credentials".
+   *
+   * The fix is not to raise the capability. A member may create projects, so a
+   * member must be able to use them — denying the string would deny the product.
+   * The fix is that taking credentials is now a deliberate act (`?reveal=true`)
+   * and a recorded one, matching how the keys endpoint already behaves.
+   *
+   * The audit row is deduplicated per actor per project per hour. Without that,
+   * a dashboard that polls project detail would write a row every few seconds and
+   * bury the reveals that matter in noise — an audit trail nobody can read is not
+   * evidence.
+   */
+  app.get('/v1/projects/:ref', async (req, reply) => {
     await requireAuth(req);
     const { ref } = req.params as { ref: string };
-    // { project, database } per the platform-API contract: the database block
-    // appears once provisioning has written connection details, and carries the
-    // connection strings only while the API can decrypt the credential.
+    const reveal = (req.query as { reveal?: unknown } | undefined)?.reveal === 'true';
     const detail = await deps.store.getProjectDetail(ref);
     if (!detail) throw ApiError.notFound('Project');
+
+    let scopedRole: Role | undefined;
+    let actor: Actor | undefined;
     if (deps.orgs && deps.principals) {
       // A ref is guessable in principle; membership is what makes it private.
       const scoped = await scope(req, encodeId('organization', detail.project.organization_id));
-      if (scoped) require_(scoped.role, 'project.read');
+      if (scoped) {
+        require_(scoped.role, 'project.read');
+        scopedRole = scoped.role;
+        actor = { type: 'user', userId: scoped.userId, ip: req.ip ?? null,
+                  requestId: String(reply.getHeader('x-request-id') ?? req.id) };
+      }
     }
+    void scopedRole;
+
+    const database = detail.database
+      ? reveal
+        ? detail.database
+        // Everything except the credentials. The host, the port and the version
+        // are what a status page needs; the password is not.
+        : { ...detail.database, connection_strings: undefined }
+      : undefined;
+
+    if (reveal && detail.database?.connection_strings && deps.pool) {
+      await recordCredentialReveal(deps.pool, {
+        actor: actor ?? actorFor(req as never, String(reply.getHeader('x-request-id') ?? req.id)),
+        organizationId: detail.project.organization_id,
+        projectId: detail.project.id,
+        ref,
+      });
+    }
+
     return {
       project: serializeProject(detail.project),
-      ...(detail.database ? { database: detail.database } : {}),
+      ...(database
+        ? { database: Object.fromEntries(
+            Object.entries(database).filter(([, v]) => v !== undefined)) }
+        : {}),
     };
   });
 

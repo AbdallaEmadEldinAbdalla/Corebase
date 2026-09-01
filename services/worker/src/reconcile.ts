@@ -28,9 +28,17 @@ const SHOULD_RUN = new Set(['ready', 'configuring', 'resuming']);
 const SHOULD_NOT_RUN = new Set(['soft_deleted', 'deleted', 'paused', 'pausing']);
 
 export const REPAIR_LIMIT_PER_HOUR = 3;
+/**
+ * Long enough that a slow provision is not called stuck — the longest saga here
+ * is a provision at a few seconds, and a node under load could take far longer —
+ * and short enough that a human hears about it the same working day.
+ */
+export const STUCK_TRANSITION_MINUTES = 15;
 
 export interface ReconcileOptions {
   pool: Pool;
+  /** How long a transitional status may persist with no job before it is drift. */
+  stuckAfterMinutes?: number;
   docker: Docker;
   queue: Queue<ProvisioningJobData>;
   hostname?: string;
@@ -40,11 +48,14 @@ export interface ReconcileOptions {
 
 export interface Drift {
   class: 'container_not_running' | 'zombie_container' | 'orphan_container'
-    | 'pooler_not_running'
+    | 'pooler_not_running' | 'stuck_transition'
     | 'orphan_volume' | 'orphan_network' | 'reservation_drift';
   ref?: string;
   detail: string;
-  action: 'repair_enqueued' | 'stopped' | 'alert_only' | 'recomputed' | 'repair_limit_reached';
+  action: 'repair_enqueued' | 'stopped' | 'alert_only' | 'recomputed'
+    | 'repair_limit_reached'
+    /** Drift is real, but a saga is already working on it — nothing was enqueued. */
+    | 'deferred_saga_running';
 }
 
 export interface ReconcileReport {
@@ -57,6 +68,7 @@ export interface ReconcileReport {
 }
 
 export function createReconciler(opts: ReconcileOptions) {
+  const stuckAfterMinutes = opts.stuckAfterMinutes ?? STUCK_TRANSITION_MINUTES;
   const log = opts.log ?? (() => {});
   const limit = opts.repairLimitPerHour ?? REPAIR_LIMIT_PER_HOUR;
 
@@ -73,7 +85,13 @@ export function createReconciler(opts: ReconcileOptions) {
     if ((busy[0]?.n ?? 0) > 0) {
       // Something is already working on this project. Reconciliation must not
       // race the saga it would be duplicating.
-      return 'repair_enqueued';
+      //
+      // Reported as deferred, not as enqueued. Saying "repair_enqueued" here was
+      // a small lie in the one artefact an operator reads to find out what the
+      // sweep actually did — and the two cases need different responses: an
+      // enqueued repair should converge, a deferred one means look at the job
+      // that is already running.
+      return 'deferred_saga_running';
     }
 
     const { rows: recent } = await opts.pool.query<{ n: number }>(
@@ -254,6 +272,44 @@ export function createReconciler(opts: ReconcileOptions) {
         drift.push({
           class: 'orphan_volume', ...(ref ? { ref } : {}), action: 'alert_only',
           detail: `volume ${v.Name} has no placement row — contains data, removal is a human decision`,
+        });
+      }
+
+      // ── stuck transitions ─────────────────────────────────────────────────
+      //
+      // A transitional status is a promise that something is working on it. When
+      // the job behind it dies permanently the promise is silently broken, and
+      // `pausing` is the worst case: it is in SHOULD_NOT_RUN, its containers are
+      // already stopped, so the sweep above finds nothing wrong and the project
+      // reads "pausing" to its owner forever. `resuming` at least escalates to
+      // `failed` through the repair limit.
+      //
+      // Reported rather than resolved. Which way to resolve it depends on how far
+      // the dead saga got — a half-paused project might need the pause finishing
+      // or reverting — and guessing is how a project ends up in a state no code
+      // path expects. What matters is that it stops being invisible.
+      const { rows: stuck } = await opts.pool.query<{
+        ref: string; status: string; minutes: number; jobs: number;
+      }>(
+        `SELECT p.ref::text AS ref, p.status::text AS status,
+                (EXTRACT(EPOCH FROM (now() - p.updated_at)) / 60)::int AS minutes,
+                (SELECT count(*)::int FROM provisioning_jobs j
+                  WHERE j.project_id = p.id
+                    AND j.state IN ('pending','enqueued','running')) AS jobs
+           FROM projects p
+          WHERE p.status IN ('creating', 'provisioning', 'configuring',
+                             'pausing', 'resuming', 'deleting')
+            AND p.updated_at < now() - ($1 || ' minutes')::interval`,
+        [String(stuckAfterMinutes)]);
+      for (const t of stuck) {
+        if (t.jobs > 0) continue;           // still being worked on; not stuck
+        log('error', 'drift found: project stuck mid-transition with no job running', {
+          ref: t.ref, status: t.status, minutes: t.minutes,
+        });
+        drift.push({
+          class: 'stuck_transition', ref: t.ref, action: 'alert_only',
+          detail: `project has been ${t.status} for ${t.minutes} minutes with no job ` +
+            'running — the saga behind the transition died and nothing will finish it',
         });
       }
 

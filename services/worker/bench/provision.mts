@@ -137,9 +137,15 @@ async function createProject(i: number): Promise<string> {
 async function pollReady(ref: string, budgetMs: number): Promise<Detail> {
   const until = Date.now() + budgetMs;
   for (;;) {
+    // Status only. Revealing credentials on every poll would write an audit row
+    // for work nobody did — the reveal happens once, below, when they are needed.
     const res = await fetch(`http://127.0.0.1:${PORT}/v1/projects/${ref}`, { headers: auth });
     const detail = (await res.json()) as Detail;
-    if (detail.project.status === 'ready') return detail;
+    if (detail.project.status === 'ready') {
+      const creds = await fetch(`http://127.0.0.1:${PORT}/v1/projects/${ref}?reveal=true`,
+        { headers: auth });
+      return (await creds.json()) as Detail;
+    }
     if (detail.project.status === 'failed') throw new Error(`project ${ref} failed`);
     if (Date.now() > until) {
       throw new Error(`project ${ref} still ${detail.project.status} after ${budgetMs}ms`);

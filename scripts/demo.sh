@@ -93,9 +93,14 @@ while :; do
 done
 ok "ready in $(( $(date +%s) - START ))s"
 
-URL=$(echo "$DETAIL" | jq -r '.database.connection_strings.direct // empty')
+# Ask for the credentials explicitly. The polling loop above reads status only —
+# connection strings now need `?reveal=true`, and taking them writes an audit row
+# (deduplicated per person per hour), because a database password is as powerful as
+# the service_role key that has always been gated this way.
+CREDS=$(api "$API/v1/projects/$REF?reveal=true")
+URL=$(echo "$CREDS" | jq -r '.database.connection_strings.direct // empty')
 [ -n "$URL" ] || die "ready but no connection string — the API should have one by now"
-info "host  $(echo "$DETAIL" | jq -r .database.host)"
+info "host  $(echo "$CREDS" | jq -r .database.host)"
 info "url   $(echo "$URL" | sed -E 's#(://[^:]+:)[^@]+@#\1********@#')"
 
 # ── 3. use it ───────────────────────────────────────────────────────────────
@@ -137,7 +142,7 @@ ok "the customer role is not a superuser (D-080)"
 
 if [ "$KEEP" -eq 1 ]; then
   say "keeping $REF"
-  info "psql \"\$(curl -s $API/v1/projects/$REF -H 'authorization: Bearer $TOKEN' | jq -r .database.connection_strings.direct)\""
+  info "psql \"\$(curl -s $API/v1/projects/$REF?reveal=true -H 'authorization: Bearer $TOKEN' | jq -r .database.connection_strings.direct)\""
   info "delete it with: curl -X DELETE $API/v1/projects/$REF -H 'authorization: Bearer $TOKEN'"
   exit 0
 fi
