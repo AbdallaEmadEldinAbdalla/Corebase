@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-08-31 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2: P2a–P2b done**
+**Last updated:** 2026-08-31 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2: P2a–P2c done**
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -61,6 +61,10 @@ Every project now also gets a **connection pooler** — PgBouncer in transaction
 on its own port — so `DATABASE_URL` is a real string an application can point at,
 and twelve concurrent clients share one Postgres backend. The pooled port resolves
 credentials for exactly one role and cannot reach any internal one.
+
+And projects **pause and resume**: an idle one gives its RAM back and keeps its
+disk, its port and its credentials, coming back in **546 ms at the median** with
+every row intact — measured across 50 consecutive cycles.
 
 Still nothing between a customer and their database above SQL: no data API
 (PostgREST), no end-user auth service, no storage, no realtime.
@@ -246,7 +250,7 @@ boot. Don't use them.
 
 ## 4. What is built, in detail
 
-Test counts are from `pnpm test` and are all currently green: **400 tests**, of
+Test counts are from `pnpm test` and are all currently green: **409 tests**, of
 which **216** need no infrastructure (`pnpm test:unit`).
 
 Every task below has a command that proves it; they are listed with the task.
@@ -1019,6 +1023,74 @@ allocated-but-unpublished port is a dead `DATABASE_URL` that looks like a broken
 pooler), `seed-images` loads both images and names the build command if either is
 missing, and the compose project is now `corebase` rather than `corebase-staging`.
 
+### P2c — pause and resume · done · 9 tests · [M-007](docs/14-roadmap/05-measurements.md)
+
+**Exit criterion 2, met.** A database per free project is only affordable because
+idle projects release their RAM (D-008), and this is the mechanism.
+
+Pause shuts Postgres down *cleanly* — `CHECKPOINT`, then a graceful stop — rather
+than killing the container, so the volume has no WAL to replay. That is most of why
+resume is sub-second, and it is asserted rather than assumed: a test greps the
+resumed instance's log for `redo starts at` and fails if recovery ran. Containers
+are **removed**, not merely stopped, which is where the overhead actually is; the
+volume, the network and the placement row stay, because that row is what lets resume
+hand back the *same* connection string (**D-239**). A customer whose URL changed
+after an idle week has lost data in the only sense they care about.
+
+Re-booking the RAM is deliberately the **first** step of resume: it is the step that
+can legitimately fail, and a node that filled up while a project slept must refuse
+before containers start, not after. Until backups exist it names the node and stops
+rather than silently placing the project elsewhere.
+
+**Measured** ([M-007](docs/14-roadmap/05-measurements.md)), twenty cycles through
+the real API and worker: **pause p50 746 ms, resume p50 546 ms / p95 1199 ms** —
+9× and 12× inside the p50 < 5 s / p95 < 15 s target. And **50 consecutive cycles**
+with the rows, the port and the credentials all intact.
+
+**A latent accounting bug fell out of it** (**D-237**). `releaseNode` credited the
+node with the *plan's* RAM whenever a placement row was deleted. Purging an
+already-paused project — booking zero — would have returned 350 MB that was never
+reserved, leaving the node permanently under-counted and accepting work it cannot
+hold. Under-counting is the dangerous direction: over-counting wastes a node,
+under-counting overloads one. The booking now lives on the row.
+
+**The idle scan took three attempts, and each wrong version is worth knowing**
+(**D-236**):
+
+1. Counting `developer` backends alone reports a busy project for four minutes after
+   the last client leaves, because PgBouncer parks server connections *as the
+   customer's role* for `server_idle_timeout`. A project that never looks idle never
+   pauses, and the free tier stops paying for itself.
+2. Asking the pooler how many clients it has fixed that and broke the opposite case:
+   subtracting its server count cancels a real direct connection against a parked
+   one, so a project with one live `psql` session read as idle and would have been
+   paused under its user.
+3. The pooler's backends are now identified by its **address** on the project
+   network rather than counted. Exact in both directions — and the console's own
+   pool is excluded, because otherwise the scan counts itself as a customer.
+
+Both signals are required and a project that cannot be asked is left running:
+"cannot conclude" is not "idle", and pausing on a failed probe would pause healthy
+projects during a blip. **The honest gap:** the doc's *first* signal — no data-plane
+traffic — needs a gateway that does not exist. Today the second signal is sufficient
+*because* there is no data plane, so a client connection is the only way to use a
+project at all. That stops being true the moment Phase 5 lands PostgREST, and the
+failure would be silent.
+
+`POST /v1/projects/:ref/pause` and `/resume` are a **member's** business — the
+platform API lists their mutations as "create/pause/resume" — which is why
+`project.lifecycle` has been separate from `project.delete` since P1d. They return
+409 with the current state for a project in the wrong one, not 404: a project that
+is already paused exists, and saying otherwise sends the caller hunting a bug that
+is not there.
+
+**And an empty JSON body is no longer an error anywhere** (**D-238**). Fastify
+rejected it with "Body cannot be empty when content-type is set to
+'application/json'" — a framework 400 blaming the client for our contract, landing
+on exactly the endpoints that take no body. Every HTTP client sets a JSON
+content-type by default. This supersedes the half of D-198 that made the best of the
+rejection; malformed JSON still keeps its 400, which was D-198's actual point.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -1058,10 +1130,10 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-Fifty-two decisions came out of running the thing rather than planning it —
-D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-235 from Phase 2.
+Fifty-six decisions came out of running the thing rather than planning it —
+D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-239 from Phase 2.
 Full text in the [decision log](docs/00-foundation/05-decision-log.md); the log holds
-D-001…D-235 and is binding when two documents disagree.
+D-001…D-239 and is binding when two documents disagree.
 
 | ID | What changed | Why it surfaced |
 |---|---|---|
@@ -1117,6 +1189,10 @@ D-001…D-235 and is binding when two documents disagree.
 | D-233 | The pooler image is ours, every `pgbouncer.ini` rule baked in, only values from the environment; PgBouncer ≥ 1.21 | The configuration is the security boundary here, and ≥1.21 is where prepared-statement tracking arrived — without it pooling breaks most ORMs |
 | D-234 | `mark_ready` requires a running pooler; the delete saga stops the pooler before the database | A ready project whose `DATABASE_URL` does not connect looks like a bug in the customer's code |
 | D-235 | Project containers carry a role label and reconciliation keys on it; a dead pooler is its own drift class | Keying by ref alone made the two containers overwrite each other, so a stopped database read as healthy while its pooler was up |
+| D-236 | Idle detection is arithmetic across the pooler and Postgres, and a project that cannot be asked is left running | The pooler parks server connections as the customer's role, so counting backends alone means nothing is ever idle; subtracting its count pauses a project with one live session |
+| D-237 | A project's RAM booking lives on its placement row; release credits what the row says, never what the plan says | Purging an already-paused project would have credited RAM that was never reserved, leaving the node under-counted and accepting work it cannot hold |
+| D-238 | An empty body under a JSON content-type parses as `{}` rather than being rejected (supersedes half of D-198) | It was a framework 400 blaming the client for our contract, on exactly the endpoints that take no body |
+| D-239 | Pause removes containers and keeps volume, network and placement row; resume reuses the provisioning steps | The row is what makes the connection string survive an idle week; a bespoke resume path would be a second, less-tested way to start a project |
 
 ## 7. Measurements
 
@@ -1159,12 +1235,12 @@ enforces it (P1b), and CI runs both suites on every PR (P1f). The dashboard shel
 (P1g) covers login, signup, the org switcher, the projects grid, the create-project
 flow and a project overview.
 
-**Phase 2 is at P2b of seven planned steps.** Done: the per-project network, and
-PgBouncer with the `DATABASE_URL`/`DIRECT_DATABASE_URL` contract through the API and
-the dashboard. Remaining: pause/resume with idle detection (exit criterion 2),
-credential rotation (criterion 4), disk quotas and the disk-full ladder
-(criterion 3), bin-packing placement, and the density measurement (criterion 1) —
-which D-209 already constrains, since this hardware cannot satisfy its conditions.
+**Phase 2 is at P2c of seven planned steps**, and **exit criterion 2 is met**. Done:
+the per-project network, PgBouncer with the two-URL contract, and pause/resume with
+idle detection. Remaining: credential rotation (criterion 4), disk quotas and the
+disk-full ladder (criterion 3), bin-packing placement, and the density measurement
+(criterion 1) — which D-209 already constrains, since this hardware cannot satisfy
+its conditions.
 
 The measurement that would move the cost model most is the one Phase 1/2 makes
 possible:
@@ -1204,6 +1280,19 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   per-role `CONNECTION LIMIT` on `developer`. A customer can still point an
   application fleet at `DIRECT_DATABASE_URL` and exhaust the direct headroom; it
   fails visibly, which is the intended behaviour, but nothing caps it.
+- **Idle detection is missing its first signal.** The doc requires both "no
+  data-plane traffic" and "no database connections"; only the second exists, because
+  the first needs a gateway. It is sufficient today — a client connection is the only
+  way to use a project — and becomes wrong, silently, the moment PostgREST lands
+  (D-236). The scan takes a second input already.
+- No warning email at day 5 of the idle window, and no dashboard banner. The pause
+  will arrive unannounced until Phase 4's sender exists.
+- Resume onto a node that filled up while the project slept **fails** with the node
+  named, rather than placing the project elsewhere and restoring — that path needs
+  backups (Phase 3).
+- The dashboard has no pause/resume affordance yet and D-131's auto-resume-on-open
+  is unimplemented, so a paused project renders as a badge. The endpoints now exist,
+  which is what was missing.
 - The pooler's pool sizing is one profile for every plan. The doc's "larger plans
   scale `default_pool_size` and `max_connections` together" is a value change the
   entrypoint is structured for and nothing sets yet.
@@ -1261,7 +1350,7 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
 | How does auth work? | `services/api/src/kernel/principal.ts`, then `sessions.ts` and `modules/auth/` |
 | Why is every mutation audited? | `packages/audit/src/index.ts`, and the guard in `services/api/src/audit.p1.e2e.test.ts` |
 | What does CI do? | [.github/workflows/ci.yml](.github/workflows/ci.yml) — two lanes; `nightly.yml` for the drills |
-| What did we measure? | [docs/14-roadmap/05-measurements.md](docs/14-roadmap/05-measurements.md) |
+| What did we measure? | [docs/14-roadmap/05-measurements.md](docs/14-roadmap/05-measurements.md) — M-001…M-007 |
 | What do those numbers *not* prove? | [the M0 retro §4](docs/14-roadmap/06-milestone-0-retro.md) — read before quoting any of them |
 | How does provisioning actually work? | `services/worker/src/jobs/sagas.ts` — read top to bottom |
 | How does a project database get built? | `infra/docker/postgres/` — Dockerfile plus four init scripts |

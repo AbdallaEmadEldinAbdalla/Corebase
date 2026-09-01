@@ -1,0 +1,28 @@
+{
+  "measurement": "M-007",
+  "what": "pause and resume latency through the HTTP API and the real worker",
+  "cycles": 20,
+  "pause_ms": {
+    "p50": 746,
+    "p95": 790,
+    "max": 790
+  },
+  "resume_ms": {
+    "p50": 546,
+    "p95": 1199,
+    "max": 1199
+  },
+  "target": {
+    "resume_p50_ms": 5000,
+    "resume_p95_ms": 15000
+  },
+  "provisioned_ms": 2897,
+  "conditions": {
+    "arch": "arm64",
+    "platform": "darwin",
+    "substrate": "Docker-in-Docker on a developer laptop",
+    "co_resident_projects": 1,
+    "client_load": "none beyond the harness",
+    "stack": "postgres + pgbouncer (no PostgREST — Phase 5)"
+  }
+}

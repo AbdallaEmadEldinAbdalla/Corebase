@@ -223,6 +223,31 @@ The step histogram is already the largest family at 80 series, from 8 steps × 1
 
 **Next measurement to take:** head series and Prometheus RSS with cAdvisor plus one multi-target postgres_exporter attached, at 50 and 500 projects — the point where D-146's per-project budget is actually tested.
 
+## M-007 — How long pause and resume actually take
+
+**Date:** 2026-09-01 · **Task:** Phase 2, P2c (pause/resume) · **Answers:** the latency half of Phase 2's exit criterion 2
+
+**Environment:** the staging substitute — Docker-in-Docker on an arm64 laptop, one project on the node, no client load beyond the harness. The project's stack is Postgres + PgBouncer; PostgREST is Phase 5 and absent. Timed through the real HTTP API and the real worker, from `POST /v1/projects/:ref/resume` returning 202 to the project reporting `ready`, so the queue hop is inside the number.
+
+**Twenty consecutive pause/resume cycles on one project:**
+
+| | p50 | p95 | max |
+|---|---|---|---|
+| pause | 746 ms | 790 ms | 790 ms |
+| **resume** | **546 ms** | **1199 ms** | 1199 ms |
+
+Target: resume p50 < 5 s, p95 < 15 s ([provisioning §5](../03-database-platform/01-postgres-provisioning.md)). Measured **9× inside** the p50 target and **12× inside** p95. First provision of the same project, for scale: 2.9 s.
+
+**Reading it honestly.** The reason resume is faster than the first provision is that it skips everything expensive: no volume creation, no role setup, no credential generation, no key minting — it starts two containers against a volume that is already correct. And the reason it is faster than the *doc's* estimate is the clean shutdown: the pause runs `CHECKPOINT` and stops Postgres gracefully, so the resumed database has no WAL to replay. That is asserted separately rather than inferred — a test greps the resumed instance's log for `redo starts at` and fails if recovery ran.
+
+The pause being *slower* than the resume is not an anomaly worth optimising. It contains a checkpoint and a graceful stop, which is work deliberately moved out of the resume path where a customer is waiting.
+
+**What it does not license.** Nothing about resume under contention, which is the case that will matter. One project resuming on an idle node is the easy end: the interesting numbers are fifty projects resuming at once after a node reboot, a resume that has to wait behind other jobs in the queue, and a resume onto a node that filled up while the project slept — which today does not resume at all but stops with the node named, because placing it elsewhere needs backups (Phase 3). It also says nothing about the *idle detection* half of the criterion, which is asserted by tests rather than timed, and nothing about a cold page cache: twenty cycles on one project keep the volume's pages warm in the host, and a project paused for a week will not be.
+
+Per D-209 this may not be used to re-base any density or RAM planning number: one project, ARM, idle, no data plane.
+
+**Next measurement to take:** resume latency with 20 projects resuming concurrently, and after a real interval rather than seconds — the two conditions that separate this number from the one customers will see.
+
 ## How to add an entry
 
 1. Number sequentially (`M-002`, …). Never renumber.
