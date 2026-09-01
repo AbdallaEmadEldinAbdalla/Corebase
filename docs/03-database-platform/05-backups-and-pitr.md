@@ -8,7 +8,7 @@ Implements D-019: pgBackRest per project with continuous WAL archiving to object
 
 ### 1. Repo-per-project in object storage
 
-One pgBackRest **stanza and repo path per project**, in R2 (D-017, D-023). Repo-per-project is what makes per-project retention, per-project encryption keys, per-project deletion (D-038 requires provable destruction), and per-project restore all trivial — a shared repo would entangle every one of those.
+One pgBackRest **repo path per project**, in R2 (D-017, D-023). The stanza inside it is named `main` for every project, not `<project_id>` as the example below shows: `archive_command` lives in the fleet-wide `postgresql.base.conf`, and a per-project stanza name would force a per-project Postgres config — the drift D-186 removed (**D-263**). Isolation is the path and the cipher-pass, both of which *are* per project. Repo-per-project is what makes per-project retention, per-project encryption keys, per-project deletion (D-038 requires provable destruction), and per-project restore all trivial — a shared repo would entangle every one of those.
 
 ```ini
 # /etc/pgbackrest/pgbackrest.conf  (rendered per project on its node)
@@ -40,7 +40,7 @@ archive_timeout = 300      # Free — forces a WAL segment switch at least every
                            # 60 on Pro and above (bounds RPO at ~1 min)
 ```
 
-`archive-push` runs asynchronously with a small spool (`archive-async=y`, spool on the project volume — inside the disk quota, so a runaway spool is the tenant's ceiling, not the node's). **Archiving failure is a first-class alert**: WAL-archive lag alerts at **>5 min (warn)** and **>15 min (page)** per the [observability](../11-infrastructure/03-observability.md) alert catalog; the `pgbackrest check` job that runs every 15 min per project via the node agent feeds that same alert rather than owning a separate threshold — a project whose WAL isn't landing in R2 is a project whose PITR is silently rotting.
+`archive-push` runs asynchronously with a small spool (`archive-async=y`, spool on the project volume — inside the disk quota, so a runaway spool is the tenant's ceiling, not the node's). That async worker holds pgBackRest's archive lock while it batches, so **every other pgBackRest command must retry through lock contention** rather than fail (**D-267**): the busier a project is, the likelier its backup commands lose that race. **Archiving failure is a first-class alert**: WAL-archive lag alerts at **>5 min (warn)** and **>15 min (page)** per the [observability](../11-infrastructure/03-observability.md) alert catalog; the `pgbackrest check` job that runs every 15 min per project via the node agent feeds that same alert rather than owning a separate threshold — a project whose WAL isn't landing in R2 is a project whose PITR is silently rotting.
 
 ### 2. Backup schedule per plan
 
@@ -93,7 +93,7 @@ Honesty notes we publish verbatim: WAL not yet archived at the moment of a node 
 
 ### 6. Backup encryption
 
-- pgBackRest repo encryption: `aes-256-cbc` with a **per-project cipher-pass**, generated at provision, stored envelope-encrypted in the control plane (D-035, [credentials §3](03-credentials-and-secrets.md)), rendered into the node-side config root-only. Compromise of the R2 bucket alone yields ciphertext.
+- pgBackRest repo encryption: `aes-256-cbc` with a **per-project cipher-pass**, generated at provision and stored as its own secret under envelope encryption (D-035, **D-264** — never derived, because rotating it means re-creating the repo), rendered into the container's own `/etc/pgbackrest/pgbackrest.conf` at 0600 owned by `postgres`. "Root-only" is a node-side statement: under container-per-project the process that must read it *is* the server's own user, and a file only root can read is a file archiving cannot use. It is written with `docker exec`, base64-encoded, rather than passed as an environment variable — `docker inspect` shows a container's environment to anyone who can reach the Engine API (**D-265**). Compromise of the R2 bucket alone yields ciphertext.
 - R2 server-side encryption on top (defense in depth), bucket-scoped API token per region, write-mostly: nodes hold tokens allowing put/get/list on their projects' prefixes; **delete rights live only with the control plane** — a compromised node can read its own tenants' encrypted repos but cannot destroy history.
 - Cipher-pass rotation is repo re-creation ([credentials §4d](03-credentials-and-secrets.md)) — compromise-only.
 

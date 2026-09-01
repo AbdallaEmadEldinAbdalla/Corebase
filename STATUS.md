@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-09-01 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g)
+**Last updated:** 2026-09-01 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 started** (P3a done)
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -82,6 +82,7 @@ pnpm install
 docker build -t corebase/postgres:17.5 infra/docker/postgres
 docker build -t corebase/pgbouncer:1.23 infra/docker/pgbouncer
 ./scripts/staging.sh seed-images   # push both project images onto the data node
+./scripts/staging.sh backup-store  # bucket + TLS for the object store, and prove egress
 ./scripts/staging.sh verify        # 10 checks; all must pass
 ```
 
@@ -250,8 +251,8 @@ boot. Don't use them.
 
 ## 4. What is built, in detail
 
-Test counts are from `pnpm test` and are all currently green: **487 tests**, of
-which **270** need no infrastructure (`pnpm test:unit`).
+Test counts are from `pnpm test` and are all currently green: **512 tests**, of
+which **287** need no infrastructure (`pnpm test:unit`).
 
 Every task below has a command that proves it; they are listed with the task.
 
@@ -270,8 +271,12 @@ mTLS, no per-node agent) is the real one. What this does *not* prove: cloud-init
 real network partitions, NVMe behaviour, XFS project quotas, Hetzner failure modes
 (OQ-165).
 
-`scripts/staging.sh` is the entry point: `up | kek | seed-images | verify |
-idempotent | down | nuke | status | all`. `verify` runs ten checks including
+`scripts/staging.sh` is the entry point: `up | kek | app-role | backup-store |
+seed-images | verify | idempotent | down | nuke | status | monitoring | all`.
+`backup-store` (P3a) creates the backup bucket, generates the object store's
+self-signed TLS material, and dials the store from a container on a fresh private
+network inside the data node — the same NAT path a real node takes to R2, checked
+rather than assumed. `verify` runs ten checks including
 "plaintext :2375 refused", "TLS required", "project port range reachable" and
 "node can run a project container".
 
@@ -1391,6 +1396,90 @@ our client and the `docker` CLI alike, until the engine is restarted. Bounding t
 worker's connection pool (D-230) made it far rarer but did not remove it. CI runs
 Linux with a native dockerd and does not have this failure mode.
 
+## 4d. Phase 3 — backups
+
+Phase 3 was moved ahead of everything else because durability is #2 in the
+priority stack (D-002), and weeks of feature work against customer-shaped
+databases with no restore path is how "we lost a beta user's data" happens.
+
+The operating rule for the whole phase is the backups doc's first line: **a backup
+that has not been restore-tested is treated as not existing.** Nothing in P3a
+claims a project is protected. It builds the repo that P3d's PITR restore and
+P3e's verification loop will either prove or condemn.
+
+### P3a — the backup substrate · done · 25 tests
+
+Every project now gets a pgBackRest repo in real object storage, encrypted under
+its own cipher-pass, with WAL archiving proven to reach it before provisioning
+completes.
+
+- **Object storage is MinIO in the staging stack**, standing in for R2 (D-017)
+  and never a paid dependency during development. It speaks the same S3 API
+  pgBackRest talks, which is the entire interface.
+- **Reachability works the way production works.** A project container lives on
+  its own private per-project network (D-070/D-228) and reaches the store through
+  the node's NAT egress — exactly as a real node reaches R2 over the internet.
+  Nothing is attached to a shared network, so no project gains a route to another;
+  verified by dialling the store from a container on a fresh private network
+  inside the node, and `./scripts/staging.sh backup-store` re-checks it every run
+  rather than trusting it.
+- **One stanza name, `main`, fleet-wide** (**D-263**) — isolation is `repo1-path`
+  plus the cipher-pass, both per project. A per-project stanza name would need a
+  per-project `postgresql.conf`, reintroducing the drift D-186 removed.
+- **The cipher-pass is its own stored secret** (**D-264**), envelope-encrypted,
+  and written into the container with `docker exec` rather than an environment
+  variable (**D-265**) — `docker inspect` shows a container's environment to
+  anyone who can reach the Engine API, which is the whole control plane.
+- Two saga steps, `configure_backups` then `verify_archiving`, split for the same
+  reason `start_pooler` and `wait_pooler_healthy` are: "we wrote a config" and
+  "the thing works" are different claims. The second runs `pgbackrest check`,
+  which forces a WAL switch and confirms the segment lands — so it tests config,
+  credentials, cipher-pass and egress in the one place where failure is still
+  cheap. Cost to provisioning: ~1.1 s.
+- `CB_REQUIRE_BACKUPS` fails provisioning closed for a project that cannot be
+  backed up. **Off** until Phase 3 finishes, because a fleet with no repo
+  configured must still be able to provision; the log line saying a project has
+  no PITR is what stops that being invisible in the meantime.
+
+**Four findings, three of them in what I wrote and one in the image.**
+
+`initdb` was **not running with `--data-checksums`** (**D-269**), which
+provisioning §3 states and backups §7's verification requires. Its absence is
+silent in both directions: page corruption goes undetected, and a verification
+pass reports a healthy restore of a rotting cluster. A backup system whose checks
+cannot fail is worse than none, because it manufactures confidence. Postgres 18
+turns checksums on by default and 17 does not, which is how it survived review.
+
+**pgBackRest has no plain-HTTP mode for S3** — `repo1-storage-verify-tls=n`
+relaxes verification, not the protocol — so the staging store had to serve TLS
+(**D-266**). That is the substitute being faithful; R2 is TLS-only too.
+
+The first attempt hung for **60 seconds and exited 49**, which reads as an
+unreachable network. It was `host:9000` in `repo1-s3-endpoint` *and* a separate
+`repo1-storage-port`, so pgBackRest dialled the wrong port. Fixed, and pinned by a
+test asserting the endpoint carries no port.
+
+The last one is the interesting one. `stanza-create` began failing on saga
+**replay** with exit 50 — and the error I printed was 600 characters of
+configuration, because pgBackRest opens every command by echoing its full option
+list and I had truncated from the front (**D-268**). Reporting from the `ERROR`
+lines instead revealed the actual cause: `archive-async=y` runs a long-lived
+`archive-push` worker that holds the archive lock while it batches, and
+`stanza-create` was losing the race. Every pgBackRest command now retries through
+lock contention (**D-267**) — non-lock failures are not retried, because a real
+error hidden behind a delay is worse than a fast one. The correlation is what
+makes this matter: the busier a project is, the likelier its backup commands lose
+that race, so the projects whose backups matter most were the ones that would
+fail.
+
+**Verification:** `backup.e2e.test.ts` 8/8 against the live node and store — a
+stanza created, archiving confirmed end to end, a full backup of a 1000-row table
+landing under the project's own prefix, two projects with separate paths and
+separate passes (each blind to the other's history), replay proven idempotent, and
+the cipher-pass absent from both the container environment and the ciphertext at
+rest. Plus `backup.test.ts` 17/17 on the config rendering and the retry logic.
+
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -1430,10 +1519,10 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-Seventy-nine decisions came out of running the thing rather than planning it —
-D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-262 from Phase 2.
+Eighty-six decisions came out of running the thing rather than planning it —
+D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-262 from Phase 2, and D-263…D-269 from Phase 3.
 Full text in the [decision log](docs/00-foundation/05-decision-log.md); the log holds
-D-001…D-262 and is binding when two documents disagree.
+D-001…D-269 and is binding when two documents disagree.
 
 | ID | What changed | Why it surfaced |
 |---|---|---|
@@ -1516,6 +1605,13 @@ D-001…D-262 and is binding when two documents disagree.
 | D-260 | Density measured on `anon`, never on cgroup `usage` | `usage` counts page cache, which a node under pressure reclaims; anon also keeps M-008 comparable with M-001 |
 | D-261 | The per-org project ceiling is an abuse control, not a capacity one, and a density run raises it | Left in place it measures itself: 20 created, 80 refused, the node nowhere near its limits |
 | D-262 | The staging node publishes the same port range on both sides of the mapping | A pinned container side broke the widening, and an unpublished port fails nine steps later as a pooler `ECONNREFUSED` rather than at allocation |
+| D-263 | One stanza name (`main`) fleet-wide; isolation is `repo1-path` + cipher-pass | A per-project stanza name needs a per-project `postgresql.conf` — the drift D-186 removed |
+| D-264 | The repo cipher-pass is a stored secret, never derived | Rotating it means re-creating the repo; a silently-changed pass leaves history nobody can decrypt, found at restore time |
+| D-265 | The pgbackrest config is written by `docker exec`, base64, not an env var | `docker inspect` shows a container's environment to the whole control plane |
+| D-266 | The staging object store serves TLS with a self-signed cert; clients skip verification | pgBackRest has no plain-HTTP mode for S3, and R2 is TLS-only — serving TLS is faithfulness, not a workaround |
+| D-267 | Every pgBackRest command retries through lock contention; real failures do not retry | The async archiver holds the lock, so busy projects — the ones whose backups matter most — were the ones failing |
+| D-268 | pgBackRest failures are reported from the `ERROR` lines or the tail, never the front | Its option banner is the first several hundred characters, so truncating from the front hid the cause completely |
+| D-269 | `initdb` runs with `--data-checksums` | Required by restore verification and simply absent; without it a verification pass reports a healthy restore of a rotting cluster |
 
 ## 7. Measurements
 
@@ -1635,6 +1731,16 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   node cordon — is implemented and tested.
 - No email or dashboard banner at the 80% and 90% rungs. The ladder records the rung
   and audits nothing yet; notification is Phase 4's sender.
+- **Backups exist but nothing has restored one.** P3a builds the repo and proves
+  WAL reaches it; the operating rule of the phase is that an unrestored backup does
+  not exist, so no project should be described as protected yet. PITR is P3d,
+  verification is P3e, and until they land the honest statement is that Corebase
+  has an archive, not a recovery path.
+- Scheduled base backups, retention enforcement, the WAL-lag alert, and the
+  final-backup-on-delete interlock (D-077) are all still unbuilt — `final_backup`
+  in the deletion saga remains the Milestone 0 gate that refuses only when told to.
+- `CB_REQUIRE_BACKUPS` is **off**, so a fleet with no repo configured still
+  provisions projects that have no PITR. It flips on when Phase 3 completes.
 - **The density numbers cannot move the cost model, and the model is therefore
   still unvalidated.** M-008 satisfies two of D-209's four conditions (100
   co-resident projects, client load) and cannot satisfy the other two here. The

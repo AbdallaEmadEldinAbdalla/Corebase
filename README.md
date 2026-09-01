@@ -34,6 +34,10 @@ It is built on the design system that already existed in `design-exports/` rathe
 
 **How the UI stays consistent.** The first version of this shell was right in every colour and wrong in every mechanic, so the fix was not nicer screens but a written interaction contract: [docs/09-dashboard/05-ux-standards.md](docs/09-dashboard/05-ux-standards.md), ending in a 20-question gate that **runs on every UI change** (D-224) as the `ux-review` role in [.claude/skills/](.claude/skills/ux-review/SKILL.md). Its first run found two real failures in the code written to satisfy it — the palette was missing two actions a row menu already had, and the project list printed "Showing 20 of 20" while hiding a second page.
 
+**Every project has an encrypted backup repo in object storage — and nothing has been restored from one yet.** Phase 3 leads with the backups doc's own rule: a backup that has not been restore-tested is treated as not existing. So what is true today is narrower than "backups work": each project gets its own pgBackRest repo under its own cipher-pass, and provisioning does not finish until `pgbackrest check` has forced a WAL switch and confirmed the segment landed. Point-in-time restore and the verification loop are the next two steps, and until they exist Corebase has an archive, not a recovery path.
+
+Building it turned up that `initdb` was never given `--data-checksums`, which the restore-verification checks require. That absence is silent twice over: page corruption goes undetected, and a verification pass then reports a healthy restore of a rotting cluster — a backup system whose checks cannot fail is worse than none.
+
 **One hundred projects run on one node.** 100/100 provisioned in 99 seconds, 200 containers, 200 client connections attached, 1.4 million statements — and each project's actual working set is 13 MiB under load against the 350 MB placement books for it. The interesting number is the one nobody was watching: RAM was over-booked 27-fold while **CPU sat at 82% of the node**. The cost model books RAM and does not model cores at all. That does not re-base anything — the density model may only move on a measurement with the full three-container stack on x86 hardware, and this is neither, which is a rule the project wrote for itself precisely because the data came back *favourable*.
 
 **Projects are packed onto nodes by how full those nodes actually are.** Placement used to order candidate nodes by absolute megabytes reserved, which sorts a small nearly-full node ahead of a large nearly-empty one — so as soon as a fleet has nodes of different sizes, every new project goes to the fullest one. It also considered a single candidate, so a booking that did not fit that node was refused while the region had room: measured on the old code, 20 concurrent provisions against two nodes with 18 free slots placed 13. Nodes are now ranked by fill ratio across both RAM and disk, and a provision that loses a race for the last slot tries the next node instead of failing.
@@ -63,8 +67,13 @@ pnpm install
 ./scripts/staging.sh up && ./scripts/migrate-staging.sh && ./scripts/staging.sh kek
 docker build -t corebase/postgres:17.5 infra/docker/postgres
 docker build -t corebase/pgbouncer:1.23 infra/docker/pgbouncer
-./scripts/staging.sh seed-images && ./scripts/staging.sh verify
+./scripts/staging.sh seed-images && ./scripts/staging.sh backup-store && ./scripts/staging.sh verify
 ```
+
+`backup-store` creates the bucket, generates the object store's TLS material, and
+proves the store is reachable from inside a project's own private network — the
+same NAT path a real node takes to R2. Skip it and projects still provision, but
+they provision without a backup repo and say so in the log.
 
 Then start the services and watch the whole thing work in about five seconds:
 
@@ -86,7 +95,7 @@ There is no seeded password anywhere, so create an account on `/signup`; a new a
 
 The demo script creates a project, waits for it, connects to the database it made with the credentials the API handed back, runs real SQL, and deletes it — using only `curl` and `psql`, which is exactly what a customer has.
 
-The full suite is **487 tests**, integration included; they need the staging stack above and **fail rather than skip** without it:
+The full suite is **512 tests**, integration included; they need the staging stack above and **fail rather than skip** without it:
 
 ```bash
 pnpm test
