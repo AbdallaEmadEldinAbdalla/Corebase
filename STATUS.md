@@ -250,8 +250,8 @@ boot. Don't use them.
 
 ## 4. What is built, in detail
 
-Test counts are from `pnpm test` and are all currently green: **445 tests**, of
-which **~220** need no infrastructure (`pnpm test:unit`).
+Test counts are from `pnpm test` and are all currently green: **437 tests**, of
+which **240** need no infrastructure (`pnpm test:unit`).
 
 Every task below has a command that proves it; they are listed with the task.
 
