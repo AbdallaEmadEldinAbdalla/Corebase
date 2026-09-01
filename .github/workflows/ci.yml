@@ -92,6 +92,18 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: build the project pooler image
+        # A project is two containers since P2b, and `seed-images` refuses to run
+        # with only one of them built — a node missing the pooler image fails deep
+        # inside provisioning rather than at create time.
+        uses: docker/build-push-action@v7
+        with:
+          context: infra/docker/pgbouncer
+          tags: corebase/pgbouncer:1.23
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: bring up the staging substitute
         run: ./scripts/staging.sh up
 

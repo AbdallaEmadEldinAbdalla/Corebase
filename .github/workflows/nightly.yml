@@ -36,6 +36,13 @@ jobs:
           load: true
           cache-from: type=gha
 
+      - uses: docker/build-push-action@v7
+        with:
+          context: infra/docker/pgbouncer
+          tags: corebase/pgbouncer:1.23
+          load: true
+          cache-from: type=gha
+
       - name: bring up the staging substitute
         run: |
           ./scripts/staging.sh up
