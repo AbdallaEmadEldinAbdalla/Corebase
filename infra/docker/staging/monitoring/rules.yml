@@ -78,9 +78,24 @@ groups:
 
       # D-019: untested or absent backups are fiction. The alert catalog puts
       # last-success age at >26h — a nightly full plus two hours of slack.
+      # A nightly full plus two hours of slack. The series is the last successful
+      # *base backup*, not the last archived WAL: a project whose full has been
+      # failing for a week can have perfectly healthy archiving, and an alert
+      # pointed at the wrong one of those stays green through exactly the failure
+      # it exists to catch (D-277).
       - alert: BackupLastSuccessStale
         expr: time() - corebase_backup_last_success_ts > 93600
         for: 5m
         labels: { severity: page }
         annotations:
-          summary: 'Nothing has been archived for {{ $labels.project_ref }} in over 26 hours'
+          summary: 'No successful base backup for {{ $labels.project_ref }} in over 26 hours'
+
+      # A base backup that was attempted and failed. Distinct from staleness,
+      # which is silence: this is the repo or the database saying no, and the run
+      # row carries the reason.
+      - alert: BackupRunFailed
+        expr: increase(corebase_backup_runs_total{outcome="failed"}[1h]) > 0
+        for: 1m
+        labels: { severity: page }
+        annotations:
+          summary: 'A {{ $labels.type }} backup failed in the last hour'

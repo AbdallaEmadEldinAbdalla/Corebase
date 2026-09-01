@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-09-01 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 started** (P3a–P3b done)
+**Last updated:** 2026-09-01 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 started** (P3a–P3c done)
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -251,8 +251,8 @@ boot. Don't use them.
 
 ## 4. What is built, in detail
 
-Test counts are from `pnpm test` and are all currently green: **524 tests**, of
-which **293** need no infrastructure (`pnpm test:unit`).
+Test counts are from `pnpm test` and are all currently green: **550 tests**, of
+which **309** need no infrastructure (`pnpm test:unit`).
 
 Every task below has a command that proves it; they are listed with the task.
 
@@ -1553,6 +1553,80 @@ rises and never falls is an alert that cannot clear, so the repair half is as mu
 of the criterion as the break.
 
 
+### P3c — backups that happen on their own · done · 23 tests
+
+Base backups are now scheduled, taken, recorded, and expired. Free takes a nightly
+full; Pro and Team take a weekly full with nightly incrementals. Fulls-only on Free
+is not laziness — at a ≤500 MB cap a compressed full is trivial, and a one-link
+chain has no middle link that can be the broken thing.
+
+Scheduling is a control-plane job per project (D-018), never per-node cron, which
+is what makes three things possible at once: jittering across the fleet, knowing
+each project's plan, and **skipping paused projects** — which must be skipped,
+since a paused project has no running Postgres and its final backup is already
+pinned against expiry (D-077).
+
+**Three findings, and the first two are mine from earlier steps.**
+
+**Retention was `count` where the doc says `time`** (**D-276**). The two coincide
+on Free, where nightly fulls make "7 fulls" and "7 days" identical — which is
+exactly why it was invisible, since every project in the fleet is Free. On Pro the
+fulls are *weekly*, so `count=35` keeps thirty-five weekly fulls: about eight
+months against a 30-day PITR promise, roughly eight times the storage the plan is
+priced on. Nobody would have noticed until the bill. Time also carries a guarantee
+count cannot — pgBackRest expires a full older than the window only while another
+at least that old remains, so a base always exists *before* the oldest restorable
+point, which is what the slack in Pro's 35-against-30 was always for.
+
+**`corebase_backup_last_success_ts` was wired to WAL archiving, not base backups**
+(**D-277**). P3b did that, and the metric name hides it completely. The alert on it
+is "last-success age > 26 h → page", and pointed at WAL it stays green for a project
+whose nightly full has not succeeded in a week — because the WAL was flowing
+perfectly the whole time. Two healthy-looking signals and one missing backup. WAL
+now has its own timestamp gauge, and `BackupRunFailed` was added beside it: silence
+and refusal are different failures.
+
+**A counter declared and never incremented.** `corebase_backup_runs_total` existed,
+the alert read it, and nothing ever moved it — so `BackupRunFailed` could not fire.
+Caught by asking what actually writes each series rather than by any test, which is
+worth remembering: a metric with no writer passes every test that asserts the
+alert's *expression*.
+
+**Why `backup_runs` is a table** (**D-278**): the repo knows what it holds and
+cannot know what was tried. A project whose nightly full has failed for six days is
+indistinguishable through `pgbackrest info` from one whose retention window starts
+six days ago, and failures leave no trace in a repo by definition. The row is
+opened *before* the backup runs, so a worker killed mid-backup leaves a visible
+`running` row rather than nothing — and that row stops blocking the project's
+schedule after six hours (**D-282**), because a crash must not freeze a project's
+backups until someone notices.
+
+Two details that are easy to get subtly wrong and were: the job's idempotency key
+carries the **calendar day**, not a timestamp (**D-279**) — a sweep every five
+minutes against a half-hour slot would otherwise enqueue one nightly backup a dozen
+times. And a project's slot is derived from its id rather than random (**D-280**);
+random re-rolls every sweep, giving a project many chances per night to be "in its
+slot", which is a lottery that fires at a different time each night rather than a
+schedule. A never-backed-up project ignores the window entirely (**D-281**): one
+created at midday would otherwise have no base backup for eighteen hours.
+
+**Verification:** `backup-runs.e2e.test.ts` 10/10 — a fresh project scheduled
+immediately, the same day scheduling nothing more, a paused project skipped, an
+in-flight backup not doubled, an abandoned run releasing its hold, a full taken
+whose run row agrees with the repo down to the label and WAL range, a *failed*
+backup recorded with its reason rather than vanishing, replay reusing the row, and
+an expired full actually removed. Plus 13 unit tests on the plan matrix and the
+jitter, and the alert file re-verified by `promtool test rules`.
+
+**One honest limit.** Time-based expiry over real calendar days cannot be exercised
+here, because pgBackRest decides from timestamps in the repo and faking those is
+repo surgery. The retention test proves the *mechanism* — that `expire` runs as
+part of `backup` and removes the older full rather than the newer — using a
+count-based override on the command line, while the production policy (`time`, with
+the per-plan day counts) is pinned by unit test. What is unverified is the calendar
+arithmetic, not the plumbing.
+
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -1592,10 +1666,10 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-Ninety-two decisions came out of running the thing rather than planning it —
-D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-262 from Phase 2, and D-263…D-275 from Phase 3.
+Ninety-nine decisions came out of running the thing rather than planning it —
+D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-262 from Phase 2, and D-263…D-282 from Phase 3.
 Full text in the [decision log](docs/00-foundation/05-decision-log.md); the log holds
-D-001…D-275 and is binding when two documents disagree.
+D-001…D-282 and is binding when two documents disagree.
 
 | ID | What changed | Why it surfaced |
 |---|---|---|
@@ -1691,6 +1765,13 @@ D-001…D-275 and is binding when two documents disagree.
 | D-273 | `pgbackrest check` runs on a 15-minute schedule, overridden by trouble | The interval is a cost control; a stale failing check keeps the pager ringing for 15 minutes after the fix |
 | D-274 | An unreachable project keeps its rung and is never recorded healthy | "Cannot measure" is not "measured as fine" — that reports a green fleet during the incident the scan exists to catch |
 | D-275 | Alert rules are tested with `promtool test rules`, not merely syntax-checked | The criterion says alerts *fire*; a file that parses proves nothing, and the healthy-idle no-alert case is the regression worth pinning |
+| D-276 | Retention is a time policy in days, not a count of fulls | `count` on Pro's weekly fulls keeps ~8 months against a 30-day promise; time also guarantees a base exists before the oldest restorable point |
+| D-277 | `corebase_backup_last_success_ts` means the last base backup; WAL has its own gauge | Pointed at WAL, the ">26h" alert stays green for a project whose nightly full has failed all week |
+| D-278 | `backup_runs` records attempts, not only the backups that exist | A repo cannot know what was tried, and failures leave no trace in one by definition |
+| D-279 | The backup job's idempotency key carries the calendar day | A five-minute sweep against a half-hour slot would enqueue one nightly backup a dozen times |
+| D-280 | A project's window slot is derived from its id, never random | Random re-rolls each sweep — a lottery firing at a different time nightly, not a schedule |
+| D-281 | A never-backed-up or badly overdue project is backed up outside the window | The window spreads load; it is not a reason to keep delaying a backup already late |
+| D-282 | A `running` backup row stops blocking the schedule after six hours | A crash must not freeze a project's backups until a human notices |
 
 ## 7. Measurements
 
@@ -1815,9 +1896,16 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   not exist, so no project should be described as protected yet. PITR is P3d,
   verification is P3e, and until they land the honest statement is that Corebase
   has an archive, not a recovery path.
-- Scheduled base backups, retention enforcement, and the final-backup-on-delete
-  interlock (D-077) are still unbuilt — `final_backup` in the deletion saga remains
-  the Milestone 0 gate that refuses only when told to.
+- **Time-based retention is not verified over real calendar days.** pgBackRest
+  decides expiry from timestamps in the repo, so proving a 7-day policy needs a
+  7-day-old backup or repo surgery. The mechanism is tested with a count-based
+  override and the production policy is pinned by unit test; the calendar
+  arithmetic is taken on pgBackRest's word.
+- The final-backup-on-delete interlock and the pause interlock (D-077) are still
+  unbuilt — `final_backup` in the deletion saga remains the Milestone 0 gate that
+  refuses only when told to. Pause does not yet take a final backup, so a paused
+  project's PITR window is frozen at whatever its last scheduled backup was rather
+  than at the pause instant.
 - The archive alerts are proven against synthetic series and a sabotaged project,
   but **nothing is wired to a receiver**: Prometheus would fire and there is no
   Slack or pager on the other end (OQ-146 owns the vendor choice). "Alerts fire" is

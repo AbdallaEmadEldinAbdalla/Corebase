@@ -87,7 +87,11 @@ tests:
               description: >-
                 The repo will not accept a backup. Until this clears, the project has no PITR regardless of what its lag says.
 
-  # Nothing archived in over 26 hours (D-019: absent backups are fiction).
+  # No successful *base backup* in over 26 hours (D-019: absent backups are
+  # fiction). The series is `corebase_backup_last_success_ts`, which means the last
+  # successful full — P3b briefly wired it to the last archived WAL, which would
+  # have kept this alert green for a project whose nightly full had been failing
+  # for a week while its WAL flowed perfectly (D-277).
   #
   # `interval: 1m`, not 1h, and the reason is worth keeping: with hourly samples
   # the series is *stale* for 55 minutes out of every 60 (Prometheus' lookback is
@@ -108,4 +112,22 @@ tests:
               node: data-1
               project_ref: stale
             exp_annotations:
-              summary: 'Nothing has been archived for stale in over 26 hours'
+              summary: 'No successful base backup for stale in over 26 hours'
+
+  # A failed base-backup run. Silence and refusal are different failures and the
+  # catalog pages on both: staleness is nothing happening, this is something
+  # happening and going wrong.
+  - interval: 1m
+    input_series:
+      - series: 'corebase_backup_runs_total{type="full",outcome="failed"}'
+        values: '0+0x30 1+0x30'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: BackupRunFailed
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              type: full
+              outcome: failed
+            exp_annotations:
+              summary: 'A full backup failed in the last hour'

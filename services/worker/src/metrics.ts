@@ -106,10 +106,35 @@ export const backupWalArchiveLagSeconds = registry.register(new Gauge({
   labelNames: ['node', 'project_ref'],
 }));
 
+/**
+ * Unix time of the last successful **base backup** — not the last archived WAL.
+ *
+ * P3b wired this to the WAL timestamp, and that was wrong in a way the metric name
+ * hides. The alert on it is "last-success age > 26h → page", which exists to catch
+ * a nightly full that has been failing; pointed at WAL archiving it would stay
+ * green for a project whose base backup had not succeeded in a week, because WAL
+ * was flowing perfectly the whole time. Two healthy-looking signals, one missing
+ * backup — the exact shape of an alert that cannot fire (P3c, D-277).
+ *
+ * WAL now has its own timestamp gauge below.
+ */
 export const backupLastSuccessTs = registry.register(new Gauge({
   name: 'corebase_backup_last_success_ts',
+  help: 'Unix time of the last successful base backup for a project.',
+  labelNames: ['node', 'project_ref'],
+}));
+
+export const backupWalLastArchivedTs = registry.register(new Gauge({
+  name: 'corebase_backup_wal_last_archived_ts',
   help: 'Unix time of the last WAL segment successfully archived for a project.',
   labelNames: ['node', 'project_ref'],
+}));
+
+/** Base-backup attempts, by type and outcome. Failures are the interesting rows. */
+export const backupRunsTotal = registry.register(new Counter({
+  name: 'corebase_backup_runs_total',
+  help: 'Base-backup runs finished, by type (full/incr) and outcome.',
+  labelNames: ['type', 'outcome'],
 }));
 
 /**
