@@ -2,6 +2,7 @@ import { Client as PgClient, type Pool } from 'pg';
 import type { SagaStep, SagaContext } from './runner.ts';
 import { allocateNode, releaseNode, releaseRam, bookRam, volumeNameFor } from '../placement.ts';
 import type { Docker } from '../docker.ts';
+import { nodeCaps } from '../node-caps.ts';
 import {
   buildContainerSpec, buildPoolerSpec, bootstrapPassword, containerName, networkName,
   poolerName, IMAGE, POOLER_IMAGE, LABEL_MANAGED, LABEL_REF,
@@ -241,6 +242,15 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
           ref: project.ref, projectId, volumeName: place.volume_name,
           hostPort: place.port, ramLimitMb: place.ram_limit_mb,
           bootstrapSecret: deps.bootstrapSecret ?? '',
+          // The plan picks the I/O weight (P2f). Reading it off the project rather
+          // than defaulting means an upgrade actually changes the container's
+          // share of a contended disk, instead of only its invoice.
+          plan: project.plan,
+          // ...but only if the node can enforce a weight at all. Probed once per
+          // node and cached; on a kernel without `io.weight` this is false and the
+          // field is omitted, because setting it there is a start failure rather
+          // than a no-op (node-caps.ts).
+          ioWeight: (await nodeCaps(docker, IMAGE)).ioWeight,
           // Ensured rather than assumed — a container create that names a missing
           // network fails with a Docker 404 that looks nothing like "a step was
           // skipped".

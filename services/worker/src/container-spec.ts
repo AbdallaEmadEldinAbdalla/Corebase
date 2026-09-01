@@ -8,6 +8,75 @@ import type { ContainerSpec } from './docker.ts';
 
 export const IMAGE = process.env.CB_PG_IMAGE ?? 'corebase/postgres:17.5';
 export const CONTAINER_PREFIX = 'cb-';
+
+/* ------------------------------------------------------------------ *
+ * The rest of D-055's noisy-neighbour walls (P2f).
+ *
+ * Memory and CPU were set from day one. These are the axes that were still
+ * open: process count and disk I/O.
+ * ------------------------------------------------------------------ */
+
+/**
+ * Process ceiling per project container (cgroup v2 `pids.max`).
+ *
+ * Postgres forks a backend per connection, so this has to clear
+ * `max_connections` (20) plus the postmaster and its auxiliary processes —
+ * checkpointer, background writer, WAL writer, archiver, autovacuum launcher and
+ * its workers, the stats collector, the logger — plus room for a maintenance
+ * shell. Around 35 in normal operation; 256 is generous headroom.
+ *
+ * The wall is not for Postgres, which is well-behaved about this. It is for
+ * everything else that can run inside the container once someone is in it: a
+ * fork bomb in a `COPY ... PROGRAM` or a compromised extension exhausts the
+ * *node's* pid namespace, and a node that cannot fork cannot run any tenant's
+ * database, or the reconciler that would notice.
+ */
+export const PIDS_LIMIT = Number(process.env.CB_PIDS_LIMIT ?? 256);
+
+/**
+ * Relative disk-I/O share (cgroup v2 `io.weight`, 10–1000, Docker's default 500).
+ *
+ * Weight rather than a hard IOPS cap, because a hard cap has to name a block
+ * device and the device a project's volume lives on is a property of the node,
+ * not of the project. `CB_IO_DEVICE` supplies it where an operator knows it, and
+ * `ioDeviceLimits` below turns it into the free tier's read/write ceilings; where
+ * it is unset, the weight alone still keeps one tenant's checkpoint storm from
+ * starving its neighbours — it just does not cap the absolute rate.
+ *
+ * Free tier sits below the default so a paid project wins a contended disk. That
+ * is the whole intent: proportional, so an idle fleet gives a free project the
+ * full device, and a busy one gives it a smaller slice.
+ */
+export const PLAN_IO_WEIGHT: Record<string, number> = {
+  free: 200,
+  pro: 500,
+  team: 500,
+  enterprise: 800,
+};
+
+/** Free tier's absolute I/O ceiling in bytes/s, applied only when the device is known. */
+export const FREE_IO_BPS = Number(process.env.CB_FREE_IO_BPS ?? 50 * 1024 * 1024);
+
+/**
+ * Per-device byte-rate caps for a plan, or an empty pair when no device is
+ * configured.
+ *
+ * Returning nothing rather than guessing a device is deliberate. Docker rejects
+ * a `BlkioDeviceWriteBps` entry whose path is not a block device on the node,
+ * which would turn a wrong guess into a provisioning failure for every project —
+ * a much worse outcome than an uncapped absolute rate behind a weight that still
+ * works.
+ */
+export function ioDeviceLimits(plan: string, device = process.env.CB_IO_DEVICE): {
+  BlkioDeviceReadBps?: Array<{ Path: string; Rate: number }>;
+  BlkioDeviceWriteBps?: Array<{ Path: string; Rate: number }>;
+} {
+  if (!device || plan !== 'free') return {};
+  return {
+    BlkioDeviceReadBps: [{ Path: device, Rate: FREE_IO_BPS }],
+    BlkioDeviceWriteBps: [{ Path: device, Rate: FREE_IO_BPS }],
+  };
+}
 export const LABEL_REF = 'com.corebase.project.ref';
 export const LABEL_MANAGED = 'com.corebase.managed';
 /** Which of a project's containers this is: absent means the database (P2b). */
@@ -80,6 +149,11 @@ export function buildPoolerSpec(a: PoolerSpecArgs): ContainerSpec {
       Memory: memBytes,
       MemorySwap: memBytes,
       NanoCpus: Math.round((a.cpuLimit ?? 0.25) * 1e9),
+      // A pooler is one process with one thread and does no disk I/O worth
+      // weighting, so the pid ceiling is the only wall that means anything here —
+      // and it means the same thing it does for the database: whatever ends up
+      // running inside this container cannot exhaust the node's pids.
+      PidsLimit: 64,
       RestartPolicy: { Name: a.restartPolicy ?? 'no' },
       Mounts: [],
       PortBindings: { [`${POOLER_PORT}/tcp`]: [{ HostPort: String(a.hostPort) }] },
@@ -117,6 +191,14 @@ export interface SpecArgs {
   bootstrapSecret: string;
   image?: string;
   restartPolicy?: string;
+  /** Drives the I/O weight; defaults to the free tier's, the strictest. */
+  plan?: string;
+  /**
+   * Whether this node's kernel can take an I/O weight. Absent means no, because
+   * a wrong "yes" costs every provision on the node and a wrong "no" costs
+   * fairness on a busy disk.
+   */
+  ioWeight?: boolean;
   /** Absent keeps the pre-Phase-2 behaviour: published port, no private network. */
   networkName?: string;
 }
@@ -141,6 +223,18 @@ export function buildContainerSpec(a: SpecArgs): ContainerSpec {
       Memory: memBytes,
       MemorySwap: memBytes,
       NanoCpus: Math.round((a.cpuLimit ?? 0.5) * 1e9),
+      // Process and I/O walls complete D-055's set (P2f). Every axis a tenant can
+      // saturate gets a static ceiling; the ones left open are the ones that take
+      // the node down rather than the project.
+      PidsLimit: PIDS_LIMIT,
+      // The I/O weight is set only where the node's kernel has `io.weight` at all
+      // (see node-caps.ts). Setting it on a kernel without a weight-capable I/O
+      // policy does not degrade to "no weight" — runc refuses to start the
+      // container, so the wall meant to protect neighbours takes down the tenant.
+      ...(a.ioWeight
+        ? { BlkioWeight: PLAN_IO_WEIGHT[a.plan ?? 'free'] ?? PLAN_IO_WEIGHT['free']! }
+        : {}),
+      ...ioDeviceLimits(a.plan ?? 'free'),
       // Created with NO restart policy on purpose (D-184): a container that
       // fails to initialise would otherwise flap forever, burning node CPU and
       // hiding the failure behind a perpetual "restarting" state. wait_healthy

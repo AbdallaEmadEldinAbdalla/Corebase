@@ -6,7 +6,9 @@ import { readFileSync } from 'node:fs';
 import { createDocker, DockerError, type Docker } from './docker.ts';
 import { buildSagas } from './jobs/sagas.ts';
 import { registerNode } from './placement.ts';
-import { containerName, bootstrapPassword, IMAGE, LABEL_MANAGED } from './container-spec.ts';
+import {
+  containerName, bootstrapPassword, IMAGE, LABEL_MANAGED, PIDS_LIMIT,
+} from './container-spec.ts';
 import type { JobRecord } from './jobs/repo.ts';
 import type { SagaStep, SagaContext } from './jobs/runner.ts';
 
@@ -221,6 +223,19 @@ describe('T5d — container steps of the provisioning saga', () => {
     // Swap disabled: a project that exceeds its RAM must be OOM-killed, not
     // allowed to thrash the whole node's disk (D-069).
     expect(inspect!.HostConfig.MemorySwap).toBe(row.ram_limit_mb * 1024 * 1024);
+
+    // ...and the same numbers read back from the kernel, on the container the
+    // saga actually provisioned (P2f). Everything above is `docker inspect`
+    // echoing the HostConfig we sent, which cannot distinguish "applied" from
+    // "accepted and ignored" — the I/O weight was accepted by create and then
+    // refused by runc at start, and no inspect-based assertion could have seen
+    // it. cgroups.e2e.test.ts covers the walls in depth; this pins that the
+    // provisioning path, not just a hand-built spec, ends up behind them.
+    const cg = async (f: string) => (await docker.execCapture(
+      row.container_id!, ['sh', '-c', `cat /sys/fs/cgroup/${f} 2>/dev/null`])).stdout.trim();
+    expect(await cg('memory.max')).toBe(String(row.ram_limit_mb * 1024 * 1024));
+    expect(await cg('memory.swap.max')).toBe('0');
+    expect(await cg('pids.max')).toBe(String(PIDS_LIMIT));
   });
 
   t('the restart policy is only attached once the database answers (D-184)', async () => {

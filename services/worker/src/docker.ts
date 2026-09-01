@@ -35,6 +35,30 @@ export class DockerError extends Error {
  * status code that distinguishes it from a genuine failure, so the message is
  * the only signal available.
  */
+/**
+ * Split a Docker stdcopy stream into stdout and stderr.
+ *
+ * Frames are `[stream, 0, 0, 0, len32be]` then `len` bytes. A stream that is not
+ * framed at all (a TTY exec, which we never ask for) has no headers, so a buffer
+ * whose first byte is not 1 or 2 is returned verbatim on stdout rather than
+ * silently decoded as garbage.
+ */
+export function demux(buf: Buffer): { stdout: string; stderr: string } {
+  if (buf.length === 0) return { stdout: '', stderr: '' };
+  if (buf[0] !== 1 && buf[0] !== 2) return { stdout: buf.toString('utf8'), stderr: '' };
+  const out: Buffer[] = []; const err: Buffer[] = [];
+  let i = 0;
+  while (i + 8 <= buf.length) {
+    const stream = buf[i];
+    const len = buf.readUInt32BE(i + 4);
+    const start = i + 8;
+    const end = Math.min(start + len, buf.length);
+    (stream === 2 ? err : out).push(buf.subarray(start, end));
+    i = end;
+  }
+  return { stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8') };
+}
+
 function notExecable(e: DockerError): boolean {
   if (e.isNotFound) return true;
   if (e.isConflict) return true;                      // "is restarting", "is paused"
@@ -104,6 +128,40 @@ export function createDocker(cfg: DockerConfig) {
             try { msg = (JSON.parse(text) as { message?: string }).message ?? text; } catch { /* raw */ }
             reject(new DockerError(status, `${method} ${path} → ${status}: ${msg}`));
           }
+        });
+      });
+      req.on('timeout', () => { req.destroy(new Error(`${method} ${path} timed out`)); });
+      req.on('error', reject);
+      if (payload) req.write(payload);
+      req.end();
+    });
+  }
+
+  /**
+   * Same request, body returned as bytes instead of parsed JSON.
+   *
+   * Needed for the hijacked exec stream, which is not JSON and whose framing has
+   * to survive intact — decoding it as UTF-8 first would mangle the binary
+   * headers before `demux` ever sees them.
+   */
+  function callRaw(method: string, path: string, body?: unknown): Promise<Buffer> {
+    const payload = body === undefined ? undefined : JSON.stringify(body);
+    const opts: RequestOptions = {
+      host: cfg.host, port: cfg.port, path, method, ...tls, agent,
+      timeout: cfg.timeoutMs ?? 30_000,
+      headers: payload
+        ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) }
+        : {},
+    };
+    return new Promise<Buffer>((resolve, reject) => {
+      const req = httpsRequest(opts, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => {
+          const buf = Buffer.concat(chunks);
+          const status = res.statusCode ?? 0;
+          if (status >= 200 && status < 300) resolve(buf);
+          else reject(new DockerError(status, `${method} ${path} → ${status}: ${buf.toString('utf8')}`));
         });
       });
       req.on('timeout', () => { req.destroy(new Error(`${method} ${path} timed out`)); });
@@ -237,9 +295,28 @@ export function createDocker(cfg: DockerConfig) {
       }
     },
 
-    async removeContainer(id: string, force = true): Promise<void> {
-      try { await call('DELETE', `/containers/${encodeURIComponent(id)}?force=${force ? 1 : 0}&v=0`); }
-      catch (e) { if (!(e instanceof DockerError && e.isNotFound)) throw e; }
+    /**
+     * Remove a container. `v=0` — anonymous volumes are kept — is the default and
+     * is not negotiable for project containers: `corebase/postgres` declares
+     * `VOLUME /var/lib/postgresql/data`, so `v=1` on a project would delete a
+     * customer's database along with the container.
+     *
+     * `withAnonymousVolumes` exists for the opposite case, which that same
+     * `VOLUME` declaration creates: a container started from the image with **no**
+     * mount gets an anonymous volume, and with `v=0` that volume outlives it
+     * forever. The capability probe and the cgroup suite both do exactly that, and
+     * each run left a 64-hex volume behind — which reconciliation then reported,
+     * correctly, as an orphan occupying disk with no owner. Only ever pass true for
+     * a container you created with no mounts.
+     */
+    async removeContainer(
+      id: string, force = true, withAnonymousVolumes = false,
+    ): Promise<void> {
+      const v = withAnonymousVolumes ? 1 : 0;
+      try {
+        await call('DELETE',
+          `/containers/${encodeURIComponent(id)}?force=${force ? 1 : 0}&v=${v}`);
+      } catch (e) { if (!(e instanceof DockerError && e.isNotFound)) throw e; }
     },
 
     /**
@@ -257,6 +334,63 @@ export function createDocker(cfg: DockerConfig) {
         if (e instanceof DockerError && notExecable(e)) return { exitCode: null };
         throw e;
       }
+    },
+
+    /**
+     * Exec, with the command's output.
+     *
+     * `exec` above returns only an exit code, which is all a readiness poll
+     * needs. Verifying cgroup limits needs the *value* the kernel is actually
+     * enforcing, not a claim from `docker inspect` — inspect echoes what we
+     * asked for whether or not the engine applied it, so it can only ever confirm
+     * our own request. `/sys/fs/cgroup/...` is the kernel's answer.
+     *
+     * The engine hijacks the connection for a non-detached start and sends
+     * stdcopy frames: an 8-byte header per chunk whose first byte is the stream
+     * (1 stdout, 2 stderr) and whose last four are a big-endian length.
+     */
+    async execCapture(
+      id: string, cmd: string[],
+    ): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
+      let created: { Id: string };
+      try {
+        created = await call<{ Id: string }>(
+          'POST', `/containers/${encodeURIComponent(id)}/exec`,
+          { Cmd: cmd, AttachStdout: true, AttachStderr: true, Tty: false });
+      } catch (e) {
+        if (e instanceof DockerError && notExecable(e)) return { exitCode: null, stdout: '', stderr: '' };
+        throw e;
+      }
+      const raw = await callRaw('POST', `/exec/${created.Id}/start`,
+        { Detach: false, Tty: false });
+      const { stdout, stderr } = demux(raw);
+      // The engine reports a runtime failure to *launch* the exec on the stream
+      // itself, with a 200 — so a caller that trusts stdout reads
+      //   "OCI runtime exec failed: ... unable to spawn stage-1: Resource
+      //    temporarily unavailable"
+      // as the command's output. That is not a hypothetical: a container sitting
+      // at its `pids.max` cannot fork, so every exec into it fails this way, and
+      // a test asserting on a cgroup value happily asserted against the error
+      // text instead. An error that arrives as data is worse than an error.
+      if (/^OCI runtime exec failed/.test(stdout) || /^OCI runtime exec failed/.test(stderr)) {
+        throw new DockerError(500, `exec ${cmd.join(' ')}: ${(stdout || stderr).trim()}`);
+      }
+      const st = await call<{ ExitCode: number | null }>('GET', `/exec/${created.Id}/json`);
+      return { exitCode: st.ExitCode ?? -1, stdout, stderr };
+    },
+
+    /**
+     * A stopped container's output. Same stdcopy framing as exec.
+     *
+     * Used by the node capability probe, which needs a value out of a container
+     * that has already exited — `exec` cannot reach one, and an exit code alone
+     * cannot carry an answer that is not boolean forever.
+     */
+    async containerLogs(id: string): Promise<string> {
+      const raw = await callRaw(
+        'GET', `/containers/${encodeURIComponent(id)}/logs?stdout=1&stderr=1&tail=20`);
+      const { stdout, stderr } = demux(raw);
+      return stdout + stderr;
     },
 
     /** Change a running container's restart policy (see wait_healthy, D-184). */
@@ -299,7 +433,11 @@ export interface ContainerInspect {
    *  own connections in a database's `pg_stat_activity` (P2c). */
   NetworkSettings?: { Networks?: Record<string, { IPAddress?: string }> };
   Config: { Image: string; Labels: Record<string, string> };
-  HostConfig: { Memory: number; MemorySwap: number; NanoCpus: number; RestartPolicy: { Name: string } };
+  HostConfig: {
+    Memory: number; MemorySwap: number; NanoCpus: number;
+    PidsLimit?: number; BlkioWeight?: number;
+    RestartPolicy: { Name: string };
+  };
 }
 export interface VolumeSummary {
   Name: string; Labels: Record<string, string> | null;
@@ -317,6 +455,16 @@ export interface ContainerSpec {
     Memory: number;
     MemorySwap: number;
     NanoCpus: number;
+    /**
+     * The rest of D-055's control set (P2f). Optional in the type but not in
+     * practice — `buildContainerSpec` always sets them; a caller that wants a
+     * container without a wall has to say so, rather than getting one by
+     * forgetting a field.
+     */
+    PidsLimit?: number;
+    BlkioWeight?: number;
+    BlkioDeviceReadBps?: Array<{ Path: string; Rate: number }>;
+    BlkioDeviceWriteBps?: Array<{ Path: string; Rate: number }>;
     RestartPolicy: { Name: string };
     Mounts: Array<{ Type: string; Source: string; Target: string }>;
     PortBindings: Record<string, Array<{ HostPort: string }>>;
