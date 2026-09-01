@@ -72,6 +72,97 @@ export function canFit(cap: Capacity, bookingMb: number, ceiling = FILL_CEILING)
   return remainingMb(cap, ceiling) >= bookingMb;
 }
 
+/* ------------------------------------------------------------------ *
+ * Bin-packing (P2f)
+ *
+ * The doc's rule is one sentence: new placements go to the active node in the
+ * region with the **lowest RAM fill ratio** that still fits the booking on RAM
+ * *and* disk (provisioning §7, spread-first). Three things about it are easy to
+ * get wrong, and the first two were wrong here.
+ * ------------------------------------------------------------------ */
+
+/** A node as the packer sees it: both axes, no Docker, no I/O. */
+export interface NodeCandidate {
+  id: string;
+  hostname: string;
+  ramTotalMb: number;
+  ramReservedMb: number;
+  diskTotalGb: number;
+  diskReservedGb: number;
+}
+
+/** What one project asks the node for. */
+export interface Booking { ramMb: number; diskGb: number }
+
+/**
+ * How full a node is: **the worse of its two axes**, as a fraction of the
+ * ceiling — 1.0 means "exactly at the placement stop".
+ *
+ * Ratio, not absolute reserved. `ORDER BY ram_reserved_mb ASC` reads as
+ * "emptiest first" and is not: a 4 GB node holding 1 GB sorts ahead of a 64 GB
+ * node holding 2 GB, so the packer hands projects to the *fullest* node in the
+ * fleet as soon as the nodes differ in size. Homogeneous fleets hide this
+ * completely, which is why it survived until there was a second node.
+ *
+ * Both axes, not just RAM. A node at 20% RAM and 80% disk is 80% full for
+ * placement purposes; ranking it on RAM alone sends projects to the one node
+ * that is about to run out of the resource they will actually consume.
+ */
+export function fillRatio(n: NodeCandidate, ceiling = FILL_CEILING): number {
+  const ramCap = n.ramTotalMb * ceiling;
+  const diskCap = n.diskTotalGb * ceiling;
+  const ram = ramCap > 0 ? n.ramReservedMb / ramCap : Infinity;
+  const disk = diskCap > 0 ? n.diskReservedGb / diskCap : Infinity;
+  return Math.max(ram, disk);
+}
+
+/** Does the booking fit under the 85% stop on both axes (D-090)? */
+export function fits(n: NodeCandidate, b: Booking, ceiling = FILL_CEILING): boolean {
+  if (b.ramMb <= 0 || b.diskGb <= 0) throw new Error('booking must be positive on both axes');
+  const ramOk = Math.floor(n.ramTotalMb * ceiling) - n.ramReservedMb >= b.ramMb;
+  const diskOk = Math.floor(n.diskTotalGb * ceiling) - n.diskReservedGb >= b.diskGb;
+  return ramOk && diskOk;
+}
+
+/**
+ * Every node that fits, emptiest first.
+ *
+ * A *list*, not a winner. The single-candidate version — pick the emptiest node,
+ * then fail if the booking does not fit — reports "no capacity" while the region
+ * has plenty, because the emptiest node is not necessarily one that fits (a small
+ * node can be the emptiest and still be too small). That failure mode gets more
+ * likely the fuller the fleet gets, which is precisely when a false negative
+ * costs the most. It is also what makes the lock-then-recheck loop in
+ * `allocateNode` possible: losing a race to another provision means trying the
+ * next candidate rather than failing the job.
+ *
+ * Ties break on hostname so the order is total and reproducible. Two identical
+ * nodes would otherwise be returned in whatever order the plan happened to
+ * produce, and a placement bug that only appears in one of two orderings is a
+ * bug nobody can reproduce.
+ */
+export function rankNodes(
+  nodes: readonly NodeCandidate[], b: Booking, ceiling = FILL_CEILING,
+): NodeCandidate[] {
+  return nodes
+    .filter((n) => fits(n, b, ceiling))
+    .sort((x, y) => {
+      const d = fillRatio(x, ceiling) - fillRatio(y, ceiling);
+      return d !== 0 ? d : x.hostname.localeCompare(y.hostname);
+    });
+}
+
+/**
+ * How long a node may go unheard-from and still receive placements.
+ *
+ * The worker re-registers its node on every reconcile pass (default 5 minutes,
+ * jittered up to ~6.5), so this is roughly three missed beats. Placement has to
+ * care: `status` stays `active` when a worker dies, and a project sent to a node
+ * with nobody driving it does not fail — it sits in `creating` until the saga
+ * times out, which reads as "provisioning is slow" and points at nothing.
+ */
+export const NODE_STALE_SECONDS = Number(process.env.CB_NODE_STALE_SECONDS ?? 900);
+
 /**
  * Lowest free port in the range. Deterministic (not random) so a retry of the
  * same provision tends to reuse the same port, which keeps logs readable.
@@ -171,39 +262,13 @@ export async function allocateNode(
         volumeName: r.volume_name, ramLimitMb: r.ram_limit_mb, bookedMb: booking, replayed: true };
     }
 
-    // Pick the emptiest active node in the region and LOCK it. Ordering by
-    // reserved ascending spreads load; the lock is what serialises rivals.
-    const node = await client.query<{
-      id: string; hostname: string; ram_total_mb: number; ram_reserved_mb: number;
-      disk_total_gb: number; disk_reserved_gb: number;
-    }>(
-      `SELECT id, hostname, ram_total_mb, ram_reserved_mb, disk_total_gb, disk_reserved_gb
-         FROM nodes
-        WHERE status = 'active' AND region = $1
-        ORDER BY ram_reserved_mb ASC
-        LIMIT 1
-        FOR UPDATE`,
-      [args.region ?? 'eu-central'],
-    );
-    if (!node.rows[0]) throw new NoCapacityError('no active node in region');
-
-    const n = node.rows[0];
-    if (!canFit({ ramTotalMb: n.ram_total_mb, ramReservedMb: n.ram_reserved_mb }, booking)) {
-      throw new NoCapacityError(
-        `node ${n.hostname} is at ${n.ram_reserved_mb}/${n.ram_total_mb} MB; ` +
-        `${booking} MB would pass the ${FILL_CEILING * 100}% placement stop`);
-    }
-
-    // Disk, on the same ceiling (P2e). Booking RAM and ignoring disk is how a node
-    // ends up full of projects that each have memory to spare and nowhere to write:
-    // "the node itself never suffers" has to be arithmetic, not a hope.
+    // Disk is booked on the same ceiling as RAM (P2e, D-250). Booking RAM and
+    // ignoring disk is how a node ends up full of projects that each have memory
+    // to spare and nowhere to write: "the node itself never suffers" has to be
+    // arithmetic, not a hope.
     const diskBooking = diskBookingGbFor(args.plan ?? 'free');
-    const diskCeiling = Math.floor(n.disk_total_gb * FILL_CEILING);
-    if (n.disk_reserved_gb + diskBooking > diskCeiling) {
-      throw new NoCapacityError(
-        `node ${n.hostname} is at ${n.disk_reserved_gb}/${n.disk_total_gb} GB of disk; ` +
-        `${diskBooking} GB would pass the ${FILL_CEILING * 100}% placement stop`);
-    }
+    const want: Booking = { ramMb: booking, diskGb: diskBooking };
+    const n = await pickNode(client, args.region ?? 'eu-central', want);
 
     const ports = await client.query<{ port: number; pooler_port: number }>(
       `SELECT port, pooler_port FROM project_databases WHERE node_id = $1`, [n.id]);
@@ -234,6 +299,96 @@ export async function allocateNode(
   } finally {
     client.release();
   }
+}
+
+/**
+ * Choose a node for `want` and return it **locked**, inside the caller's
+ * transaction.
+ *
+ * Two passes, and the second one is the point. The first reads every eligible
+ * node's capacity *without* a lock and ranks them; the second walks that ranking
+ * and, for each candidate, takes the row lock and re-reads the numbers before
+ * committing to it. The re-read is not defensive coding — under READ COMMITTED a
+ * `SELECT ... ORDER BY ... LIMIT 1 FOR UPDATE` can block on a rival transaction
+ * and then hand back the row as it looked *before* that rival's booking, so the
+ * single-statement version oversubscribes exactly when two provisions race for
+ * the last slot on a node. Locking then re-checking makes the loser fall through
+ * to the next candidate instead of overbooking the winner's node.
+ *
+ * Candidates are locked in ranked order, which is a fleet-wide consistent order
+ * only by accident. It does not need to be: one node is locked at a time and
+ * released with the transaction, and a candidate already held by a rival simply
+ * blocks briefly — there is no second lock to deadlock against.
+ */
+async function pickNode(
+  client: PoolClient, region: string, want: Booking,
+): Promise<NodeCandidate> {
+  const all = await client.query<{
+    id: string; hostname: string; ram_total_mb: number; ram_reserved_mb: number;
+    disk_total_gb: number; disk_reserved_gb: number; stale: boolean; age_s: number | null;
+  }>(
+    `SELECT id, hostname, ram_total_mb, ram_reserved_mb, disk_total_gb, disk_reserved_gb,
+            (last_seen_at IS NULL OR last_seen_at < now() - make_interval(secs => $2)) AS stale,
+            EXTRACT(epoch FROM now() - last_seen_at)::int AS age_s
+       FROM nodes
+      WHERE status = 'active' AND region = $1`,
+    [region, NODE_STALE_SECONDS],
+  );
+  if (all.rows.length === 0) {
+    throw new NoCapacityError(`no active node in region ${region}`);
+  }
+
+  interface CapacityRow {
+    id: string; hostname: string; ram_total_mb: number; ram_reserved_mb: number;
+    disk_total_gb: number; disk_reserved_gb: number;
+  }
+  const row2node = (r: CapacityRow): NodeCandidate => ({
+    id: r.id, hostname: r.hostname,
+    ramTotalMb: r.ram_total_mb, ramReservedMb: r.ram_reserved_mb,
+    diskTotalGb: r.disk_total_gb, diskReservedGb: r.disk_reserved_gb,
+  });
+
+  const live = all.rows.filter((r) => !r.stale);
+  if (live.length === 0) {
+    // Deliberately a different sentence from "full". An operator who reads "no
+    // capacity" goes looking for a bigger node; the actual problem is that
+    // nothing is driving the ones they have.
+    const freshest = all.rows.reduce((a, b) => ((a.age_s ?? 1e9) <= (b.age_s ?? 1e9) ? a : b));
+    throw new NoCapacityError(
+      `every active node in ${region} is stale — the freshest, ${freshest.hostname}, was last ` +
+      `seen ${freshest.age_s === null ? 'never' : `${freshest.age_s}s ago`} ` +
+      `(limit ${NODE_STALE_SECONDS}s). Its worker is probably not running.`);
+  }
+
+  const ranked = rankNodes(live.map(row2node), want);
+  if (ranked.length === 0) {
+    const emptiest = live.map(row2node).sort((a, b) => fillRatio(a) - fillRatio(b))[0]!;
+    throw new NoCapacityError(
+      `no node in ${region} fits ${want.ramMb} MB + ${want.diskGb} GB under the ` +
+      `${FILL_CEILING * 100}% placement stop; the emptiest, ${emptiest.hostname}, is at ` +
+      `${emptiest.ramReservedMb}/${emptiest.ramTotalMb} MB and ` +
+      `${emptiest.diskReservedGb}/${emptiest.diskTotalGb} GB ` +
+      `(${Math.round(fillRatio(emptiest) * 100)}% of ceiling)`);
+  }
+
+  for (const candidate of ranked) {
+    const locked = await client.query<{
+      id: string; hostname: string; ram_total_mb: number; ram_reserved_mb: number;
+      disk_total_gb: number; disk_reserved_gb: number; status: string;
+    }>(
+      `SELECT id, hostname, ram_total_mb, ram_reserved_mb, disk_total_gb, disk_reserved_gb, status
+         FROM nodes WHERE id = $1 FOR UPDATE`, [candidate.id]);
+    const r = locked.rows[0];
+    // Cordoned while we were ranking, or deleted outright: both mean "not this one".
+    if (!r || r.status !== 'active') continue;
+    const fresh = row2node(r);
+    if (fits(fresh, want)) return fresh;
+  }
+
+  throw new NoCapacityError(
+    `${ranked.length} node(s) in ${region} fitted ${want.ramMb} MB + ${want.diskGb} GB when ` +
+    'ranked and none still did once locked — a concurrent provision took the last slot. ' +
+    'This job should be retried.');
 }
 
 /**
