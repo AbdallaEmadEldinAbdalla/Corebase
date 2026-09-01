@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-08-31 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2: P2a–P2c done**
+**Last updated:** 2026-08-31 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2: P2a–P2d done**
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -250,7 +250,7 @@ boot. Don't use them.
 
 ## 4. What is built, in detail
 
-Test counts are from `pnpm test` and are all currently green: **429 tests**, of
+Test counts are from `pnpm test` and are all currently green: **434 tests**, of
 which **~220** need no infrastructure (`pnpm test:unit`).
 
 Every task below has a command that proves it; they are listed with the task.
@@ -1091,6 +1091,57 @@ on exactly the endpoints that take no body. Every HTTP client sets a JSON
 content-type by default. This supersedes the half of D-198 that made the best of the
 rejection; malformed JSON still keeps its 400, which was D-198's actual point.
 
+### P2d — credential rotation · done · 5 tests
+
+**Exit criterion 4, met**: "credential rotation works with active connections
+(documented behaviour)". The documented behaviour has three parts, each asserted
+against a real project rather than described.
+
+**An established session survives.** Postgres authenticates at connect time only,
+so a rotation is invisible to a running application. That is not a footnote — it is
+what makes rotation safe to do routinely, and the credentials doc says why that
+matters: *a credential you are scared to rotate is a credential you will leak and
+keep.*
+
+**A new connection with the old password is refused**, immediately and with no
+window.
+
+**The pooler needs nothing** — no config re-render, no file to ship, no reload.
+`auth_query` reads `pg_shadow` live, so one `ALTER ROLE` is the entire rotation.
+This is the payoff D-074 picked auth_query for, and it is asserted as an *absence*:
+same container id, never restarted, and the pooled port serving the new credential
+while refusing the old one. Verified live through the HTTP API as well as in tests.
+
+Store-then-apply (**D-246**) is the ordering rule, and one test runs only the store
+half — which is exactly what a crash between the two looks like. The old password
+still works, the new one does not yet, and the retry applies it. The reverse order
+leaves a database whose password exists nowhere.
+
+The new version is numbered from the **highest ever used**, not the active one,
+because the AAD binds `(project_id, name, version)` — reusing a number after an
+earlier rotation left higher retiring rows would make two different ciphertexts
+claim to be the same secret. The previous version is kept `retiring` for 24 hours so
+"which credential is my app on" has an answer, then purged.
+
+**Rotation is admin-only (`secret.manage`) while revealing is a member's right
+(`project.read`)** — a deliberate asymmetry (**D-247**). Reading your own
+credentials is using the product; replacing them breaks every application holding
+the old ones, which one member should not be able to do to a colleague's running
+service by accident.
+
+**`terminate` is opt-in** (**D-248**) and documented as compromise response.
+Rotating alone does nothing about someone who already holds a connection. Two facts
+made the default worth stating twice: a terminated `pg` connection emits an
+`'error'` event, and an unhandled one takes a Node process down — so `terminate`
+does not merely fail an application's next query, it can crash one whose pool has no
+error handler.
+
+The dashboard dialog exists because the credentials doc calls rotation a first-class
+screen. Its job is to remove fear rather than add friction: no type-to-confirm,
+since rotation destroys nothing and the new string is on the same page, and
+`terminate` is an unchecked checkbox labelled with its consequence that turns the
+button red when checked.
+
 ### The P2 review — what a deep pass over everything found
 
 Asked to revisit the whole build, not a step of it. Eight findings, all fixed; the
@@ -1188,10 +1239,10 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-Sixty-two decisions came out of running the thing rather than planning it —
-D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-245 from Phase 2.
+Sixty-five decisions came out of running the thing rather than planning it —
+D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-248 from Phase 2.
 Full text in the [decision log](docs/00-foundation/05-decision-log.md); the log holds
-D-001…D-245 and is binding when two documents disagree.
+D-001…D-248 and is binding when two documents disagree.
 
 | ID | What changed | Why it surfaced |
 |---|---|---|
@@ -1257,6 +1308,9 @@ D-001…D-245 and is binding when two documents disagree.
 | D-243 | A transitional status with no job running is `stuck_transition` drift — reported, not resolved | A `pausing` project whose job died read as "pausing" to its owner forever, and no sweep saw anything wrong |
 | D-244 | Live projects per organization are capped, counting soft-deleted ones | Otherwise the only limit is the placer's capacity error, and one tenant can fail every other tenant's creates |
 | D-245 | The data node runs with an explicit `--default-address-pool` sized for the target density | The default pool exhausted with three networks on the node — a per-project network design runs out of addresses at ~10 projects, against a target of 100 |
+| D-246 | Rotation is store-then-apply; new versions number from the highest ever used; the previous is kept 24h then purged | The AAD binds the version, so a reused number makes two ciphertexts claim to be the same secret; the reverse order loses the password entirely |
+| D-247 | Rotation needs `secret.manage` (admin) while revealing needs `project.read` (member) | Reading your credentials is using the product; replacing them breaks every application holding the old ones |
+| D-248 | `terminate` is opt-in and is compromise response, not hygiene | Rotation is invisible to established sessions, which is what makes it routine — and useless against someone already connected |
 
 ## 7. Measurements
 
@@ -1299,10 +1353,10 @@ enforces it (P1b), and CI runs both suites on every PR (P1f). The dashboard shel
 (P1g) covers login, signup, the org switcher, the projects grid, the create-project
 flow and a project overview.
 
-**Phase 2 is at P2c of seven planned steps**, and **exit criterion 2 is met**. Done:
-the per-project network, PgBouncer with the two-URL contract, and pause/resume with
-idle detection. Remaining: credential rotation (criterion 4), disk quotas and the
-disk-full ladder (criterion 3), bin-packing placement, and the density measurement
+**Phase 2 is at P2d of seven planned steps**, with **exit criteria 2 and 4 met**.
+Done: the per-project network, PgBouncer with the two-URL contract, pause/resume with
+idle detection, and credential rotation. Remaining: disk quotas and the disk-full
+ladder (criterion 3), bin-packing placement, and the density measurement
 (criterion 1) — which D-209 already constrains, since this hardware cannot satisfy
 its conditions.
 

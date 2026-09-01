@@ -34,6 +34,8 @@ It is built on the design system that already existed in `design-exports/` rathe
 
 **How the UI stays consistent.** The first version of this shell was right in every colour and wrong in every mechanic, so the fix was not nicer screens but a written interaction contract: [docs/09-dashboard/05-ux-standards.md](docs/09-dashboard/05-ux-standards.md), ending in a 20-question gate that **runs on every UI change** (D-224) as the `ux-review` role in [.claude/skills/](.claude/skills/ux-review/SKILL.md). Its first run found two real failures in the code written to satisfy it — the palette was missing two actions a row menu already had, and the project list printed "Showing 20 of 20" while hiding a second page.
 
+**Credentials rotate without breaking anything.** One `ALTER ROLE` replaces a project's database password: applications already connected keep working (Postgres only checks the password when a connection opens), a new connection with the old password is refused immediately, and **the connection pooler needs no reconfiguration at all** — it reads `pg_shadow` live, which is the reason `auth_query` was chosen over a credentials file. There is an opt-in flag to disconnect everything, documented as compromise response, because rotating alone does nothing about someone already holding a connection.
+
 **A deep review of everything built** produced eight fixes, recorded as D-240…D-245. Two are worth naming here: `CB_STATIC_TOKEN` defaulted to the literal string `dev-token`, so an API deployed with no configuration accepted that header as the bootstrap owner; and the data node answered *"all predefined address pools have been fully subnetted"* with three networks on it — a per-project-network design runs out of *addresses* at roughly ten projects while Phase 2 aims at a hundred.
 
 **Phase 2 (the database platform) has started.** Every project now gets a **connection pooler** — PgBouncer in transaction mode on its own port — so `DATABASE_URL` is a string an application can actually point at: twelve concurrent clients share one Postgres backend. The pooler resolves credentials through a `SECURITY DEFINER` lookup that allowlists exactly one role, so the pooled port cannot reach `postgres` or any other internal role even if PgBouncer is fully compromised — checked by presenting the correct superuser password and being refused. It sits on a private per-project network added in the same phase, which is also what PostgREST will need in Phase 5.
@@ -76,7 +78,7 @@ There is no seeded password anywhere, so create an account on `/signup`; a new a
 
 The demo script creates a project, waits for it, connects to the database it made with the credentials the API handed back, runs real SQL, and deletes it — using only `curl` and `psql`, which is exactly what a customer has.
 
-The full suite is **429 tests**, integration included; they need the staging stack above and **fail rather than skip** without it:
+The full suite is **434 tests**, integration included; they need the staging stack above and **fail rather than skip** without it:
 
 ```bash
 pnpm test
