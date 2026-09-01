@@ -41,7 +41,11 @@ export CB_POOLER_PORT_MIN="${CB_POOLER_PORT_MIN:-6433}"
 export CB_POOLER_PORT_MAX="${CB_POOLER_PORT_MAX:-6462}"
 export CB_NODE_RAM_MB="${CB_NODE_RAM_MB:-16384}"
 export CB_NODE_HOSTNAME="${CB_NODE_HOSTNAME:-data-1}"
-export CB_STATIC_TOKEN="${CB_STATIC_TOKEN:-dev-token}"
+# A bearer credential with no expiry and no revocation, so the API refuses one
+# shorter than 24 characters — including locally, because "it is only local" is
+# how the old `dev-token` default ended up shipped in the source. The string names
+# itself so it can never be mistaken for a real one.
+export CB_STATIC_TOKEN="${CB_STATIC_TOKEN:-local-dev-only-not-a-production-credential}"
 export PORT="${PORT:-8099}"
 export CB_METRICS_PORT="${CB_METRICS_PORT:-9101}"
 # Local dev is plain HTTP, and a Secure cookie is never sent over http:// —

@@ -30,7 +30,7 @@ import { Pool, Client } from 'pg';
 const ROOT = resolve(import.meta.dirname, '../../..');
 const COUNT = Number(process.env.CB_LC_COUNT ?? 20);
 const PORT = Number(process.env.CB_LC_API_PORT ?? 8096);
-const TOKEN = 'lc-token';
+const TOKEN = 'lc-token-harness-token-long-enough-for-the-boot-check';
 const STEP_BUDGET_MS = Number(process.env.CB_LC_BUDGET_MS ?? 90_000);
 const CERT_DIR = process.env.CB_DOCKER_CERT_DIR ?? join(ROOT, 'infra/docker/staging/certs');
 const DOCKER_HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';

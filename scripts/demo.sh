@@ -16,7 +16,7 @@
 set -euo pipefail
 
 API="${CB_API:-http://127.0.0.1:8099}"
-TOKEN="${CB_STATIC_TOKEN:-dev-token}"
+TOKEN="${CB_STATIC_TOKEN:-local-dev-only-not-a-production-credential}"   # matches scripts/dev.sh
 NAME="${CB_DEMO_NAME:-demo-$(date +%s)}"
 KEEP=0
 PURGE=0

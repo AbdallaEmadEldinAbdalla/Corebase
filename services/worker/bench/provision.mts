@@ -23,7 +23,7 @@ const ROOT = resolve(import.meta.dirname, '../../..');
 const COUNT = Number(process.env.CB_BENCH_COUNT ?? 20);
 const BUDGET_MS = Number(process.env.CB_BENCH_BUDGET_MS ?? 60_000);
 const PORT = Number(process.env.CB_BENCH_API_PORT ?? 8098);
-const TOKEN = 'bench-token';
+const TOKEN = 'bench-token-harness-token-long-enough-for-the-boot-check';
 const OUT_DIR = process.env.CB_BENCH_OUT ?? join(ROOT, 'docs/14-roadmap/measurements');
 
 const env = {

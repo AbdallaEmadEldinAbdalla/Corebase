@@ -30,7 +30,7 @@ export interface ControlPlaneDeps {
   enqueue?: Enqueue;
   onEnqueueError?: (err: Error) => void;
   /** M0: one static token (T4). Real dual-mode auth is D-062. */
-  staticToken: string;
+  staticToken?: string;
   /**
    * The user every static-token mutation is attributed to, until P1c brings real
    * sessions. Absent means mutations are recorded as `system` rather than as a
@@ -65,6 +65,10 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
       await resolvePrincipal(req, deps.principals);
       return;
     }
+    // No principal resolver *and* no static token means nothing can authenticate,
+    // which is the correct answer for an unconfigured deployment — better than a
+    // default token, which is a credential shipped in the source.
+    if (!deps.staticToken) throw ApiError.unauthorized();
     if (req.headers.authorization !== `Bearer ${deps.staticToken}`) throw ApiError.unauthorized();
   };
 

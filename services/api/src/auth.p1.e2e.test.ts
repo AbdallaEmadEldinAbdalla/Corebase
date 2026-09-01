@@ -46,6 +46,7 @@ function app() {
       pool, users, tokens,
       sessions: createMemorySessionStore(),
       loginLimiter: createMemoryRateLimiter({ limit: 5, windowSeconds: 60 }),
+      signupLimiter: createMemoryRateLimiter({ limit: 500, windowSeconds: 60 }),
       secureCookies: false,
       staticToken: 'static-token',
       // The stores are the same objects the routes resolve principals through.

@@ -102,16 +102,26 @@ const auth: AuthDeps | undefined = await (async () => {
   const loginLimiter = redisUrl
     ? createRateLimiter(createRedis(redisUrl), { limit: 10, windowSeconds: 300 })
     : createMemoryRateLimiter({ limit: 10, windowSeconds: 300 });
+  // Tighter than login and for a different reason: each signup is a 64 MiB scrypt
+  // call (D-211), so this budget protects the node's memory rather than an
+  // account. Five per address per five minutes is generous for a human and
+  // useless for a memory-exhaustion attempt.
+  const signupLimiter = redisUrl
+    ? createRateLimiter(createRedis(redisUrl), { limit: 5, windowSeconds: 300 })
+    : createMemoryRateLimiter({ limit: 5, windowSeconds: 300 });
   return {
     pool: authPool,
     users: createUserStore(authPool),
     tokens: createTokenStore(authPool),
     sessions,
     loginLimiter,
+    signupLimiter,
     // Off only for plain-HTTP local development; a Secure cookie is never sent
     // over http:// and the failure looks like "login does nothing".
     secureCookies: process.env.CB_SECURE_COOKIES !== 'false',
-    staticToken: process.env.CB_STATIC_TOKEN ?? 'dev-token',
+    // No default (see app.ts). Absent disables the static-token path entirely;
+    // PATs (P1c) are the supported way for a human or a CLI to authenticate.
+    ...(process.env.CB_STATIC_TOKEN ? { staticToken: process.env.CB_STATIC_TOKEN } : {}),
     staticUserId: actorUserId,
   };
 })();
@@ -131,6 +141,32 @@ const orgs = auth
       ...(auth.staticUserId ? { staticUserId: auth.staticUserId } : {}),
     }
   : undefined;
+
+/**
+ * A static token that is short, guessable, or one of the values this repo's own
+ * scripts default to is refused at boot rather than served.
+ *
+ * The variable used to have a default of `dev-token`, so an API deployed without
+ * it accepted that literal string as the bootstrap owner — a credential shipped
+ * in the source. Removing the default fixes the unset case; this covers the case
+ * where someone copies the dev value into a real environment.
+ */
+const WEAK_STATIC_TOKENS = new Set(['dev-token', 'test-token', 'changeme', 'secret']);
+if (process.env.CB_STATIC_TOKEN) {
+  const t = process.env.CB_STATIC_TOKEN;
+  if (WEAK_STATIC_TOKENS.has(t) && process.env.NODE_ENV === 'production') {
+    throw new Error(
+      `CB_STATIC_TOKEN is set to "${t}", which is a development placeholder. ` +
+      'It grants the bootstrap owner\'s rights with no expiry and no revocation — ' +
+      'set a generated value, or unset it and use a personal access token.');
+  }
+  if (t.length < 24) {
+    throw new Error(
+      'CB_STATIC_TOKEN is shorter than 24 characters. It is a bearer credential ' +
+      'with no expiry and no revocation; generate one with ' +
+      '`openssl rand -base64 32`, or unset it and use a personal access token.');
+  }
+}
 
 // Unset means no browser may call this API. See kernel/cors.ts: a localhost
 // default would be a production hole the first time someone forgot the variable.

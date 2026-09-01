@@ -18,7 +18,7 @@ const API = `http://127.0.0.1:${process.env.PORT ?? 8099}`;
 const PROM = `http://127.0.0.1:${process.env.PROMETHEUS_PORT ?? 9090}`;
 const LOKI = `http://127.0.0.1:${process.env.LOKI_PORT ?? 3100}`;
 const GRAFANA = `http://127.0.0.1:${process.env.GRAFANA_PORT ?? 3001}`;
-const TOKEN = process.env.CB_STATIC_TOKEN ?? 'dev-token';
+const TOKEN = process.env.CB_STATIC_TOKEN ?? 'observability-harness-token-long-enough';
 const COUNT = Number(process.env.CB_OBS_COUNT ?? 20);
 
 const pool = new Pool({

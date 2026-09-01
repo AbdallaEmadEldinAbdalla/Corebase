@@ -39,6 +39,7 @@ beforeAll(async () => {
       auth: {
         pool, users,
         loginLimiter: createMemoryRateLimiter({ limit: 500, windowSeconds: 60 }),
+        signupLimiter: createMemoryRateLimiter({ limit: 500, windowSeconds: 60 }),
         secureCookies: false, ...principals,
       },
       orgs: { orgs, users, ...principals },

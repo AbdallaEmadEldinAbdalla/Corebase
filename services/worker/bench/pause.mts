@@ -23,7 +23,7 @@ import { appDatabaseUrl } from './staging-env.mts';
 const ROOT = resolve(import.meta.dirname, '../../..');
 const CYCLES = Number(process.env.CB_PB_CYCLES ?? 20);
 const PORT = Number(process.env.CB_PB_API_PORT ?? 8097);
-const TOKEN = 'pb-token';
+const TOKEN = 'pb-token-harness-token-long-enough-for-the-boot-check';
 const BUDGET_MS = Number(process.env.CB_PB_BUDGET_MS ?? 60_000);
 
 const env = {

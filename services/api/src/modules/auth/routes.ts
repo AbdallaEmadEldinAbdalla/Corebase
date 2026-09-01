@@ -52,6 +52,9 @@ export interface AuthDeps extends PrincipalDeps {
   sessions: SessionStore;
   tokens: TokenStore;
   loginLimiter: RateLimiter;
+  /** Separate budget from login: one protects an account, the other protects the
+   *  node's memory. Sharing a counter would let failed logins exhaust signup. */
+  signupLimiter: RateLimiter;
   /** False only for plain-HTTP local development. */
   secureCookies: boolean;
 }
@@ -80,6 +83,21 @@ export function registerAuth(app: FastifyInstance, deps: AuthDeps) {
     const body = parse(SignupRequest, req.body);
     const requestId = requestIdOf(reply, req.id);
     const email = body.email.trim().toLowerCase();
+
+    // Rate limited for a reason specific to how we hash passwords. scrypt at
+    // N=2^16, r=8 costs **64 MiB of memory per call** (D-211), and signup is the
+    // one unauthenticated endpoint that performs one. Twenty concurrent signups
+    // is ~1.3 GiB — an availability hole reachable by anyone with a socket, and
+    // considerably cheaper for an attacker than for us.
+    //
+    // D-211's own rationale worried about exactly this ("a memory spike that can
+    // become an outage") and then only login was limited. Per address rather than
+    // per email, because the email is attacker-chosen and never repeats.
+    const hit = await deps.signupLimiter.hit(rateLimitKey('signup-ip', req.ip ?? 'unknown'));
+    if (!hit.allowed) {
+      throw new ApiError(429, ERROR_CODES.VALIDATION_FAILED,
+        `Too many sign-ups from this address. Try again in ${hit.retryAfterSeconds}s.`);
+    }
 
     try {
       const user = await deps.users.signup({

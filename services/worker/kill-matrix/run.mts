@@ -32,7 +32,7 @@ import { appDatabaseUrl, ownerDatabaseUrl } from '../bench/staging-env.mts';
 
 const ROOT = resolve(import.meta.dirname, '../../..');
 const PORT = Number(process.env.CB_KM_API_PORT ?? 8097);
-const TOKEN = 'km-token';
+const TOKEN = 'km-token-harness-token-long-enough-for-the-boot-check';
 const CONVERGE_BUDGET_MS = Number(process.env.CB_KM_CONVERGE_MS ?? 120_000);
 const CERT_DIR = process.env.CB_DOCKER_CERT_DIR ?? join(ROOT, 'infra/docker/staging/certs');
 const DOCKER_HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
