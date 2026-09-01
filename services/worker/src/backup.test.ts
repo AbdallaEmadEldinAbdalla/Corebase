@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   renderPgbackrestConf, repoTargetFromEnv, repoPathFor, STANZA,
-  PLAN_RETENTION_FULL, PLAN_ARCHIVE_TIMEOUT, isLockContention, withLockRetry,
+  PLAN_RETENTION_FULL, PLAN_ARCHIVE_TIMEOUT, isLockContention, withLockRetry, scheduleFor,
   pgbackrestFailure, type RepoTarget,
 } from './backup.ts';
 
@@ -75,12 +75,34 @@ describe('the rendered config', () => {
     expect(conf).toContain('process-max=2');
   });
 
-  it('sets retention from the plan, with the free tier at a 7-day window', () => {
+  it('sets retention from the plan, in DAYS, with the free tier at a 7-day window', () => {
     expect(renderPgbackrestConf(base)).toContain('repo1-retention-full=7');
     expect(renderPgbackrestConf({ ...base, plan: 'pro' })).toContain('repo1-retention-full=35');
     // Pro's 35 against a 30-day PITR window is deliberate slack: a day-30 target
     // needs a base backup *older* than it to replay from.
     expect(PLAN_RETENTION_FULL['pro']!).toBeGreaterThan(30);
+  });
+
+  it('expires by time, not by count — the two only coincide on Free', () => {
+    // This was `count`, and the bug was invisible because every project is Free,
+    // where a nightly full makes "7 fulls" and "7 days" identical. On Pro the
+    // fulls are weekly, so count=35 keeps about eight months of them against a
+    // 30-day promise: eight times the storage the plan is priced on.
+    //
+    // Time also carries a guarantee count cannot — pgBackRest expires a full older
+    // than the window only while another at least that old remains, so a base
+    // always exists *before* the oldest restorable point.
+    expect(conf).toContain('repo1-retention-full-type=time');
+    expect(conf).not.toContain('repo1-retention-full-type=count');
+  });
+
+  it('schedules fulls nightly on Free and weekly with incrementals on paid plans', () => {
+    expect(scheduleFor('free')).toEqual({ fullEveryDays: 1, incrEveryDays: 0 });
+    expect(scheduleFor('pro')).toEqual({ fullEveryDays: 7, incrEveryDays: 1 });
+    // Fulls-only on Free leaves no incremental chain to verify: a restore is one
+    // link, so no middle link can be the broken thing.
+    expect(scheduleFor('free').incrEveryDays).toBe(0);
+    expect(scheduleFor('invented')).toEqual(scheduleFor('free'));
   });
 
   it('falls back to the strictest retention for an unknown plan', () => {

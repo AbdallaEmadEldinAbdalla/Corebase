@@ -76,13 +76,54 @@ export interface PgbackrestResult { exitCode: number | null; stdout: string; std
 /** Where in the bucket a project's repo lives. Prefix isolation is the boundary. */
 export const repoPathFor = (projectId: string) => `/projects/${projectId}`;
 
-/** Retention in full backups, by plan (backups §3). */
+/**
+ * Retention in **days**, by plan (backups §3) — a time policy, not a count.
+ *
+ * This was `count` and that was wrong. The two coincide on Free, where a nightly
+ * full makes "7 fulls" and "7 days" the same thing, which is exactly why the error
+ * was invisible: every project in the fleet is Free. On Pro the fulls are *weekly*,
+ * so `count=35` keeps thirty-five weekly fulls — about eight months of them —
+ * against a 30-day PITR promise. Roughly eight times the storage the plan is
+ * priced on, discovered by nobody until the bill.
+ *
+ * Time also gives the guarantee the count cannot. pgBackRest expires a full older
+ * than the window only if another backup at least that old remains, so there is
+ * always a base older than the oldest restorable point. That is what the "slack" in
+ * Pro's 35-against-30 is for: a day-30 target needs a base *before* it to replay
+ * from, and a policy that expired the last such base would leave the window
+ * nominally open and practically unreachable.
+ */
 export const PLAN_RETENTION_FULL: Record<string, number> = {
-  free: 7,       // 7 daily fulls = a 7-day PITR window
-  pro: 35,       // 5 weekly fulls + slack, so day-30 PITR always has an older base
-  team: 98,
+  free: 7,       // 7-day PITR window
+  pro: 35,       // 30-day window + slack
+  team: 98,      // 90-day window + slack
   enterprise: 98,
 };
+
+/**
+ * How often each plan takes a base backup, and whether it takes incrementals
+ * between them (backups §2).
+ *
+ * Fulls-only on Free is not laziness: at a ≤500 MB cap a compressed full is
+ * trivial, and it leaves no incremental chain to verify — a restore is one link,
+ * so there is no way for a middle link to be the thing that is broken.
+ */
+export interface BackupSchedule {
+  /** Days between full backups. */
+  fullEveryDays: number;
+  /** Days between backups of any kind; 0 means "only fulls". */
+  incrEveryDays: number;
+}
+
+export const PLAN_SCHEDULE: Record<string, BackupSchedule> = {
+  free: { fullEveryDays: 1, incrEveryDays: 0 },
+  pro: { fullEveryDays: 7, incrEveryDays: 1 },
+  team: { fullEveryDays: 7, incrEveryDays: 1 },
+  enterprise: { fullEveryDays: 7, incrEveryDays: 1 },
+};
+
+export const scheduleFor = (plan: string): BackupSchedule =>
+  PLAN_SCHEDULE[plan] ?? PLAN_SCHEDULE['free']!;
 
 /** Seconds between forced WAL switches — the RPO floor (backups §1). */
 export const PLAN_ARCHIVE_TIMEOUT: Record<string, number> = {
@@ -123,7 +164,8 @@ export function renderPgbackrestConf(a: RenderArgs): string {
     `repo1-path=${repoPathFor(a.projectId)}`,
     'repo1-cipher-type=aes-256-cbc',
     `repo1-cipher-pass=${a.cipherPass}`,
-    'repo1-retention-full-type=count',
+    // Days, not a count of backups — see PLAN_RETENTION_FULL.
+    'repo1-retention-full-type=time',
     `repo1-retention-full=${retention}`,
     'compress-type=zst',
     'compress-level=3',
@@ -271,6 +313,15 @@ export async function check(
   return { ok: r.exitCode === 0, output: (r.stdout + r.stderr).trim() };
 }
 
+export interface BackupEntry {
+  label: string;
+  type: string;
+  /** Bytes this backup occupies in the repo. */
+  repoBytes: number;
+  walStart?: string;
+  walStop?: string;
+}
+
 export interface BackupInfo {
   /** Backup labels present in the repo, oldest first. */
   labels: string[];
@@ -278,6 +329,8 @@ export interface BackupInfo {
   repoBytes: number;
   /** pgBackRest's own view of whether the stanza is usable. */
   status: string;
+  /** Per-backup detail — what `backup_runs` records against a completed run. */
+  backups: BackupEntry[];
 }
 
 /**
@@ -296,7 +349,12 @@ export async function info(docker: Docker, container: string): Promise<BackupInf
   const parsed = JSON.parse(r.stdout) as Array<{
     name: string;
     status?: { message?: string };
-    backup?: Array<{ label: string; info?: { repository?: { delta?: number; size?: number } } }>;
+    backup?: Array<{
+      label: string;
+      type?: string;
+      archive?: { start?: string; stop?: string };
+      info?: { repository?: { delta?: number; size?: number } };
+    }>;
   }>;
   const stanza = parsed.find((p) => p.name === STANZA) ?? parsed[0];
   const backups = stanza?.backup ?? [];
@@ -304,6 +362,13 @@ export async function info(docker: Docker, container: string): Promise<BackupInf
     labels: backups.map((b) => b.label),
     repoBytes: backups.reduce((a, b) => a + (b.info?.repository?.size ?? 0), 0),
     status: stanza?.status?.message ?? 'unknown',
+    backups: backups.map((b) => ({
+      label: b.label,
+      type: b.type ?? 'unknown',
+      repoBytes: b.info?.repository?.size ?? 0,
+      ...(b.archive?.start ? { walStart: b.archive.start } : {}),
+      ...(b.archive?.stop ? { walStop: b.archive.stop } : {}),
+    })),
   };
 }
 
