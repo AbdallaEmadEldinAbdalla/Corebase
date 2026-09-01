@@ -355,6 +355,74 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
     return reply.header('cache-control', 'public, max-age=300').send({ keys: [toJwk(pem, kid)] });
   });
 
+  /**
+   * Pause and resume (P2c, D-008).
+   *
+   * Both are a **member's** business — the platform API lists their mutations as
+   * "create/pause/resume", and pausing destroys nothing. That is the whole reason
+   * `project.lifecycle` is a separate capability from `project.delete`.
+   *
+   * One handler for both, because the only differences are the capability-free
+   * direction and the words: writing it twice would be two places for the
+   * conflict-vs-not-found distinction to drift.
+   */
+  for (const kind of ['pause', 'resume'] as const) {
+    app.post(`/v1/projects/:ref/${kind}`, async (req, reply) => {
+      await requireAuth(req);
+      const { ref } = req.params as { ref: string };
+      const requestId = String(reply.getHeader('x-request-id') ?? req.id);
+
+      let actor: Actor = actorFor(req as never, requestId);
+      if (deps.orgs && deps.principals) {
+        const project = await deps.store.getProject(ref);
+        if (!project) throw ApiError.notFound('Project');
+        const scoped = await scope(req, encodeId('organization', project.organization_id));
+        if (scoped) {
+          require_(scoped.role, 'project.lifecycle');
+          actor = { type: 'user', userId: scoped.userId, ip: req.ip ?? null, requestId };
+        }
+      }
+
+      if (!deps.store.requestLifecycle) {
+        // The memory store does not implement it. Saying so beats a 500 that looks
+        // like the project is broken.
+        throw new ApiError(501, ERROR_CODES.INTERNAL,
+          'This deployment cannot pause or resume projects.');
+      }
+      const result = await deps.store.requestLifecycle(ref, kind, actor);
+      if (!result) throw ApiError.notFound('Project');
+
+      if ('conflict' in result) {
+        // 409 and the current state, not 404: a project that is already paused
+        // exists, and telling the caller otherwise sends them looking for a bug
+        // that is not there. `resume` on a ready project lands here too, which is
+        // the honest answer for an idempotent-looking call that is actually a
+        // no-op — the dashboard's auto-resume (D-131) reads this and moves on.
+        throw new ApiError(409, ERROR_CODES.VALIDATION_FAILED,
+          `This project is ${result.conflict}, so it cannot be ${kind === 'pause' ? 'paused' : 'resumed'}.`);
+      }
+
+      const { project, job, alreadyRequested } = result;
+      if (!alreadyRequested && deps.enqueue) {
+        try {
+          await deps.enqueue({
+            job_row_id: job.id, idempotency_key: job.idempotency_key,
+            job_type: job.kind, project_id: project.id,
+          });
+        } catch (err) {
+          // Two-phase enqueue (D-067): the row is the job's existence and the
+          // sweeper delivers it. A failed enqueue is not a failed request.
+          req.log.warn({ err, project: project.ref }, 'enqueue failed; sweeper will recover');
+          deps.onEnqueueError?.(err as Error);
+        }
+      }
+      return reply.status(202).send({
+        project: serializeProject(project),
+        job: { id: encodeId('job', job.id), type: job.kind, state: job.state },
+      });
+    });
+  }
+
   app.delete('/v1/projects/:ref', async (req, reply) => {
     await requireAuth(req);
     const { ref } = req.params as { ref: string };

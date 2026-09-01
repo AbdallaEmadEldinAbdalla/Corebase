@@ -168,6 +168,10 @@ describe('P1b — the guard that keeps the exit criterion true', () => {
   const AUDITED = new Set([
     'POST /v1/projects',
     'DELETE /v1/projects/:ref',
+    // P2c: both audit inside requestLifecycle, in the same transaction as the
+    // status change — `project.pause_requested` / `project.resume_requested`.
+    'POST /v1/projects/:ref/pause',
+    'POST /v1/projects/:ref/resume',
     'POST /v1/auth/signup',
     'POST /v1/auth/login',
     'POST /v1/auth/logout',

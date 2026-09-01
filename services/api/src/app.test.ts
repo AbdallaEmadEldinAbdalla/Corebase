@@ -122,17 +122,24 @@ describe('DELETE /v1/projects/:ref', () => {
 });
 
 describe('framework-level rejections keep their status', () => {
-  it('an empty body under a JSON content-type is a 400, not a 500', async () => {
-    // Some HTTP clients set content-type globally, so a bodyless DELETE arrives
-    // claiming to carry JSON. Answering 500 tells the caller our server is
-    // broken and puts their typo in our server-error alert.
+  it('an empty body under a JSON content-type is not an error at all', async () => {
+    // This assertion used to expect a 400, which was D-198 making the best of a
+    // framework rejection: Fastify answers "Body cannot be empty when
+    // content-type is set to 'application/json'". P2c went one step further and
+    // removed the rejection, because it was never the client's mistake.
+    //
+    // Some HTTP clients set a JSON content-type globally, and several endpoints
+    // legitimately take no body — `POST /v1/projects/:ref/pause` is a complete
+    // request with nothing to say. An empty body is now parsed as `{}`, so the
+    // route runs and answers on its own terms: 404 here, because this project
+    // does not exist. Routes that need fields still reject `{}` through their
+    // schema, naming the missing field, which is a better message than this was.
     const res = await app().inject({
       method: 'DELETE', url: '/v1/projects/whatever',
       headers: { ...auth, 'content-type': 'application/json' },
     });
-    expect(res.statusCode).toBe(400);
-    expect(res.json().error.code).toBe('VALIDATION_FAILED');
-    expect(res.json().error.message).toMatch(/Body cannot be empty/);
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error.code).toBe('PROJECT_NOT_FOUND');
   });
 
   it('malformed JSON is a 400, not a 500', async () => {

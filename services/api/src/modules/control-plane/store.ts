@@ -89,6 +89,19 @@ export interface ControlPlaneStore {
   requestDelete(ref: string, actor?: Actor): Promise<
     { project: Project; job: JobRow; alreadyRequested: boolean } | undefined>;
   /**
+   * Pause or resume (P2c, D-008).
+   *
+   * Three outcomes rather than two, because "this project is in the wrong state"
+   * is not the same answer as "no such project": `undefined` is not found, a
+   * `conflict` carries the state that refused, and otherwise the job is returned.
+   * Collapsing the middle case into a 404 would tell a caller their project does
+   * not exist when it is merely already paused.
+   */
+  requestLifecycle?(ref: string, kind: 'pause' | 'resume', actor?: Actor): Promise<
+    | { project: Project; job: JobRow; alreadyRequested: boolean }
+    | { project: Project; conflict: string }
+    | undefined>;
+  /**
    * A project with this name in this organization, if any.
    *
    * Org-scoped, not global. Before P1d there was one implicit org so the

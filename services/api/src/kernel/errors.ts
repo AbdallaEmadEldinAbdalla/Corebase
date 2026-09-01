@@ -32,7 +32,39 @@ export class ApiError extends Error {
  * including errors, which is the case that actually matters for support (D-032).
  * Internal messages are never leaked to the client (proposal §105).
  */
+/**
+ * Treat an empty body under a JSON content-type as `{}`.
+ *
+ * Fastify rejects it with "Body cannot be empty when content-type is set to
+ * 'application/json'" — a framework 400 that blames the client for our contract.
+ * It bites exactly the endpoints that *take* no body: `POST /v1/projects/:ref/pause`
+ * and `/resume` are complete requests with nothing to say, and every HTTP client
+ * sets a JSON content-type by default. `curl -X POST -H 'content-type:
+ * application/json'` is what a person types.
+ *
+ * This is the same lesson as D-198 one layer up: the client's request was fine and
+ * the error was ours. Routes that genuinely need fields are unaffected — their zod
+ * schema rejects `{}` and names the missing field, which is a better message than
+ * the one this replaces.
+ */
+function acceptEmptyJsonBody(app: FastifyInstance) {
+  app.addContentTypeParser('application/json', { parseAs: 'string' },
+    (_req, body: string, done) => {
+      if (body === undefined || body === null || body.trim() === '') {
+        done(null, {});
+        return;
+      }
+      try { done(null, JSON.parse(body)); }
+      catch (err) {
+        // Keep Fastify's own status so malformed JSON stays a 400, not a 500.
+        (err as Error & { statusCode?: number }).statusCode = 400;
+        done(err as Error);
+      }
+    });
+}
+
 export function registerErrorHandling(app: FastifyInstance) {
+  acceptEmptyJsonBody(app);
   app.addHook('onRequest', async (req, reply) => {
     const incoming = req.headers['x-request-id'];
     const id = typeof incoming === 'string' && incoming.length <= 128 ? incoming : req.id;

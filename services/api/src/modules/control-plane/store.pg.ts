@@ -201,6 +201,88 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
       return { project, database };
     },
 
+    /**
+     * Pause or resume (P2c, D-008).
+     *
+     * The idempotency key is where this differs from a delete, and it matters. A
+     * project is deleted once, so `delete_<id>` is a permanent key. A project is
+     * paused and resumed many times — fifty in a row, per Phase 2's exit criterion
+     * — so a permanent key would make the second cycle a silent no-op that returns
+     * the first cycle's job.
+     *
+     * So the dedupe is on *in-flight* work rather than forever: an unfinished job
+     * of the same kind for this project is returned as-is, and otherwise a new one
+     * is inserted under a key numbered by how many have come before. Concurrent
+     * requests still collapse — the row lock serialises them and the loser sees the
+     * winner's job — while a genuine second cycle gets a genuine second job.
+     */
+    async requestLifecycle(ref, kind, actor) {
+      const client: PoolClient = await pool.connect();
+      const jobType = kind === 'pause' ? 'pause_project' : 'resume_project';
+      // Pausing is only meaningful for a running project; resuming only for a
+      // paused one. Anything else is refused by name so the caller learns why.
+      const from = kind === 'pause' ? ['ready'] : ['paused'];
+      const to = kind === 'pause' ? 'pausing' : 'resuming';
+      try {
+        await client.query('BEGIN');
+        const found = await client.query<ProjectRowDb>(
+          `SELECT ${PROJECT_COLUMNS.replace(/p\./g, '')} FROM projects
+            WHERE ref = $1 AND status <> 'deleted' FOR UPDATE`, [ref]);
+        const row = found.rows[0];
+        if (!row) { await client.query('ROLLBACK'); return undefined; }
+
+        // Already in the transitional state, or already where the caller wants it:
+        // return the in-flight job rather than starting a second one.
+        const inflight = await client.query(
+          `SELECT id, job_type, project_id, idempotency_key, state::text AS state
+             FROM provisioning_jobs
+            WHERE project_id = $1 AND job_type = $2
+              AND state NOT IN ('succeeded', 'failed', 'dead_letter')
+            ORDER BY created_at DESC LIMIT 1`, [row.id, jobType]);
+        if (inflight.rows[0]) {
+          await client.query('COMMIT');
+          return {
+            project: toProject(row), job: jobFromDb(inflight.rows[0] as never),
+            alreadyRequested: true,
+          };
+        }
+
+        if (!from.includes(row.status)) {
+          await client.query('ROLLBACK');
+          return { conflict: row.status, project: toProject(row) };
+        }
+
+        const seq = await client.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM provisioning_jobs
+            WHERE project_id = $1 AND job_type = $2`, [row.id, jobType]);
+        const key = `${kind}_${row.id}_${(seq.rows[0]?.n ?? 0) + 1}`;
+
+        const updated = await client.query<ProjectRowDb>(
+          `UPDATE projects SET status = $2, updated_at = now() WHERE ref = $1
+        RETURNING ${PROJECT_COLUMNS.replace(/p\./g, '')}`, [ref, to]);
+        const job = await client.query(
+          `INSERT INTO provisioning_jobs (project_id, job_type, idempotency_key, payload, state)
+           VALUES ($1, $2, $3, $4::jsonb, 'pending')
+           RETURNING id, job_type, project_id, idempotency_key, state::text AS state`,
+          [row.id, jobType, key, JSON.stringify({ project_id: row.id, ref })]);
+        await writeAudit(client, actor ?? SYSTEM, {
+          action: kind === 'pause' ? 'project.pause_requested' : 'project.resume_requested',
+          resourceType: 'project', resourceId: ref,
+          organizationId: row.organization_id, projectId: row.id,
+          metadata: { previous_status: row.status },
+        });
+        await client.query('COMMIT');
+        return {
+          project: toProject(updated.rows[0]!), job: jobFromDb(job.rows[0] as never),
+          alreadyRequested: false,
+        };
+      } catch (err) {
+        await client.query('ROLLBACK'); throw err;
+      } finally {
+        client.release();
+      }
+    },
+
     async requestDelete(ref, actor) {
       const client: PoolClient = await pool.connect();
       try {
