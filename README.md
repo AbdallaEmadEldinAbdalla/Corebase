@@ -34,6 +34,10 @@ It is built on the design system that already existed in `design-exports/` rathe
 
 **How the UI stays consistent.** The first version of this shell was right in every colour and wrong in every mechanic, so the fix was not nicer screens but a written interaction contract: [docs/09-dashboard/05-ux-standards.md](docs/09-dashboard/05-ux-standards.md), ending in a 20-question gate that **runs on every UI change** (D-224) as the `ux-review` role in [.claude/skills/](.claude/skills/ux-review/SKILL.md). Its first run found two real failures in the code written to satisfy it — the palette was missing two actions a row menu already had, and the project list printed "Showing 20 of 20" while hiding a second page.
 
+**Projects are packed onto nodes by how full those nodes actually are.** Placement used to order candidate nodes by absolute megabytes reserved, which sorts a small nearly-full node ahead of a large nearly-empty one — so as soon as a fleet has nodes of different sizes, every new project goes to the fullest one. It also considered a single candidate, so a booking that did not fit that node was refused while the region had room: measured on the old code, 20 concurrent provisions against two nodes with 18 free slots placed 13. Nodes are now ranked by fill ratio across both RAM and disk, and a provision that loses a race for the last slot tries the next node instead of failing.
+
+**Every axis a tenant can saturate has a wall, and the walls are checked against the kernel.** Memory, CPU, processes and disk I/O, read back from `/sys/fs/cgroup` inside the container rather than from `docker inspect` — which only ever echoes what we asked for. That distinction was not academic: setting the disk-I/O weight our own design document calls for made *every container on the node fail to start*, because this kernel has no `io.weight` at all, and no inspect-based test could have seen it.
+
 **A project that fills its disk goes read-only and recovers.** The enforcement ladder warns at 80%, escalates at 90%, and makes the database soft read-only at 95% — reads keep working, writes fail with an error naming the cause, and freeing space lifts it automatically. Building it turned up that our own documentation gave the wrong recovery command: `SET transaction_read_only = off` does nothing under autocommit, so a customer following the docs would have concluded they were locked out of the only action that fixes it. The same mechanism had made the ladder a one-way door, because `ALTER DATABASE` is itself a write.
 
 **Credentials rotate without breaking anything.** One `ALTER ROLE` replaces a project's database password: applications already connected keep working (Postgres only checks the password when a connection opens), a new connection with the old password is refused immediately, and **the connection pooler needs no reconfiguration at all** — it reads `pg_shadow` live, which is the reason `auth_query` was chosen over a credentials file. There is an opt-in flag to disconnect everything, documented as compromise response, because rotating alone does nothing about someone already holding a connection.
@@ -80,7 +84,7 @@ There is no seeded password anywhere, so create an account on `/signup`; a new a
 
 The demo script creates a project, waits for it, connects to the database it made with the credentials the API handed back, runs real SQL, and deletes it — using only `curl` and `psql`, which is exactly what a customer has.
 
-The full suite is **437 tests**, integration included; they need the staging stack above and **fail rather than skip** without it:
+The full suite is **487 tests**, integration included; they need the staging stack above and **fail rather than skip** without it:
 
 ```bash
 pnpm test

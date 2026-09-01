@@ -104,7 +104,8 @@ One node hosts ~150+ tenants; one greedy tenant must not be able to hurt the res
 |---|---|---|
 | Memory | hard limit per container (`mem_limit`), plan-sized; OOM kills the *tenant's* Postgres, not the node | cgroup v2 `memory.max` via Docker |
 | CPU | proportional shares + optional hard quota on free plan | cgroup v2 `cpu.weight` / `cpu.max` |
-| Disk IO | per-container IO weight; free plan capped IOPS/BPS | cgroup v2 `io.weight` / `io.max` on the volume's device |
+| Processes | hard pid ceiling per container: 256 project, 64 pooler (D-256) | cgroup v2 `pids.max` |
+| Disk IO | per-container IO weight **where the kernel has one** (D-255); free plan capped IOPS/BPS when the node's data device is named | cgroup v2 `io.weight` (BFQ or blk-iocost only — probed, not assumed) / `io.max` on the volume's device |
 | Disk space | **per-project volume with XFS project quota** = plan disk cap × 1.2 (D-070/D-073 — the 20% headroom is the delete-to-recover buffer); full disk stops one project, and WAL growth cannot eat the node | XFS prjquota on `/data/projects/<ref>` |
 | Connections | PgBouncer `max_client_conn` + `default_pool_size` per plan; Postgres `max_connections` kept small since the pooler multiplexes (D-015) | PgBouncer/Postgres config at provision |
 | API request rate | layered IP → key → project buckets at the gateway (D-033) | Redis sliding window |

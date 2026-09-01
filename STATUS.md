@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-08-31 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2: P2a–P2e done**
+**Last updated:** 2026-09-01 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2: P2a–P2f done**
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -250,8 +250,8 @@ boot. Don't use them.
 
 ## 4. What is built, in detail
 
-Test counts are from `pnpm test` and are all currently green: **437 tests**, of
-which **240** need no infrastructure (`pnpm test:unit`).
+Test counts are from `pnpm test` and are all currently green: **487 tests**, of
+which **270** need no infrastructure (`pnpm test:unit`).
 
 Every task below has a command that proves it; they are listed with the task.
 
@@ -1188,6 +1188,83 @@ Docker-in-Docker on overlay and has no way to enforce a hard per-project cap. Wh
 recovery, disk booking so placement cannot oversubscribe, and an 85% node-volume
 cordon. The hard cap is recorded as unverifiable locally rather than claimed.
 
+### P2f — bin-packing, and the walls checked against the kernel · done · worker suite 173 → 223
+
+Two halves of the same scope line: where a project gets placed, and what stops it
+hurting its neighbours once it is there.
+
+**Bin-packing.** Placement ordered candidates by `ram_reserved_mb ASC LIMIT 1`.
+That reads as "emptiest node first" and is not — it is absolute megabytes, so a
+4 GB node holding 1 GB sorts ahead of a 64 GB node holding 2 GB, and the packer
+hands projects to the *fullest* node in the fleet as soon as nodes differ in size.
+Nothing could show it: the only fleet that has existed here is one node.
+
+It also took **one** candidate, so a booking that did not fit the emptiest node
+failed with "no capacity" while the region had room. Quantified by reverting the
+change: 20 concurrent provisions against two nodes with 18 free slots placed
+**13**. Five projects refused with capacity sitting idle, and the fuller the
+fleet, the likelier that gets.
+
+Now every node that fits *both* axes is ranked by fill ratio — the worse of RAM
+and disk against the 85% stop (**D-252**) — ties broken on hostname so the order
+is total. The list is also what makes the locking right: each candidate is locked
+and re-read before the booking is committed to, because under READ COMMITTED
+`LIMIT 1 FOR UPDATE` can hand back a row as it looked before a rival's booking
+(**D-253**). A provision that loses that race tries the next node instead of
+failing.
+
+Placement now refuses a node nothing has been heard from, and says so rather than
+"no capacity" (**D-254**). `status` stays `active` when a worker dies, so a project
+sent there does not fail — it sits in `creating` until the saga times out, which
+reads as "provisioning is slow" and points at nothing.
+
+**The walls.** D-055 asks for memory, CPU, IO, disk quota, connection caps,
+`statement_timeout` and rate buckets. Memory and CPU were set from day one; this
+adds process count (**D-256**) and disk I/O, and changes how all of them are
+verified (**D-257**).
+
+The I/O weight is the finding. Adding `BlkioWeight` — literally what the doc asks
+for — made **every container on the node fail to start**:
+
+```
+openat2 /sys/fs/cgroup/docker/<id>/io.weight: no such file or directory
+```
+
+`io.weight` exists only on a kernel with a weight-capable I/O policy (BFQ, or
+blk-iocost). This one has neither, so the io controller offers `io.max` and
+`io.stat` and nothing to weight with — and runc turns the missing file into a hard
+failure rather than a warning. The wall meant to protect the neighbours took down
+the tenant. The engine cannot be asked either: on cgroup v2 `/info` has dropped
+its blkio fields and reports no warnings. So the node is probed once from inside a
+container, and every uncertain answer resolves to *unsupported* (**D-255**) —
+because a missing weight costs fairness on a busy disk while a weight the kernel
+cannot apply costs every provision on that node.
+
+The pid ceiling is not for Postgres, which forks politely. It is for whatever else
+gets to run inside the container — a `COPY … PROGRAM`, a compromised extension —
+since exhausting the *node's* pid space means no tenant's database can fork, and
+neither can the reconciler that would notice. Its cost is recorded rather than
+discovered later: a container pinned at its ceiling cannot be `exec`ed into, so an
+operator cannot get a shell into the container that most needs one.
+
+**Every limit is now read from `/sys/fs/cgroup` inside the container, never from
+`docker inspect`** (**D-257**). Inspect echoes the HostConfig we sent and cannot
+tell "applied" from "accepted and ignored" — which is exactly why the existing T5d
+limits test stayed green while the I/O weight was breaking every container on the
+node. Two assertions go past configuration into behaviour: `cpu.max` proven by a
+busy loop consuming ~1s of CPU in 2s of wall time instead of ~2s, and `pids.max`
+by the kernel refusing the fork.
+
+Two smaller things fell out. The engine reports a failed exec **on the exec's own
+output stream** with a 200, so a caller reading stdout gets `OCI runtime exec
+failed: … unable to spawn stage-1` where a value should be — this suite asserted a
+cgroup value against that sentence and reported it as a cgroup mismatch. An error
+arriving as data, the same shape as P2e's swallowed ladder transition; the client
+throws on it now. And the project image declares `VOLUME
+/var/lib/postgresql/data`, so every mount-less probe container leaked an anonymous
+volume that `v=0` keeps forever — caught by reconciliation two suites away,
+reporting each one correctly as disk with no owner (**D-258**).
+
 ### The P2 review — what a deep pass over everything found
 
 Asked to revisit the whole build, not a step of it. Eight findings, all fixed; the
@@ -1285,10 +1362,10 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-Sixty-eight decisions came out of running the thing rather than planning it —
-D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-251 from Phase 2.
+Seventy-five decisions came out of running the thing rather than planning it —
+D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-258 from Phase 2.
 Full text in the [decision log](docs/00-foundation/05-decision-log.md); the log holds
-D-001…D-251 and is binding when two documents disagree.
+D-001…D-258 and is binding when two documents disagree.
 
 | ID | What changed | Why it surfaced |
 |---|---|---|
@@ -1360,6 +1437,13 @@ D-001…D-251 and is binding when two documents disagree.
 | D-249 | Read-only is lifted with `SET default_transaction_read_only = off` as its own statement, by the customer *and* by the control plane | The doc's `SET transaction_read_only = off` does nothing under autocommit, and `ALTER DATABASE` being a write made the ladder a one-way door |
 | D-250 | Disk is booked at placement on the 85% ceiling, released only on purge | Booking RAM and ignoring disk fills a node with projects that have memory and nowhere to write; a paused project still holds its volume |
 | D-251 | Read-only engages at 95%, lifts below 90% | A project on the boundary would flap, and every flip is errors appearing and vanishing with no deploy |
+| D-252 | Bin-pack by fill *ratio* — worse of RAM and disk — over every node that fits, not one | Absolute megabytes sorts a small full node ahead of a large empty one; one candidate refuses provisions while the region has room (13 of 20 placed into 18 slots) |
+| D-253 | Lock and re-read each candidate before booking it; a lost race tries the next node | `LIMIT 1 FOR UPDATE` under READ COMMITTED returns the row as it was before a rival's booking |
+| D-254 | Refuse a stale-heartbeat node, and report staleness rather than "no capacity" | `status` stays active when a worker dies; the project hangs in `creating` and the error names nothing |
+| D-255 | Set `BlkioWeight` only where the kernel has `io.weight`, probed per node, defaulting to unsupported | Setting it on a kernel without BFQ/blk-iocost made every container fail to start; the engine cannot be asked on cgroup v2 |
+| D-256 | Hard pid ceiling per container: 256 project, 64 pooler | Exhausting the node's pid space stops every tenant's database and the reconciler; accepted cost is that a saturated container cannot be exec'd into |
+| D-257 | Verify limits by reading `/sys/fs/cgroup` in the container, never `docker inspect` | Inspect echoes our own request; it is why the T5d limits test stayed green while the I/O weight broke every container |
+| D-258 | `removeContainer` keeps anonymous volumes by default, deletes them only on explicit opt-in | `v=1` on a project would delete the customer's database; `v=0` on a mount-less probe leaks a volume reconciliation then reports as an orphan |
 
 ## 7. Measurements
 
@@ -1402,12 +1486,12 @@ enforces it (P1b), and CI runs both suites on every PR (P1f). The dashboard shel
 (P1g) covers login, signup, the org switcher, the projects grid, the create-project
 flow and a project overview.
 
-**Phase 2 is at P2e of seven planned steps**, with **exit criteria 2 and 4 met and
+**Phase 2 is at P2f of seven planned steps**, with **exit criteria 2 and 4 met and
 3 met apart from its hard backstop**. Done: the per-project network, PgBouncer with
-the two-URL contract, pause/resume with idle detection, credential rotation, and the
-disk ladder. Remaining: bin-packing placement, and the density measurement
-(criterion 1) — which D-209 already constrains, since this hardware cannot satisfy
-its conditions.
+the two-URL contract, pause/resume with idle detection, credential rotation, the
+disk ladder, and bin-packing placement with the full cgroup control set. Remaining:
+**P2g**, the density measurement (criterion 1) — which D-209 already constrains,
+since this hardware cannot satisfy its conditions.
 
 The measurement that would move the cost model most is the one Phase 1/2 makes
 possible:
@@ -1465,6 +1549,13 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
 - The dashboard has no pause/resume affordance yet and D-131's auto-resume-on-open
   is unimplemented, so a paused project renders as a badge. The endpoints now exist,
   which is what was missing.
+- **Proportional disk-I/O fairness is not in effect on this node.** The node's
+  kernel has no `io.weight` (no BFQ, no blk-iocost), so D-055's IO weight is
+  probed and omitted here rather than applied (D-255). The absolute half —
+  `io.max` per-device byte caps for the free tier — is enforceable on this kernel
+  but inert until an operator names the node's data device (`CB_IO_DEVICE`); no
+  device is configured in staging, so neither I/O control is currently live. What
+  is verified is that the spec and the probe agree, in both directions.
 - **The hard per-project disk quota is not implemented and cannot be verified here.**
   D-070 puts it on XFS project quotas, which need a real node with an XFS filesystem
   mounted `prjquota`; the substitute runs Docker-in-Docker on overlay. So criterion
@@ -1473,6 +1564,11 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   node cordon — is implemented and tested.
 - No email or dashboard banner at the 80% and 90% rungs. The ladder records the rung
   and audits nothing yet; notification is Phase 4's sender.
+- Placement is single-node in staging, so bin-packing across a real fleet is
+  proven only against **synthetic node rows** in the control plane. That is the
+  right level for the arithmetic and the locking — both are SQL — but nothing here
+  has watched a project land on a second physical node. OQ-150 owns the question of
+  how many staging nodes would make that meaningful.
 - The pooler's pool sizing is one profile for every plan. The doc's "larger plans
   scale `default_pool_size` and `max_connections` together" is a value change the
   entrypoint is structured for and nothing sets yet.
