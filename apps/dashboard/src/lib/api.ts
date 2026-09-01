@@ -257,6 +257,18 @@ export const api = {
     request<{ project: Project; database?: DatabaseInfo }>(
       `/v1/projects/${encodeURIComponent(ref)}?reveal=true`),
 
+  /**
+   * Replace the project's database credentials (P2d).
+   *
+   * `terminate` ends established sessions. Off by default because Postgres
+   * authenticates at connect time only, so a rotation is invisible to a running
+   * application — which is what makes it safe to do routinely.
+   */
+  rotateCredentials: (ref: string, terminate = false) =>
+    request<{ project: Project; job: { id: string; type: string; state: string }; effect: string }>(
+      `/v1/projects/${encodeURIComponent(ref)}/rotate-credentials`,
+      { method: 'POST', body: { terminate } }),
+
   projectKeys: (ref: string) =>
     request<{ api_keys: ApiKey[] }>(`/v1/projects/${encodeURIComponent(ref)}/keys`),
 

@@ -111,6 +111,25 @@ export function useCreateOrg() {
   });
 }
 
+/**
+ * Rotate a project's credentials.
+ *
+ * On success the cached credentials are *removed* rather than refetched. Refetching
+ * would reveal them again — a recorded act — for a page the user may not be looking
+ * at; removing means the next render of Connect asks, which is a reveal the user
+ * actually caused.
+ */
+export function useRotateCredentials(ref: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (terminate: boolean) => api.rotateCredentials(ref, terminate),
+    onSuccess: () => {
+      qc.removeQueries({ queryKey: [...keys.project(ref), 'credentials'] });
+      void qc.invalidateQueries({ queryKey: keys.project(ref) });
+    },
+  });
+}
+
 export function useCreateProject(orgId: string) {
   const qc = useQueryClient();
   return useMutation({

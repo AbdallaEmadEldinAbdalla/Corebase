@@ -172,6 +172,9 @@ describe('P1b — the guard that keeps the exit criterion true', () => {
     // status change — `project.pause_requested` / `project.resume_requested`.
     'POST /v1/projects/:ref/pause',
     'POST /v1/projects/:ref/resume',
+    // P2d: audits `project.credentials_rotation_requested` inside requestRotation,
+    // in the same transaction as the job insert.
+    'POST /v1/projects/:ref/rotate-credentials',
     'POST /v1/auth/signup',
     'POST /v1/auth/login',
     'POST /v1/auth/logout',

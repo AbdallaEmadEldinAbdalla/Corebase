@@ -201,6 +201,80 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
       return { project, database };
     },
 
+    /**
+     * Request a credential rotation (P2d).
+     *
+     * Not folded into `requestLifecycle`: pause and resume are state transitions
+     * with a `from` state to validate, and a rotation is valid from `ready` alone
+     * but carries a *payload* — the `terminate` flag — which none of the others do.
+     * One function serving both would be a switch on kind at every step.
+     *
+     * The key is numbered like pause/resume's rather than permanent, because a
+     * project's credentials are rotated many times over its life.
+     */
+    async requestRotation(ref, opts, actor) {
+      const client: PoolClient = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const found = await client.query<ProjectRowDb>(
+          `SELECT ${PROJECT_COLUMNS.replace(/p\./g, '')} FROM projects
+            WHERE ref = $1 AND status <> 'deleted' FOR UPDATE`, [ref]);
+        const row = found.rows[0];
+        if (!row) { await client.query('ROLLBACK'); return undefined; }
+
+        const inflight = await client.query(
+          `SELECT id, job_type, project_id, idempotency_key, state::text AS state
+             FROM provisioning_jobs
+            WHERE project_id = $1 AND job_type = 'rotate_credentials'
+              AND state NOT IN ('succeeded', 'failed', 'dead_letter')
+            ORDER BY created_at DESC LIMIT 1`, [row.id]);
+        if (inflight.rows[0]) {
+          await client.query('COMMIT');
+          return {
+            project: toProject(row), job: jobFromDb(inflight.rows[0] as never),
+            alreadyRequested: true,
+          };
+        }
+
+        // Only a running project. Rotating a paused one would store a password the
+        // database is not up to receive, and the apply step would fail — better to
+        // refuse with the state than to queue work that cannot succeed.
+        if (row.status !== 'ready') {
+          await client.query('ROLLBACK');
+          return { conflict: row.status, project: toProject(row) };
+        }
+
+        const seq = await client.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM provisioning_jobs
+            WHERE project_id = $1 AND job_type = 'rotate_credentials'`, [row.id]);
+        const key = `rotate_${row.id}_${(seq.rows[0]?.n ?? 0) + 1}`;
+
+        const job = await client.query(
+          `INSERT INTO provisioning_jobs (project_id, job_type, idempotency_key, payload, state)
+           VALUES ($1, 'rotate_credentials', $2, $3::jsonb, 'pending')
+           RETURNING id, job_type, project_id, idempotency_key, state::text AS state`,
+          [row.id, key, JSON.stringify({
+            project_id: row.id, ref, terminate: opts.terminate === true,
+          })]);
+        await writeAudit(client, actor ?? SYSTEM, {
+          action: 'project.credentials_rotation_requested',
+          resourceType: 'project', resourceId: ref,
+          organizationId: row.organization_id, projectId: row.id,
+          // Whether sessions were killed is the part an incident review asks about.
+          metadata: { terminate: opts.terminate === true },
+        });
+        await client.query('COMMIT');
+        return {
+          project: toProject(row), job: jobFromDb(job.rows[0] as never),
+          alreadyRequested: false,
+        };
+      } catch (err) {
+        await client.query('ROLLBACK'); throw err;
+      } finally {
+        client.release();
+      }
+    },
+
     async countProjectsInOrg(organizationId) {
       // `deleted` is the only status that has given its resources back; a
       // soft-deleted project still holds a volume and a port for the window.

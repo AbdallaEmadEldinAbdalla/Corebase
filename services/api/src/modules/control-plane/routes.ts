@@ -543,6 +543,76 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
     });
   }
 
+  /**
+   * Rotate the project's database credentials (P2d, credentials doc §4a).
+   *
+   * `secret.manage` — admin and above, not a member. That is the one place the
+   * capability matrix and this endpoint disagree with the reveal endpoint on
+   * purpose: reading your own credentials is using the product, and *replacing*
+   * them breaks every application currently holding the old ones. A member can be
+   * trusted with the first and should not be able to do the second to a colleague's
+   * running service by accident.
+   *
+   * `terminate` is opt-in and documented as compromise response. Postgres
+   * authenticates at connect time only, so a rotation is invisible to established
+   * sessions — which is what makes it safe to do routinely, and useless against
+   * someone already holding a connection with the leaked password.
+   */
+  app.post('/v1/projects/:ref/rotate-credentials', async (req, reply) => {
+    await requireAuth(req);
+    const { ref } = req.params as { ref: string };
+    const requestId = String(reply.getHeader('x-request-id') ?? req.id);
+    const body = (req.body ?? {}) as { terminate?: unknown };
+    if (body.terminate !== undefined && typeof body.terminate !== 'boolean') {
+      throw ApiError.validation('terminate must be a boolean.');
+    }
+
+    let actor: Actor = actorFor(req as never, requestId);
+    if (deps.orgs && deps.principals) {
+      const project = await deps.store.getProject(ref);
+      if (!project) throw ApiError.notFound('Project');
+      const scoped = await scope(req, encodeId('organization', project.organization_id));
+      if (scoped) {
+        require_(scoped.role, 'secret.manage');
+        actor = { type: 'user', userId: scoped.userId, ip: req.ip ?? null, requestId };
+      }
+    }
+
+    if (!deps.store.requestRotation) {
+      throw new ApiError(501, ERROR_CODES.INTERNAL,
+        'This deployment cannot rotate credentials.');
+    }
+    const result = await deps.store.requestRotation(
+      ref, { terminate: body.terminate === true }, actor);
+    if (!result) throw ApiError.notFound('Project');
+    if ('conflict' in result) {
+      throw new ApiError(409, ERROR_CODES.VALIDATION_FAILED,
+        `This project is ${result.conflict}. Credentials can only be rotated while it is ready.`);
+    }
+
+    const { project, job, alreadyRequested } = result;
+    if (!alreadyRequested && deps.enqueue) {
+      try {
+        await deps.enqueue({
+          job_row_id: job.id, idempotency_key: job.idempotency_key,
+          job_type: job.kind, project_id: project.id,
+        });
+      } catch (err) {
+        req.log.warn({ err, project: project.ref }, 'enqueue failed; sweeper will recover');
+        deps.onEnqueueError?.(err as Error);
+      }
+    }
+    return reply.status(202).send({
+      project: serializeProject(project),
+      job: { id: encodeId('job', job.id), type: job.kind, state: job.state },
+      // Said in the response, because it is the one thing a caller most needs to
+      // know and the one thing they cannot see: their running app keeps working.
+      effect: body.terminate === true
+        ? 'Established sessions will be terminated. Applications must reconnect with the new credentials.'
+        : 'Established sessions are unaffected. New connections need the new credentials.',
+    });
+  });
+
   app.delete('/v1/projects/:ref', async (req, reply) => {
     await requireAuth(req);
     const { ref } = req.params as { ref: string };

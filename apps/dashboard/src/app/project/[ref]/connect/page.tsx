@@ -4,6 +4,7 @@ import { use, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ErrorSurface } from '../../../../components/ErrorSurface.tsx';
 import { CopyButton } from '../../../../components/Copy.tsx';
+import { RotateCredentials } from '../../../../components/RotateCredentials.tsx';
 import { useProjectCredentials } from '../../../../lib/queries.ts';
 import type { DatabaseInfo } from '../../../../lib/api.ts';
 
@@ -65,6 +66,9 @@ function Connect({ projectRef }: { projectRef: string }) {
             Credentials for <span className="mono">{p?.name ?? projectRef}</span>. Anyone
             holding these has full access to the database.
           </p>
+        </div>
+        <div className="head__actions">
+          <RotateCredentials projectRef={projectRef} />
         </div>
       </div>
 

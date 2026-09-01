@@ -89,6 +89,20 @@ export interface ControlPlaneStore {
   requestDelete(ref: string, actor?: Actor): Promise<
     { project: Project; job: JobRow; alreadyRequested: boolean } | undefined>;
   /**
+   * Request a credential rotation (P2d, credentials doc §4a).
+   *
+   * Same three outcomes as `requestLifecycle`, and separate from it because a
+   * rotation carries a payload — `terminate` — that a state transition does not.
+   */
+  requestRotation?(
+    ref: string,
+    opts: { terminate?: boolean },
+    actor?: Actor,
+  ): Promise<
+    | { project: Project; job: JobRow; alreadyRequested: boolean }
+    | { project: Project; conflict: string }
+    | undefined>;
+  /**
    * Live projects in an organization, for the per-org ceiling.
    *
    * Counts everything that still holds resources on a node, including
