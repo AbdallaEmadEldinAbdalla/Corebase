@@ -94,6 +94,7 @@ const sagas = buildSagas({
   // drifts short quietly removes the customer's ability to undo a deletion.
   softDeleteWindow: process.env.CB_SOFT_DELETE_WINDOW ?? '7 days',
   requireFinalBackup: process.env.CB_REQUIRE_FINAL_BACKUP === 'true',
+  requireBackups: process.env.CB_REQUIRE_BACKUPS === 'true',
 });
 const runner = createRunner({
   repo, sagas,

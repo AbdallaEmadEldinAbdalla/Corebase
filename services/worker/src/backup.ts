@@ -1,0 +1,327 @@
+import type { Docker } from './docker.ts';
+
+/**
+ * pgBackRest per project (P3a) — config rendering and the commands the sagas run.
+ *
+ * The design is [backups & PITR](../../../docs/03-database-platform/05-backups-and-pitr.md):
+ * one stanza and one repo path per project (§1), repo encryption under a
+ * per-project cipher-pass (§6), and object storage as the only destination. The
+ * operating rule the whole phase hangs on is that document's first line: **a
+ * backup that has not been restore-tested is treated as not existing.** Nothing
+ * here claims a project is protected; it makes a repo that P3d and P3e can prove.
+ */
+
+/**
+ * Where the repo lives and how to reach it. One per fleet, not per project — the
+ * bucket and credentials are the node's, the *path* inside it is the project's.
+ */
+export interface RepoTarget {
+  /**
+   * Host **only** — no port. pgBackRest takes the port separately in
+   * `repo1-storage-port`, and putting `host:9000` in the endpoint while the port
+   * option said something else produced a 60-second connect timeout and exit 49,
+   * which reads exactly like an unreachable network.
+   */
+  endpoint: string;
+  /** Defaults to 443: pgBackRest speaks S3 over TLS and has no plain-HTTP mode. */
+  port: number;
+  bucket: string;
+  key: string;
+  secret: string;
+  region: string;
+  /** MinIO needs `path`; R2 accepts it. Host-style would need per-bucket DNS. */
+  uriStyle: 'path' | 'host';
+  /**
+   * Whether to verify the store's certificate. Off against the staging store,
+   * whose cert is self-signed — the protocol is still TLS either way, which is the
+   * part that is not negotiable.
+   */
+  verifyTls: boolean;
+}
+
+export function repoTargetFromEnv(env = process.env): RepoTarget | undefined {
+  const endpoint = env['CB_BACKUP_S3_ENDPOINT'];
+  const bucket = env['CB_BACKUP_S3_BUCKET'];
+  const key = env['CB_BACKUP_S3_KEY'];
+  const secret = env['CB_BACKUP_S3_SECRET'];
+  // All four or nothing. A partial configuration is how a fleet ends up with
+  // projects whose archiving has been failing since they were created, because
+  // `archive_command` retries forever and nothing else notices.
+  if (!endpoint || !bucket || !key || !secret) return undefined;
+  return {
+    endpoint, bucket, key, secret,
+    port: Number(env['CB_BACKUP_S3_PORT'] ?? 443),
+    region: env['CB_BACKUP_S3_REGION'] ?? 'auto',
+    uriStyle: env['CB_BACKUP_S3_URI_STYLE'] === 'host' ? 'host' : 'path',
+    verifyTls: env['CB_BACKUP_S3_VERIFY_TLS'] !== 'n',
+  };
+}
+
+/**
+ * The stanza name, the same for every project.
+ *
+ * Not `<project_id>` as the doc's example shows. `archive_command` lives in the
+ * fleet-wide `postgresql.base.conf` baked into the image, so a per-project stanza
+ * name would force a per-project Postgres config file — which is precisely the
+ * drift D-186 removed by ruling that the config carries only tuning. Isolation
+ * comes from `repo1-path`, which is per project and lives in the rendered
+ * pgbackrest.conf; two projects with a stanza called `main` cannot see each
+ * other's objects because they are looking at different prefixes with different
+ * cipher-passes.
+ */
+export const STANZA = 'main';
+
+export interface PgbackrestResult { exitCode: number | null; stdout: string; stderr: string }
+
+/** Where in the bucket a project's repo lives. Prefix isolation is the boundary. */
+export const repoPathFor = (projectId: string) => `/projects/${projectId}`;
+
+/** Retention in full backups, by plan (backups §3). */
+export const PLAN_RETENTION_FULL: Record<string, number> = {
+  free: 7,       // 7 daily fulls = a 7-day PITR window
+  pro: 35,       // 5 weekly fulls + slack, so day-30 PITR always has an older base
+  team: 98,
+  enterprise: 98,
+};
+
+/** Seconds between forced WAL switches — the RPO floor (backups §1). */
+export const PLAN_ARCHIVE_TIMEOUT: Record<string, number> = {
+  free: 300, pro: 60, team: 60, enterprise: 60,
+};
+
+export interface RenderArgs {
+  projectId: string;
+  plan: string;
+  cipherPass: string;
+  repo: RepoTarget;
+  /** PGDATA, which the container spec owns (D-186). */
+  pgPath?: string;
+}
+
+/**
+ * The per-project `pgbackrest.conf`.
+ *
+ * `archive-async=y` with the spool on the project's volume is deliberate: an
+ * async push returns to Postgres immediately and batches to the repo, and a
+ * runaway spool then counts against the tenant's disk quota rather than the
+ * node's free space (backups §1). `process-max=2` bounds a backup's parallelism
+ * so it cannot starve the neighbours it shares a node with.
+ */
+export function renderPgbackrestConf(a: RenderArgs): string {
+  const retention = PLAN_RETENTION_FULL[a.plan] ?? PLAN_RETENTION_FULL['free']!;
+  return [
+    '[global]',
+    'repo1-type=s3',
+    `repo1-s3-endpoint=${a.repo.endpoint}`,
+    `repo1-s3-bucket=${a.repo.bucket}`,
+    `repo1-s3-region=${a.repo.region}`,
+    `repo1-s3-key=${a.repo.key}`,
+    `repo1-s3-key-secret=${a.repo.secret}`,
+    `repo1-s3-uri-style=${a.repo.uriStyle}`,
+    `repo1-storage-port=${a.repo.port}`,
+    `repo1-storage-verify-tls=${a.repo.verifyTls ? 'y' : 'n'}`,
+    `repo1-path=${repoPathFor(a.projectId)}`,
+    'repo1-cipher-type=aes-256-cbc',
+    `repo1-cipher-pass=${a.cipherPass}`,
+    'repo1-retention-full-type=count',
+    `repo1-retention-full=${retention}`,
+    'compress-type=zst',
+    'compress-level=3',
+    'process-max=2',
+    'start-fast=y',
+    'archive-async=y',
+    'spool-path=/var/lib/postgresql/data/pgbackrest-spool',
+    'log-level-console=info',
+    'log-level-file=info',
+    'log-path=/var/log/pgbackrest',
+    '',
+    `[${STANZA}]`,
+    `pg1-path=${a.pgPath ?? '/var/lib/postgresql/data/pgdata'}`,
+    'pg1-port=5432',
+    'pg1-socket-path=/var/run/postgresql',
+    '',
+  ].join('\n');
+}
+
+/**
+ * Write the config into a running container.
+ *
+ * Base64 through a single `sh -c`, for the reason D-227 gave up on bind mounts and
+ * one more: the file carries the repo cipher-pass, and a config assembled by
+ * shell quoting is a config one character away from either breaking or leaking.
+ * Base64 has no shell-significant characters, so there is nothing to quote.
+ *
+ * `docker exec` rather than an env var at create time, because `docker inspect`
+ * shows a container's environment to anyone who can reach the Engine API — which
+ * is the whole control plane — and the cipher-pass is the one secret that must
+ * stay out of it.
+ */
+export async function writeConf(
+  docker: Docker, container: string, conf: string,
+): Promise<void> {
+  const b64 = Buffer.from(conf, 'utf8').toString('base64');
+  const cmd = `set -e
+umask 077
+printf '%s' '${b64}' | base64 -d > /etc/pgbackrest/pgbackrest.conf
+mkdir -p /var/lib/postgresql/data/pgbackrest-spool
+test -s /etc/pgbackrest/pgbackrest.conf`;
+  const r = await docker.execCapture(container, ['sh', '-c', cmd]);
+  if (r.exitCode !== 0) {
+    throw new Error(`could not write pgbackrest.conf (exit ${r.exitCode}): ` +
+      `${(r.stderr || r.stdout).trim().slice(0, 400)}`);
+  }
+}
+
+/** Run a pgBackRest command inside a project's container, as the postgres user. */
+export async function pgbackrest(
+  docker: Docker, container: string, args: string[],
+): Promise<PgbackrestResult> {
+  return docker.execCapture(container, ['pgbackrest', `--stanza=${STANZA}`, ...args]);
+}
+
+/**
+ * Is this failure pgBackRest losing a race with its own archiver?
+ *
+ * `archive-async=y` runs a long-lived `archive-push` worker that holds
+ * `/tmp/pgbackrest/main-archive-1.lock` while it batches segments to the repo.
+ * Every other pgBackRest command wants that lock too, so any of them can fail
+ * with exit 50 and "unable to acquire lock ... Resource temporarily unavailable"
+ * simply because WAL happened to be flowing at that moment.
+ *
+ * It is transient and it is *more* likely the busier the project is, which is the
+ * worst possible correlation: the projects whose backups matter most are the ones
+ * whose backup commands lose this race. Discovered on a saga replay, where WAL was
+ * already moving — the first run had a quiet database and never hit it.
+ */
+export const isLockContention = (output: string): boolean =>
+  /unable to acquire lock/i.test(output) && /Resource temporarily unavailable/i.test(output);
+
+/**
+ * Run a pgBackRest command, waiting out the archiver rather than failing the saga.
+ *
+ * Linear rather than exponential backoff, because the thing being waited on is a
+ * batch push that finishes on its own schedule — doubling the delay just
+ * overshoots. Bounded: if the lock is still held after this, something is stuck
+ * and a saga that keeps waiting is a saga that never reports it.
+ */
+export async function withLockRetry(
+  run: () => Promise<PgbackrestResult>,
+  opts: { attempts?: number; delayMs?: number } = {},
+): Promise<PgbackrestResult> {
+  const attempts = opts.attempts ?? 8;
+  const delayMs = opts.delayMs ?? 750;
+  let last: PgbackrestResult | undefined;
+  for (let i = 0; i < attempts; i++) {
+    last = await run();
+    if (last.exitCode === 0) return last;
+    if (!isLockContention(last.stdout + last.stderr)) return last;
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  return last!;
+}
+
+/**
+ * The part of pgBackRest's output worth putting in an error.
+ *
+ * Every command opens by echoing its full option list — endpoint, paths, every
+ * `repo1-*` setting — so the first several hundred characters are guaranteed to be
+ * the same banner whatever went wrong. Slicing from the front produces an error
+ * message that reliably contains no information about the error, which is how a
+ * failing `stanza-create` came back as a wall of configuration.
+ *
+ * So: the `ERROR:` lines if there are any, else the tail.
+ */
+export function pgbackrestFailure(output: string, limit = 600): string {
+  const lines = output.split('\n').map((l) => l.trim()).filter(Boolean);
+  const errors = lines.filter((l) => /ERROR|WARN|HINT/.test(l));
+  const useful = errors.length ? errors : lines.slice(-4);
+  return useful.join(' | ').slice(-limit);
+}
+
+/**
+ * Create the stanza, idempotently.
+ *
+ * `stanza-create` on an existing stanza exits non-zero with a message saying so,
+ * which is a success for a saga step that may replay. `--no-online` is *not*
+ * passed: the point of creating it online is that pgBackRest checks it can reach
+ * both the database and the repo, so a broken configuration fails here rather
+ * than at the first `archive-push` — where the only symptom is WAL quietly piling
+ * up on the tenant's disk.
+ */
+export async function stanzaCreate(
+  docker: Docker, container: string,
+): Promise<{ created: boolean; output: string }> {
+  const r = await withLockRetry(() => pgbackrest(docker, container, ['stanza-create']));
+  const out = (r.stdout + r.stderr).trim();
+  const alreadyThere = /already exists|is already up to date/i.test(out);
+  // Exit 0 alone does not mean "created": pgBackRest is idempotent here and
+  // reports success either way, distinguishing the two only in the text. A step
+  // that logs "stanza created" on every replay is a step whose log cannot be used
+  // to tell a first provision from a fifth retry.
+  if (r.exitCode === 0) return { created: !alreadyThere, output: out };
+  if (alreadyThere) return { created: false, output: out };
+  throw new Error(`pgbackrest stanza-create failed (exit ${r.exitCode}): ${pgbackrestFailure(out)}`);
+}
+
+/** `pgbackrest check` — the health signal the archive-lag alert reads (backups §1). */
+export async function check(
+  docker: Docker, container: string,
+): Promise<{ ok: boolean; output: string }> {
+  const r = await withLockRetry(() => pgbackrest(docker, container, ['check']));
+  return { ok: r.exitCode === 0, output: (r.stdout + r.stderr).trim() };
+}
+
+export interface BackupInfo {
+  /** Backup labels present in the repo, oldest first. */
+  labels: string[];
+  /** Total repo size across all backups, in bytes, as pgBackRest reports it. */
+  repoBytes: number;
+  /** pgBackRest's own view of whether the stanza is usable. */
+  status: string;
+}
+
+/**
+ * What the repo actually holds, from `info --output=json`.
+ *
+ * Parsed rather than scraped: the text output is for humans and changes between
+ * releases, and a backup count read out of a shifting table is a number that goes
+ * quietly wrong.
+ */
+export async function info(docker: Docker, container: string): Promise<BackupInfo> {
+  const r = await pgbackrest(docker, container, ['info', '--output=json']);
+  if (r.exitCode !== 0) {
+    throw new Error(`pgbackrest info failed (exit ${r.exitCode}): ` +
+      pgbackrestFailure(r.stdout + r.stderr));
+  }
+  const parsed = JSON.parse(r.stdout) as Array<{
+    name: string;
+    status?: { message?: string };
+    backup?: Array<{ label: string; info?: { repository?: { delta?: number; size?: number } } }>;
+  }>;
+  const stanza = parsed.find((p) => p.name === STANZA) ?? parsed[0];
+  const backups = stanza?.backup ?? [];
+  return {
+    labels: backups.map((b) => b.label),
+    repoBytes: backups.reduce((a, b) => a + (b.info?.repository?.size ?? 0), 0),
+    status: stanza?.status?.message ?? 'unknown',
+  };
+}
+
+/**
+ * Take a backup. `full` for Free (no chain to verify), `incr` where a fresh base
+ * already exists (backups §2).
+ */
+export async function backup(
+  docker: Docker, container: string, type: 'full' | 'incr' | 'diff' = 'full',
+): Promise<{ output: string }> {
+  const r = await withLockRetry(
+    () => pgbackrest(docker, container, ['--type=' + type, 'backup']),
+    // A backup can queue behind a long archive batch, so it gets more patience
+    // than a stanza check: failing it means the project has no fresh base.
+    { attempts: 20, delayMs: 1500 });
+  const out = (r.stdout + r.stderr).trim();
+  if (r.exitCode !== 0) {
+    throw new Error(`pgbackrest ${type} backup failed (exit ${r.exitCode}): ${pgbackrestFailure(out)}`);
+  }
+  return { output: out };
+}

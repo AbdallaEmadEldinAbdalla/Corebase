@@ -4,6 +4,10 @@ import { allocateNode, releaseNode, releaseRam, bookRam, volumeNameFor } from '.
 import type { Docker } from '../docker.ts';
 import { nodeCaps } from '../node-caps.ts';
 import {
+  repoTargetFromEnv, renderPgbackrestConf, writeConf, stanzaCreate, repoPathFor, STANZA,
+  check as backupCheck, pgbackrestFailure,
+} from '../backup.ts';
+import {
   buildContainerSpec, buildPoolerSpec, bootstrapPassword, containerName, networkName,
   poolerName, IMAGE, POOLER_IMAGE, LABEL_MANAGED, LABEL_REF,
 } from '../container-spec.ts';
@@ -36,6 +40,16 @@ export interface SagaDeps {
    * deletion fail loudly rather than quietly skip the safeguard.
    */
   requireFinalBackup?: boolean;
+  /**
+   * Refuse to provision a project that cannot be backed up (P3a).
+   *
+   * Off while Phase 3 is being built, because a fleet with no repo configured has
+   * to be able to provision at all, and on once it is finished — at which point a
+   * project without a repo is a project with no PITR, and provisioning one
+   * quietly is exactly the "we lost a beta user's data" path Phase 3 was moved up
+   * to close.
+   */
+  requireBackups?: boolean;
 }
 
 /** Placement row for a project — every Docker step needs it. */
@@ -654,6 +668,91 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       } finally {
         await client.end().catch(() => {});
       }
+    },
+  };
+
+  /**
+   * Give the project a pgBackRest repo (P3a).
+   *
+   * Runs after the health gate because `stanza-create` talks to a live database,
+   * and before the roles exist because archiving does not care about roles and WAL
+   * is already accumulating: `archive_mode` is on from first boot (D-019), so
+   * every second between the first checkpoint and this step is a second of WAL the
+   * database is holding on the tenant's disk with nowhere to put it.
+   *
+   * Idempotent in both halves — the cipher-pass is `ensure`d, and `stanza-create`
+   * on an existing stanza is reported as "already there" rather than an error.
+   */
+  const configureBackups: SagaStep<SagaContext> = {
+    name: 'configure_backups',
+    async run(ctx) {
+      const docker = requireDocker(deps);
+      const projectId = ctx.job.project_id!;
+      const project = await loadProject(deps.pool, projectId);
+      const place = await loadPlacement(deps.pool, projectId);
+      const container = containerName(project.ref);
+
+      const repo = repoTargetFromEnv();
+      if (!repo) {
+        // Fail closed only when told to. The gate is what flips at the end of
+        // Phase 3; until then an unconfigured fleet has to be able to provision,
+        // and the log line is the thing that stops that being invisible.
+        if (deps.requireBackups) {
+          throw new Error(
+            'backups are required (CB_REQUIRE_BACKUPS) but no repo is configured — ' +
+            'set CB_BACKUP_S3_ENDPOINT/_BUCKET/_KEY/_SECRET (./scripts/staging.sh backup-store)');
+        }
+        ctx.log('NO BACKUP REPO CONFIGURED — this project has no PITR and its WAL ' +
+          'will accumulate on the node until archiving works', { project: project.ref });
+        return;
+      }
+
+      const secrets = requireSecrets(deps);
+      const { value: cipherPass, created } = await secrets.ensure(
+        projectId, SECRET_NAMES.backupCipherPass);
+      ctx.log(created ? 'repo cipher-pass generated' : 'repo cipher-pass reused', {});
+
+      await writeConf(docker, container, renderPgbackrestConf({
+        projectId, plan: project.plan, cipherPass, repo,
+      }));
+      void place;
+      const { created: madeStanza, output } = await stanzaCreate(docker, container);
+      ctx.log(madeStanza ? 'stanza created' : 'stanza already present',
+        { repo: repoPathFor(projectId), detail: output.split('\n').slice(-1)[0] });
+    },
+  };
+
+  /**
+   * Prove archiving actually reaches the repo (P3a).
+   *
+   * `pgbackrest check` forces a WAL switch and confirms the segment arrives, so it
+   * tests the whole path — config, credentials, cipher-pass, network egress — in
+   * the one place where a failure is still cheap. Without it the first evidence
+   * that a project cannot archive is WAL filling its disk days later, and by then
+   * the project has no PITR for every second since it was created.
+   *
+   * Deliberately a separate step from `configure_backups`, for the same reason
+   * `wait_pooler_healthy` is separate from `start_pooler`: "we wrote a config" and
+   * "the thing works" are different claims and deserve different checkpoints.
+   */
+  const verifyArchiving: SagaStep<SagaContext> = {
+    name: 'verify_archiving',
+    async run(ctx) {
+      const docker = requireDocker(deps);
+      const projectId = ctx.job.project_id!;
+      const project = await loadProject(deps.pool, projectId);
+      if (!repoTargetFromEnv()) {
+        if (deps.requireBackups) throw new Error('backups are required but no repo is configured');
+        ctx.log('archiving not verified — no repo configured', {});
+        return;
+      }
+      const container = containerName(project.ref);
+      const { ok, output } = await backupCheck(docker, container);
+      if (!ok) {
+        throw new Error('pgbackrest check failed — this project cannot archive WAL: ' +
+          pgbackrestFailure(output));
+      }
+      ctx.log('archiving verified end to end', { stanza: STANZA });
     },
   };
 
@@ -1281,6 +1380,8 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       createNetwork,                 // P2a
       startContainer,                // T5d
       waitHealthy,                   // T5d
+      configureBackups,              // P3a — WAL is already piling up by here
+      verifyArchiving,               // P3a
       createBaseRoles,               // T5e
       storeCredentials,              // T5e
       generateApiKeys,               // P1e

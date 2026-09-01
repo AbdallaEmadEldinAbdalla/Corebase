@@ -43,6 +43,21 @@ export const SECRET_NAMES = {
    */
   anonKey: 'ANON_KEY',
   serviceRoleKey: 'SERVICE_ROLE_KEY',
+  /**
+   * The pgBackRest repo cipher-pass (P3a, backups §6).
+   *
+   * Its own secret rather than a derived value, and the reason is what happens on
+   * rotation: rotating this one means **re-creating the repo**, because every
+   * object already written is encrypted under the old pass and pgBackRest cannot
+   * re-key in place. A derived secret would silently change whenever whatever it
+   * was derived from changed, and the symptom would be a repo full of history
+   * nobody can decrypt — discovered at restore time, which is the worst possible
+   * moment to discover anything about a backup.
+   *
+   * Compromise of the object store alone therefore yields ciphertext, which is the
+   * property this exists for.
+   */
+  backupCipherPass: 'BACKUP_CIPHER_PASS',
 } as const;
 
 export type SecretName = (typeof SECRET_NAMES)[keyof typeof SECRET_NAMES];
