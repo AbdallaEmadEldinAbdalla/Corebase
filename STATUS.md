@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-08-31 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2: P2a–P2d done**
+**Last updated:** 2026-08-31 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2: P2a–P2e done**
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -250,7 +250,7 @@ boot. Don't use them.
 
 ## 4. What is built, in detail
 
-Test counts are from `pnpm test` and are all currently green: **434 tests**, of
+Test counts are from `pnpm test` and are all currently green: **445 tests**, of
 which **~220** need no infrastructure (`pnpm test:unit`).
 
 Every task below has a command that proves it; they are listed with the task.
@@ -1142,6 +1142,52 @@ since rotation destroys nothing and the new string is on the same page, and
 `terminate` is an unchecked checkbox labelled with its consequence that turns the
 button red when checked.
 
+### P2e — the disk-full enforcement ladder · done · 11 tests
+
+**Exit criterion 3's testable half is met**: a project that fills its quota goes
+read-only and recovers when space is freed. The rungs are D-073's — ≥80% warn, ≥90%
+critical, ≥95% soft read-only — with the filesystem quota at 120% as the backstop.
+
+Usage comes from `pg_database_size()`, the same source the billing path uses, so the
+number a customer is charged on and the number that throttles them are the same one.
+Two sources would eventually disagree, and the disagreement would arrive as "you
+throttled me at 94%".
+
+Read-only engages at 95% and lifts below **90%** (**D-251**). The hysteresis is
+deliberate: a project on the boundary would otherwise flap between writable and not,
+and each flip is an incident from the application's side — errors appearing and
+vanishing with no deploy. Only that rung is sticky; a warn banner clearing is free.
+
+**Disk is booked at placement** on the same 85% ceiling as RAM (**D-250**), and
+released only on purge, never on pause — a paused project keeps its volume, so its
+disk stays occupied while its RAM does not. Booking memory and ignoring disk is how
+a node fills with projects that each have memory to spare and nowhere to write.
+
+**Two findings, both from running it rather than reading it** (**D-249**).
+
+The rung is advisory by design, and the provisioning doc named the recovery as
+`SET transaction_read_only = off`. **That does not work.** Under autocommit each
+statement is its own transaction and that GUC applies only to the transaction it
+runs in, which then commits — so a customer following our documentation would have
+concluded they were locked out of the one action that fixes their problem. The doc
+is corrected at source, and a test now asserts the *wrong* form fails so it cannot
+drift back.
+
+The same mechanism made the ladder a **one-way door**. `ALTER DATABASE` is itself a
+write, so once a project went read-only the control plane's own admin connection was
+read-only too and could not turn the flag off. A customer would have stayed read-only
+forever no matter how much space they freed. That one surfaced only because the test
+grew a captured scan log — the failure had been swallowed into "no transition
+happened", which reads as nothing being wrong.
+
+**The node-level half of criterion 3 is not met, and cannot be here.** "The node
+itself never suffers" ultimately rests on the XFS project quota (D-070), which needs
+a real node with an XFS filesystem mounted `prjquota`; the substitute runs
+Docker-in-Docker on overlay and has no way to enforce a hard per-project cap. What
+*is* implemented and tested is everything above the backstop: the ladder, the
+recovery, disk booking so placement cannot oversubscribe, and an 85% node-volume
+cordon. The hard cap is recorded as unverifiable locally rather than claimed.
+
 ### The P2 review — what a deep pass over everything found
 
 Asked to revisit the whole build, not a step of it. Eight findings, all fixed; the
@@ -1239,10 +1285,10 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-Sixty-five decisions came out of running the thing rather than planning it —
-D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-248 from Phase 2.
+Sixty-eight decisions came out of running the thing rather than planning it —
+D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-251 from Phase 2.
 Full text in the [decision log](docs/00-foundation/05-decision-log.md); the log holds
-D-001…D-248 and is binding when two documents disagree.
+D-001…D-251 and is binding when two documents disagree.
 
 | ID | What changed | Why it surfaced |
 |---|---|---|
@@ -1311,6 +1357,9 @@ D-001…D-248 and is binding when two documents disagree.
 | D-246 | Rotation is store-then-apply; new versions number from the highest ever used; the previous is kept 24h then purged | The AAD binds the version, so a reused number makes two ciphertexts claim to be the same secret; the reverse order loses the password entirely |
 | D-247 | Rotation needs `secret.manage` (admin) while revealing needs `project.read` (member) | Reading your credentials is using the product; replacing them breaks every application holding the old ones |
 | D-248 | `terminate` is opt-in and is compromise response, not hygiene | Rotation is invisible to established sessions, which is what makes it routine — and useless against someone already connected |
+| D-249 | Read-only is lifted with `SET default_transaction_read_only = off` as its own statement, by the customer *and* by the control plane | The doc's `SET transaction_read_only = off` does nothing under autocommit, and `ALTER DATABASE` being a write made the ladder a one-way door |
+| D-250 | Disk is booked at placement on the 85% ceiling, released only on purge | Booking RAM and ignoring disk fills a node with projects that have memory and nowhere to write; a paused project still holds its volume |
+| D-251 | Read-only engages at 95%, lifts below 90% | A project on the boundary would flap, and every flip is errors appearing and vanishing with no deploy |
 
 ## 7. Measurements
 
@@ -1353,10 +1402,10 @@ enforces it (P1b), and CI runs both suites on every PR (P1f). The dashboard shel
 (P1g) covers login, signup, the org switcher, the projects grid, the create-project
 flow and a project overview.
 
-**Phase 2 is at P2d of seven planned steps**, with **exit criteria 2 and 4 met**.
-Done: the per-project network, PgBouncer with the two-URL contract, pause/resume with
-idle detection, and credential rotation. Remaining: disk quotas and the disk-full
-ladder (criterion 3), bin-packing placement, and the density measurement
+**Phase 2 is at P2e of seven planned steps**, with **exit criteria 2 and 4 met and
+3 met apart from its hard backstop**. Done: the per-project network, PgBouncer with
+the two-URL contract, pause/resume with idle detection, credential rotation, and the
+disk ladder. Remaining: bin-packing placement, and the density measurement
 (criterion 1) — which D-209 already constrains, since this hardware cannot satisfy
 its conditions.
 
@@ -1416,6 +1465,14 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
 - The dashboard has no pause/resume affordance yet and D-131's auto-resume-on-open
   is unimplemented, so a paused project renders as a badge. The endpoints now exist,
   which is what was missing.
+- **The hard per-project disk quota is not implemented and cannot be verified here.**
+  D-070 puts it on XFS project quotas, which need a real node with an XFS filesystem
+  mounted `prjquota`; the substitute runs Docker-in-Docker on overlay. So criterion
+  3's "the node itself never suffers" rests on a mechanism this environment cannot
+  test. Everything above the backstop — the ladder, the recovery, disk booking, the
+  node cordon — is implemented and tested.
+- No email or dashboard banner at the 80% and 90% rungs. The ladder records the rung
+  and audits nothing yet; notification is Phase 4's sender.
 - The pooler's pool sizing is one profile for every plan. The doc's "larger plans
   scale `default_pool_size` and `max_connections` together" is a value change the
   entrypoint is structured for and nothing sets yet.

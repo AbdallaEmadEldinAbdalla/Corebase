@@ -153,7 +153,7 @@ Never let a tenant reach `ENOSPC` on a shared volume without layers in front of 
 | 95% | **Soft read-only**: `ALTER DATABASE <db> SET default_transaction_read_only = on` + terminate idle-in-transaction sessions. Writes fail with a clear error; reads keep working |
 | 120% (= XFS quota) | Hard stop: `ENOSPC` confined to this project |
 
-Honesty note: `default_transaction_read_only` is advisory — a session can `SET transaction_read_only = off`. That is deliberate and is also the **recovery path**: the dashboard's "free up space" flow opens a session that disables the flag, lets the customer `DELETE`/`DROP`/`VACUUM`, and re-enables it. The 20% quota headroom above the plan cap exists exactly so the recovery flow (deletes generate WAL) has room to run. The hard guarantee is the quota; the GUC is UX.
+Honesty note: `default_transaction_read_only` is advisory — a session can override it with `SET default_transaction_read_only = off` (**not** `SET transaction_read_only = off`, which applies only to the transaction it runs in and so does nothing under autocommit — D-249). That is deliberate and is also the **recovery path**: the dashboard's "free up space" flow opens a session that disables the flag, lets the customer `DELETE`/`DROP`/`VACUUM`, and re-enables it. The 20% quota headroom above the plan cap exists exactly so the recovery flow (deletes generate WAL) has room to run. The hard guarantee is the quota; the GUC is UX.
 
 Clearing the ladder: dropping back below 90% auto-lifts read-only and clears banners. Upgrade to a bigger plan = one `xfs_quota` limit change, effective immediately.
 
