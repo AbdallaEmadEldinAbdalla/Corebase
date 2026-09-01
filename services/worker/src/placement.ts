@@ -19,6 +19,37 @@ export const PLAN_RAM_MB: Record<string, number> = {
   enterprise: 2048,
 };
 
+/**
+ * Plan → the database-size cap the customer is told about, in MB
+ * ([pricing](../../../docs/12-business/02-pricing-and-plans.md)).
+ *
+ * The ladder's percentages (D-073) are measured against this. The *quota* the
+ * filesystem enforces is `quotaMbFor()` below — deliberately larger.
+ */
+export const PLAN_DISK_CAP_MB: Record<string, number> = {
+  free: 500,
+  pro: 8192,
+  team: 8192,
+  enterprise: 32768,
+};
+
+/**
+ * The hard quota: the plan cap plus 20% headroom (D-073).
+ *
+ * The headroom is not generosity, it is what makes the recovery path possible.
+ * Freeing space means `DELETE`, `DROP` or `VACUUM`, and all three *write* — a
+ * filesystem with nothing left cannot accept the WAL that would free space, so a
+ * quota set exactly at the cap deadlocks the customer at the moment they try to
+ * fix it. The 20% is the room the fix runs in.
+ */
+export const QUOTA_HEADROOM = 1.2;
+export const quotaMbFor = (plan: string): number =>
+  Math.ceil((PLAN_DISK_CAP_MB[plan] ?? PLAN_DISK_CAP_MB['free']!) * QUOTA_HEADROOM);
+
+/** Disk booked on the node, in whole GB — the quota, rounded up. */
+export const diskBookingGbFor = (plan: string): number =>
+  Math.max(1, Math.ceil(quotaMbFor(plan) / 1024));
+
 /** Container memory limit — the cgroup cap, higher than the booking. */
 export const PLAN_CONTAINER_LIMIT_MB: Record<string, number> = {
   free: 512,
@@ -142,8 +173,11 @@ export async function allocateNode(
 
     // Pick the emptiest active node in the region and LOCK it. Ordering by
     // reserved ascending spreads load; the lock is what serialises rivals.
-    const node = await client.query<{ id: string; hostname: string; ram_total_mb: number; ram_reserved_mb: number }>(
-      `SELECT id, hostname, ram_total_mb, ram_reserved_mb
+    const node = await client.query<{
+      id: string; hostname: string; ram_total_mb: number; ram_reserved_mb: number;
+      disk_total_gb: number; disk_reserved_gb: number;
+    }>(
+      `SELECT id, hostname, ram_total_mb, ram_reserved_mb, disk_total_gb, disk_reserved_gb
          FROM nodes
         WHERE status = 'active' AND region = $1
         ORDER BY ram_reserved_mb ASC
@@ -160,6 +194,17 @@ export async function allocateNode(
         `${booking} MB would pass the ${FILL_CEILING * 100}% placement stop`);
     }
 
+    // Disk, on the same ceiling (P2e). Booking RAM and ignoring disk is how a node
+    // ends up full of projects that each have memory to spare and nowhere to write:
+    // "the node itself never suffers" has to be arithmetic, not a hope.
+    const diskBooking = diskBookingGbFor(args.plan ?? 'free');
+    const diskCeiling = Math.floor(n.disk_total_gb * FILL_CEILING);
+    if (n.disk_reserved_gb + diskBooking > diskCeiling) {
+      throw new NoCapacityError(
+        `node ${n.hostname} is at ${n.disk_reserved_gb}/${n.disk_total_gb} GB of disk; ` +
+        `${diskBooking} GB would pass the ${FILL_CEILING * 100}% placement stop`);
+    }
+
     const ports = await client.query<{ port: number; pooler_port: number }>(
       `SELECT port, pooler_port FROM project_databases WHERE node_id = $1`, [n.id]);
     const port = pickPort(ports.rows.map((r) => r.port), PG_PORT_RANGE);
@@ -169,12 +214,16 @@ export async function allocateNode(
     await client.query(
       `INSERT INTO project_databases
          (project_id, node_id, volume_name, port, pooler_port, ram_limit_mb,
-          ram_booked_mb, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'provisioning')`,
-      [args.projectId, n.id, volumeName, port, poolerPort, limit, booking]);
+          ram_booked_mb, disk_limit_mb, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'provisioning')`,
+      [args.projectId, n.id, volumeName, port, poolerPort, limit, booking,
+       PLAN_DISK_CAP_MB[args.plan ?? 'free'] ?? PLAN_DISK_CAP_MB['free']!]);
 
     await client.query(
-      `UPDATE nodes SET ram_reserved_mb = ram_reserved_mb + $2 WHERE id = $1`, [n.id, booking]);
+      `UPDATE nodes
+          SET ram_reserved_mb = ram_reserved_mb + $2,
+              disk_reserved_gb = disk_reserved_gb + $3
+        WHERE id = $1`, [n.id, booking, diskBooking]);
 
     await client.query('COMMIT');
     return { nodeId: n.id, hostname: n.hostname, port, poolerPort, volumeName,
@@ -204,16 +253,29 @@ export async function releaseNode(
     // the plan amount there would return RAM that was never reserved and leave the
     // node permanently under-counted, which is worse than leaking a booking
     // because it makes the node accept projects it cannot hold.
-    const del = await client.query<{ node_id: string; ram_booked_mb: number }>(
+    const del = await client.query<{
+      node_id: string; ram_booked_mb: number; disk_limit_mb: number;
+    }>(
       `DELETE FROM project_databases WHERE project_id = $1
-       RETURNING node_id, ram_booked_mb`, [args.projectId]);
+       RETURNING node_id, ram_booked_mb, disk_limit_mb`, [args.projectId]);
     if (!del.rows[0]) { await client.query('COMMIT'); return { released: false, freedMb: 0 }; }
     const freed = del.rows[0].ram_booked_mb;
+    // Disk is derived from the recorded cap rather than the plan, for the same
+    // reason RAM is read off the row (D-237): the row is the authority on what was
+    // actually booked, and a plan can change under a project.
+    const freedDiskGb = Math.max(1,
+      Math.ceil(Math.ceil(del.rows[0].disk_limit_mb * QUOTA_HEADROOM) / 1024));
     if (freed > 0) {
       await client.query(
         `UPDATE nodes SET ram_reserved_mb = GREATEST(0, ram_reserved_mb - $2) WHERE id = $1`,
         [del.rows[0].node_id, freed]);
     }
+    // Unlike RAM, disk is *not* released on pause — a paused project keeps its
+    // volume (D-008), so its disk stays booked for as long as the row exists.
+    // Which is why this is the only place that returns it.
+    await client.query(
+      `UPDATE nodes SET disk_reserved_gb = GREATEST(0, disk_reserved_gb - $2) WHERE id = $1`,
+      [del.rows[0].node_id, freedDiskGb]);
     await client.query('COMMIT');
     return { released: true, freedMb: freed };
   } catch (err) {

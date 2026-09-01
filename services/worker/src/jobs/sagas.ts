@@ -117,7 +117,12 @@ async function loadProject(pool: Pool, projectId: string) {
  * random one if store_credentials has already run, then the derived bootstrap
  * password the container was created with.
  */
-async function superuserCandidates(deps: SagaDeps, projectId: string): Promise<string[]> {
+/**
+ * Superuser passwords to try, newest first. Exported because the disk ladder needs
+ * an admin connection too, and a second copy of this would be a second place for
+ * the bootstrap fallback to be forgotten.
+ */
+export async function superuserCandidates(deps: SagaDeps, projectId: string): Promise<string[]> {
   const out: string[] = [];
   const stored = await deps.secrets?.get(projectId, SECRET_NAMES.postgres);
   if (stored) out.push(stored);

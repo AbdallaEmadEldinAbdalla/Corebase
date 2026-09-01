@@ -2,7 +2,7 @@ import { Pool } from 'pg';
 import { createRedis, createQueue, createWorker } from '@corebase/queue';
 import { createJobRepo } from './jobs/repo.ts';
 import { createRunner } from './jobs/runner.ts';
-import { buildSagas } from './jobs/sagas.ts';
+import { buildSagas, superuserCandidates } from './jobs/sagas.ts';
 import { registerNode } from './placement.ts';
 import { createDocker } from './docker.ts';
 import { createEnvelope } from '@corebase/crypto';
@@ -10,6 +10,7 @@ import { createSecretStore, SECRET_NAMES } from '@corebase/secrets';
 import { createSweeper } from './sweeper.ts';
 import { createPurgeScan } from './purge-scan.ts';
 import { createIdleScan } from './idle-scan.ts';
+import { createDiskScan } from './disk-scan.ts';
 import { createReconciler } from './reconcile.ts';
 import {
   startMetricsServer, registerControlPlaneCollectors,
@@ -155,6 +156,24 @@ if (secrets) {
   }, idleMs);
 }
 
+// The disk ladder (P2e, D-073). Every 10 minutes by default: the billing sample is
+// six-hourly, but the ladder is a safety mechanism and a project can fill 500 MB in
+// far less than six hours. Cheap — one query per project.
+const diskMs = Number(process.env.CB_DISK_SCAN_MS ?? 600_000);
+let diskTimer: NodeJS.Timeout | undefined;
+if (secrets) {
+  const store = secrets;
+  const diskScan = createDiskScan({ pool, log: (l, m, e) => log(l, m, e) });
+  diskTimer = setInterval(() => {
+    void diskScan.scanOnce({
+      developerSecretFor: (projectId) => store.get(projectId, SECRET_NAMES.developer),
+      superuserPasswordsFor: (projectId) => superuserCandidates(
+        { pool, secrets: store, bootstrapSecret: process.env.CB_BOOTSTRAP_SECRET } as never,
+        projectId),
+    }).catch((e) => log('error', 'disk scan failed', { error: (e as Error).message }));
+  }, diskMs);
+}
+
 // Node reconciliation (D-065/D-173): 5 minutes, jittered so a fleet of workers
 // does not hit every node's Engine API at the same second. Container crashes are
 // Docker's restart policy to handle; this is the backstop that catches what the
@@ -201,6 +220,7 @@ const metricsServer = startMetricsServer(metricsPort);
 log('info', 'worker started', {
   sweepMs, purgeMs, reconcileMs, metricsPort,
   idle: idleTimer ? { scanMs: idleMs, days: idleDays } : 'disabled (no secret store)',
+  disk: diskTimer ? { scanMs: diskMs } : 'disabled (no secret store)',
 });
 
 const shutdown = async (signal: string) => {
