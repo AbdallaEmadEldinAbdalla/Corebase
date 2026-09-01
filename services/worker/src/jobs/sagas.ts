@@ -6,7 +6,10 @@ import { nodeCaps } from '../node-caps.ts';
 import {
   repoTargetFromEnv, renderPgbackrestConf, writeConf, stanzaCreate, repoPathFor, STANZA,
   check as backupCheck, pgbackrestFailure,
+  info as backupInfo, backup as takePgbackrest,
 } from '../backup.ts';
+import { decideBackup } from '../backup-schedule.ts';
+import { backupRunsTotal } from '../metrics.ts';
 import {
   buildContainerSpec, buildPoolerSpec, bootstrapPassword, containerName, networkName,
   poolerName, IMAGE, POOLER_IMAGE, LABEL_MANAGED, LABEL_REF,
@@ -756,6 +759,120 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
     },
   };
 
+  /* ── scheduled base backups (P3c) ────────────────────────────────────── */
+
+  /**
+   * Decide what backup to take and open a row for it.
+   *
+   * The row is opened *before* the backup runs, deliberately. A `running` row that
+   * never finishes is what a killed worker leaves behind, and that is worth being
+   * able to see — the alternative is recording only outcomes, which makes a
+   * crashed backup indistinguishable from one that was never scheduled.
+   *
+   * Replay-safe by reuse: a `running` row for this job is adopted rather than
+   * duplicated, so a retry does not leave a trail of phantom attempts.
+   */
+  const planBackup: SagaStep<SagaContext> = {
+    name: 'plan_backup',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const project = await loadProject(deps.pool, projectId);
+
+      const existing = await deps.pool.query<{ id: string; type: string }>(
+        `SELECT id, type FROM backup_runs
+          WHERE project_id = $1 AND job_id = $2 AND status = 'running'
+          ORDER BY started_at DESC LIMIT 1`, [projectId, ctx.job.id]);
+      if (existing.rows[0]) {
+        ctx.log('reusing the run row from a previous attempt',
+          { run: existing.rows[0].id, type: existing.rows[0].type });
+        return;
+      }
+
+      const last = await deps.pool.query<{ full_at: Date | null; any_at: Date | null }>(
+        `SELECT max(finished_at) FILTER (WHERE type = 'full') AS full_at,
+                max(finished_at) AS any_at
+           FROM backup_runs WHERE project_id = $1 AND status = 'succeeded'`, [projectId]);
+
+      // The window is ignored here: by the time a job exists, the scheduler has
+      // already decided this project is due. Re-deciding would mean a job enqueued
+      // at the end of its slot could find itself outside it and do nothing, which
+      // reads as a silently skipped night.
+      const decision = decideBackup({
+        projectId, plan: project.plan, now: new Date(),
+        lastFullAt: last.rows[0]?.full_at ?? undefined,
+        lastAnyAt: last.rows[0]?.any_at ?? undefined,
+        window: { startHour: 0, endHour: 24 },
+      });
+      const type = decision.type ?? 'incr';
+      const { rows } = await deps.pool.query<{ id: string }>(
+        `INSERT INTO backup_runs (project_id, type, status, job_id)
+         VALUES ($1, $2, 'running', $3) RETURNING id`, [projectId, type, ctx.job.id]);
+      ctx.log('backup planned', { run: rows[0]!.id, type, why: decision.reason });
+    },
+  };
+
+  /**
+   * Take it, and close the row either way.
+   *
+   * Retention is enforced here too, without a separate step: `pgbackrest backup`
+   * runs `expire` when it finishes, so the policy in the rendered config (days per
+   * plan, D-276) is applied on every successful backup. A standalone expire step
+   * would be a second place for the policy to be wrong.
+   */
+  const takeBackup: SagaStep<SagaContext> = {
+    name: 'take_backup',
+    async run(ctx) {
+      const docker = requireDocker(deps);
+      const projectId = ctx.job.project_id!;
+      const project = await loadProject(deps.pool, projectId);
+      const container = containerName(project.ref);
+
+      const runRow = await deps.pool.query<{ id: string; type: 'full' | 'incr' }>(
+        `SELECT id, type FROM backup_runs
+          WHERE project_id = $1 AND job_id = $2 ORDER BY started_at DESC LIMIT 1`,
+        [projectId, ctx.job.id]);
+      const run = runRow.rows[0];
+      if (!run) throw new Error('no backup_runs row — plan_backup did not run');
+
+      const before = new Set((await backupInfo(docker, container)).labels);
+
+      try {
+        await takePgbackrest(docker, container, run.type);
+      } catch (err) {
+        await deps.pool.query(
+          `UPDATE backup_runs SET status = 'failed', finished_at = now(), error = $2
+            WHERE id = $1`, [run.id, (err as Error).message.slice(0, 2000)]);
+        // The counter the `BackupRunFailed` alert reads. Incremented here rather
+        // than derived from the table later, because a counter reconstructed from
+        // rows on a timer is a counter that resets when the process does — and
+        // `increase()` over a reset is either nothing or nonsense.
+        backupRunsTotal.inc({ type: run.type, outcome: 'failed' });
+        throw err;
+      }
+
+      // Read the outcome from the repo rather than from the command's output. The
+      // repo is what a restore will read, so a run row that agrees with the command
+      // but not with the repo is a row that lies in the one direction that matters.
+      const after = await backupInfo(docker, container);
+      const made = after.backups.find((b) => !before.has(b.label));
+      await deps.pool.query(
+        `UPDATE backup_runs
+            SET status = 'succeeded', finished_at = now(), label = $2,
+                size_bytes = $3, wal_start = $4, wal_stop = $5, error = NULL
+          WHERE id = $1`,
+        [run.id, made?.label ?? null, made?.repoBytes ?? null,
+         made?.walStart ?? null, made?.walStop ?? null]);
+
+      backupRunsTotal.inc({ type: run.type, outcome: 'succeeded' });
+      ctx.log('backup complete', {
+        run: run.id, type: run.type, label: made?.label,
+        size_bytes: made?.repoBytes,
+        // What survived expiry — the visible half of retention working.
+        backups_in_repo: after.labels.length,
+      });
+    },
+  };
+
   const finalBackup: SagaStep<SagaContext> = {
     name: 'final_backup',
     async run(ctx) {
@@ -1399,6 +1516,12 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       stopContainer,                 // T7
       removeNetwork,                 // P2a — holds no data; frees the subnet
       markSoftDeleted,               // T7
+    ],
+    // Scheduled base backups (P3c). Two steps rather than one so a crashed
+    // worker leaves a visible `running` row rather than no trace at all.
+    backup_project: [
+      planBackup,
+      takeBackup,
     ],
     // Idle projects give their RAM back and keep everything else (D-008).
     pause_project: [

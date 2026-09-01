@@ -12,11 +12,13 @@ import { createPurgeScan } from './purge-scan.ts';
 import { createIdleScan } from './idle-scan.ts';
 import { createDiskScan } from './disk-scan.ts';
 import { createWalScan } from './wal-scan.ts';
+import { createBackupScan } from './backup-scan.ts';
 import { createReconciler } from './reconcile.ts';
 import {
   startMetricsServer, registerControlPlaneCollectors,
   jobSeconds, stepSeconds, jobsTotal, reconcileDriftTotal, reconcilePassSeconds,
   backupWalArchiveLagSeconds, backupWalPending, backupLastSuccessTs, backupCheckOk,
+  backupWalLastArchivedTs,
 } from './metrics.ts';
 
 const dbUrl = process.env.CB_CONTROL_DATABASE_URL;
@@ -202,7 +204,7 @@ if (secrets) {
       backupWalArchiveLagSeconds.set({ node, project_ref: ref }, sample.lagSeconds);
       backupWalPending.set({ node, project_ref: ref }, sample.pending);
       if (sample.lastArchivedAt) {
-        backupLastSuccessTs.set(
+        backupWalLastArchivedTs.set(
           { node, project_ref: ref }, Math.floor(sample.lastArchivedAt.getTime() / 1000));
       }
       void state;
@@ -231,6 +233,58 @@ if (secrets) {
     }).catch((e) => log('error', 'wal scan failed', { error: (e as Error).message }));
   }, walMs);
 }
+
+/**
+ * Scheduled base backups (P3c). Every five minutes.
+ *
+ * The sweep is cheap — one query for the whole batch — and it has to run often
+ * enough to land inside a project's half-hour slot in the nightly window. The
+ * schedule itself is the day-keyed idempotency key, not this interval: looking
+ * twelve times an hour and enqueueing once a day is the point.
+ */
+const backupScanMs = Number(process.env.CB_BACKUP_SCAN_MS ?? 300_000);
+let backupTimer: NodeJS.Timeout | undefined;
+{
+  const backupScan = createBackupScan({
+    pool, queue,
+    ...(process.env.CB_BACKUP_WINDOW_ALWAYS === 'true'
+      ? { window: { startHour: 0, endHour: 24 } } : {}),
+    log: (m, e) => log('info', m, e),
+  });
+  backupTimer = setInterval(() => {
+    void backupScan.scanOnce()
+      .catch((e) => log('error', 'backup scan failed', { error: (e as Error).message }));
+  }, backupScanMs);
+}
+
+/**
+ * The base-backup gauges, refreshed from `backup_runs` on the same cadence.
+ *
+ * Read from the table rather than set when a backup finishes, for the reason the
+ * control-plane collectors exist: a value cached in this process is a second source
+ * of truth, and its failure mode is a dashboard that looks healthy because the
+ * process that would have updated it is the one that died.
+ */
+const backupGaugeTimer = setInterval(() => {
+  void pool.query<{ ref: string; hostname: string; last_success: string | null }>(
+    `SELECT p.ref::text AS ref, n.hostname,
+            extract(epoch FROM max(r.finished_at))::text AS last_success
+       FROM projects p
+       JOIN project_databases d ON d.project_id = p.id
+       JOIN nodes n ON n.id = d.node_id
+       LEFT JOIN backup_runs r
+              ON r.project_id = p.id AND r.status = 'succeeded' AND r.type = 'full'
+      WHERE d.status = 'running'
+      GROUP BY p.ref, n.hostname`)
+    .then((res) => {
+      for (const row of res.rows) {
+        if (row.last_success === null) continue;
+        backupLastSuccessTs.set(
+          { node: row.hostname, project_ref: row.ref }, Number(row.last_success));
+      }
+    })
+    .catch((e) => log('error', 'backup gauge refresh failed', { error: (e as Error).message }));
+}, 60_000);
 
 // Node reconciliation (D-065/D-173): 5 minutes, jittered so a fleet of workers
 // does not hit every node's Engine API at the same second. Container crashes are
@@ -280,12 +334,24 @@ log('info', 'worker started', {
   idle: idleTimer ? { scanMs: idleMs, days: idleDays } : 'disabled (no secret store)',
   disk: diskTimer ? { scanMs: diskMs } : 'disabled (no secret store)',
   wal: walTimer ? { scanMs: walMs } : 'disabled (no secret store)',
+  backups: { scanMs: backupScanMs },
 });
 
 const shutdown = async (signal: string) => {
   log('info', 'shutting down', { signal });
+  // Every timer, not just the first two.
+  //
+  // The awaits below yield, so an interval that fires during shutdown runs against
+  // a pool that is closing or closed — and the error it logs on the way out points
+  // at the query rather than at the shutdown, which is a confusing last line in a
+  // log. `process.exit` made this survivable rather than correct.
   clearInterval(sweepTimer);
   clearInterval(purgeTimer);
+  clearInterval(backupGaugeTimer);
+  if (idleTimer) clearInterval(idleTimer);
+  if (diskTimer) clearInterval(diskTimer);
+  if (walTimer) clearInterval(walTimer);
+  if (backupTimer) clearInterval(backupTimer);
   if (reconcileTimer) clearTimeout(reconcileTimer);
   metricsServer.close();
   await worker.close();          // finishes in-flight work before exiting
