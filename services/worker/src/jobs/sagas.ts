@@ -1144,6 +1144,121 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
     },
   };
 
+  // ── credential rotation (P2d, credentials doc §4a) ─────────────────────────
+
+  /**
+   * Store the new password, then apply it. In that order, always.
+   *
+   * Store-then-apply is the rule the whole secret design turns on (D-035). A crash
+   * between the two leaves a password that is stored and not yet in effect, and the
+   * retry applies it — recoverable. The other order leaves a database whose password
+   * exists nowhere, which needs the superuser to fix and is exactly the incident
+   * this ordering exists to prevent.
+   *
+   * The payoff of auth_query (D-074) shows up here as an absence: **the pooler needs
+   * nothing.** No config to re-render, no file to ship, no reload — it reads
+   * `pg_shadow` live through the lookup function, so a rotation is one `ALTER ROLE`
+   * and the pooled port keeps working. That absence is the single biggest reason
+   * D-074 chose auth_query over a userlist file.
+   */
+  const rotateDeveloperPassword: SagaStep<SagaContext> = {
+    name: 'rotate_developer_password',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const secrets = requireSecrets(deps);
+      const place = await loadPlacement(deps.pool, projectId);
+      const endpoint = adminEndpoint(place);
+
+      // Store first.
+      const { value, previous, version } = await secrets.rotate(
+        projectId, SECRET_NAMES.developer);
+      ctx.log('new credential stored, not yet in effect', {
+        version, had_previous: previous !== undefined,
+      });
+
+      // Then apply, over a *direct* admin connection — not the pooled port. A
+      // rotation that went through the pooler would be changing the credential the
+      // pooler is authenticating with mid-statement.
+      const client = await connectAsSuperuser({
+        ...endpoint,
+        passwords: await superuserCandidates(deps, projectId),
+      });
+      try {
+        await setRolePassword(client, DEVELOPER_ROLE, value);
+        ctx.log('credential applied — the pooler needed no reconfiguration (D-074)', {
+          role: DEVELOPER_ROLE,
+        });
+      } finally {
+        await client.end().catch(() => {});
+      }
+    },
+  };
+
+  /**
+   * Optionally end sessions that authenticated with the old password.
+   *
+   * **Off by default, and that default is the interesting decision.** Postgres
+   * authenticates at connect time only, so a password change does not touch
+   * established sessions — a rotation is invisible to a running application, which
+   * is what makes it safe to do routinely. A credential you are afraid to rotate is
+   * a credential you will leak and keep.
+   *
+   * But "invisible" is wrong for the case that matters most: a leaked password. If
+   * someone else is holding an open session, rotating without terminating changes
+   * nothing for them. So the flag exists, it is opt-in, and it is documented as
+   * compromise response rather than hygiene.
+   */
+  const terminateOldSessions: SagaStep<SagaContext> = {
+    name: 'terminate_old_sessions',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const payload = (ctx.job.payload ?? {}) as { terminate?: boolean };
+      if (!payload.terminate) {
+        ctx.log('leaving established sessions alone — rotation is invisible to a ' +
+          'running application unless asked otherwise');
+        return;
+      }
+      const place = await loadPlacement(deps.pool, projectId);
+      const client = await connectAsSuperuser({
+        ...adminEndpoint(place),
+        passwords: await superuserCandidates(deps, projectId),
+      });
+      try {
+        // The customer's role only. Terminating our own connections would kill the
+        // health probe and the pooler's lookups, which are not the threat.
+        const { rows } = await client.query<{ killed: number }>(
+          `SELECT count(*)::int AS killed FROM (
+             SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+              WHERE usename = $1 AND pid <> pg_backend_pid()
+           ) t`, [DEVELOPER_ROLE]);
+        ctx.log('sessions on the old credential terminated', {
+          count: rows[0]?.killed ?? 0,
+        });
+      } finally {
+        await client.end().catch(() => {});
+      }
+    },
+  };
+
+  /**
+   * Drop the previous version once the support window has passed.
+   *
+   * Kept for 24 hours so "which credential is my app on" has an answer during an
+   * incident; dropped after, because an old password that lives forever in the
+   * control plane is an old password that can leak forever.
+   */
+  const purgeRetiredCredential: SagaStep<SagaContext> = {
+    name: 'purge_retired_credential',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const secrets = requireSecrets(deps);
+      const dropped = await secrets.purgeRetired(projectId);
+      ctx.log(dropped > 0
+        ? 'retired credential versions dropped'
+        : 'no retired versions old enough to drop yet', { dropped });
+    },
+  };
+
   return {
     provision_project: [
       allocate,                      // T5c
@@ -1186,6 +1301,13 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       startPooler,                   // P2b
       waitPoolerHealthy,             // P2b
       markResumed,                   // P2c
+    ],
+    // Credential rotation (P2d). The pooler is absent from this list on purpose:
+    // auth_query means it needs nothing (D-074).
+    rotate_credentials: [
+      rotateDeveloperPassword,       // P2d — store, then apply
+      terminateOldSessions,          // P2d — opt-in, compromise response
+      purgeRetiredCredential,        // P2d — 24h window
     ],
     // Phase two — irreversible, and gated on the window having closed.
     purge_project: [

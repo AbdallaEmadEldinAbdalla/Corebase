@@ -62,6 +62,26 @@ export interface SecretStore {
    * (project_id, name) WHERE state='active' is the arbiter, not application luck.
    */
   ensure(projectId: string, name: string): Promise<{ value: string; created: boolean }>;
+  /**
+   * Begin a rotation: write a new version as `active`, demote the current one to
+   * `retiring`, and return both values.
+   *
+   * Half of store-then-apply (D-035). This does the *store*; the caller applies the
+   * new value to whatever holds it — `ALTER ROLE` for a database password — and the
+   * order is not negotiable. Applying first and crashing before the store would
+   * leave a database whose password exists nowhere, which is unrecoverable without
+   * the superuser; storing first and crashing leaves a password that is not yet in
+   * effect, which the retry fixes.
+   *
+   * The previous value comes back because that is what makes the failure legible:
+   * an operator answering "which credential is my app on" needs both, and a
+   * rotation that half-applied needs the old one to get back in.
+   */
+  rotate(projectId: string, name: string): Promise<{
+    value: string; previous: string | undefined; version: number;
+  }>;
+  /** Drop `retiring` versions older than the retention window (§4a step 7). */
+  purgeRetired(projectId: string, olderThanHours?: number): Promise<number>;
 }
 
 interface SecretRow { version: number; ciphertext: Buffer; dek_wrapped: Buffer; kek_id: string }
@@ -98,6 +118,73 @@ export function createSecretStore(pool: Pool, envelope: Envelope): SecretStore {
          VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (project_id, name, version) DO NOTHING`,
         [projectId, name, version, sealed.ciphertext, sealed.dekWrapped, sealed.kekId]);
+    },
+
+    async rotate(projectId, name) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        // Lock the name's rows for the duration: two rotations racing must not
+        // both demote the same active row and both insert version n+1, which the
+        // unique index would turn into one arbitrary winner and one 500.
+        const current = await client.query<SecretRow>(
+          `SELECT version, ciphertext, dek_wrapped, kek_id
+             FROM project_secrets
+            WHERE project_id = $1 AND name = $2 AND state = 'active'
+              FOR UPDATE`, [projectId, name]);
+        const cur = current.rows[0];
+
+        const previous = cur
+          ? envelope.decrypt(
+              { ciphertext: cur.ciphertext, dekWrapped: cur.dek_wrapped, kekId: cur.kek_id },
+              { projectId, name, version: cur.version })
+          : undefined;
+
+        // Highest version ever used, not the active one: a previous rotation may
+        // have left retiring rows above it, and reusing a version number would
+        // collide on (project_id, name, version) — and worse, the AAD binds the
+        // version, so a reused number makes two different ciphertexts claim to be
+        // the same secret.
+        const { rows: top } = await client.query<{ v: number }>(
+          `SELECT COALESCE(max(version), 0) AS v FROM project_secrets
+            WHERE project_id = $1 AND name = $2`, [projectId, name]);
+        const version = (top[0]?.v ?? 0) + 1;
+
+        if (cur) {
+          await client.query(
+            `UPDATE project_secrets SET state = 'retiring', rotated_at = now()
+              WHERE project_id = $1 AND name = $2 AND state = 'active'`,
+            [projectId, name]);
+        }
+
+        const value = generateSecret();
+        const sealed = envelope.encrypt(value, { projectId, name, version });
+        await client.query(
+          `INSERT INTO project_secrets
+             (project_id, name, version, ciphertext, dek_wrapped, kek_id, state)
+           VALUES ($1, $2, $3, $4, $5, $6, 'active')`,
+          [projectId, name, version, sealed.ciphertext, sealed.dekWrapped, sealed.kekId]);
+
+        await client.query('COMMIT');
+        return { value, previous, version };
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+    },
+
+    async purgeRetired(projectId, olderThanHours = 24) {
+      // 24 hours by default (§4a step 7): long enough to answer "which credential
+      // is my app on" during an incident, short enough that a leaked old password
+      // is not indefinitely useful for reading the control plane's history.
+      const { rowCount } = await pool.query(
+        `DELETE FROM project_secrets
+          WHERE project_id = $1 AND state = 'retiring'
+            AND rotated_at < now() - ($2 || ' hours')::interval`,
+        [projectId, String(olderThanHours)]);
+      return rowCount ?? 0;
     },
 
     async ensure(projectId, name) {
