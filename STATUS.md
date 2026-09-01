@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-09-01 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 started** (P3a done)
+**Last updated:** 2026-09-01 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 started** (P3a–P3b done)
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -251,8 +251,8 @@ boot. Don't use them.
 
 ## 4. What is built, in detail
 
-Test counts are from `pnpm test` and are all currently green: **512 tests**, of
-which **287** need no infrastructure (`pnpm test:unit`).
+Test counts are from `pnpm test` and are all currently green: **524 tests**, of
+which **293** need no infrastructure (`pnpm test:unit`).
 
 Every task below has a command that proves it; they are listed with the task.
 
@@ -1480,6 +1480,79 @@ the cipher-pass absent from both the container environment and the ciphertext at
 rest. Plus `backup.test.ts` 17/17 on the config rendering and the retry logic.
 
 
+### P3b — WAL-archive lag, and an alert proven to fire · done · 12 tests
+
+**Exit criterion 3 is met.** A project whose WAL is not reaching object storage
+keeps serving, keeps reporting `ready`, and stops being recoverable — nothing about
+that is visible from outside, which is the entire reason this step exists.
+
+The scan runs every two minutes (faster than the disk ladder: the alert fires at
+five minutes of lag, so a sweep interval near the threshold learns about it a full
+interval late). It records lag, pending segments, the last successful archive time,
+Postgres' own archiver failure count, and the result of `pgbackrest check`. Four
+gauges, four alert rules.
+
+**The definition of "lag" is the whole step** (**D-271**). The obvious reading —
+time since the last successful archive — is wrong, and wrong in the worst
+direction: `archive_timeout` forces a WAL switch every 300 s on Free, so an idle
+*healthy* project archives one segment every five minutes and nothing in between.
+Its "lag" would sit permanently at up to 300 s, which is exactly the catalog's warn
+threshold, and the alert would fire forever for the whole free tier. An alert that
+always fires is worse than no alert, because it also discredits the ones that
+matter. What is measured instead is **the age of the oldest segment closed but not
+yet archived**, straight from `pg_ls_archive_statusdir()` — nothing waiting means
+zero lag, whatever the clock says about the last push.
+
+A second reason the five-minute line is right emerged from the test: `archive-async`
+batches pushes, so a project that has just written WAL routinely has a segment or
+two waiting for a second. Any threshold near zero is noise.
+
+`pgbackrest check` is the second, independent signal, because lag cannot answer
+"would the repo accept a backup at all" — a project can have nothing waiting and a
+repo whose credentials expired last week. It runs on a 15-minute schedule, and the
+schedule is **overridden by trouble** (**D-273**): past the warn rung, a moved
+failure count, or a check that is currently failing. That last case is what makes
+recovery visible — the alert pages after five minutes, so a stale `false` left
+until the next scheduled check keeps the pager ringing a quarter of an hour after
+the fix.
+
+No hysteresis here, unlike the disk ladder (**D-272**): these rungs are
+notifications, so flapping costs a duplicate message while stickiness would cost a
+stale alert. And a project the scan could not reach keeps its previous rung
+(**D-274**) — "cannot measure" is not "measured as fine", and `unknown` is
+deliberately not `ok`.
+
+**The finding is the one that would have hurt most.** Breaking a project's repo on
+purpose — pointing it at a nonexistent bucket — made the **database restart its
+entire cluster**:
+
+```
+LOG:  server process (PID 197) exited with exit code 103
+LOG:  terminating any other active server processes
+FATAL:  archive command was terminated by signal 3: Quit
+LOG:  all server processes terminated; reinitializing
+```
+
+`archive-async=y` double-forks its worker, which reparents it to PID 1 — and PID 1
+was the postmaster. A worker exiting non-zero is then indistinguishable from one of
+Postgres' own backends crashing, so Postgres does the only correct thing for a
+backend crash and terminates every session to reinitialise. Project containers now
+run with a real init as PID 1 (**D-270**). An archiving failure has to stay a
+backup problem; turning it into an availability incident is exactly backwards,
+since surviving incidents is the reason to archive at all.
+
+**Verification, in two halves, because "alerts fire" needs both:**
+
+`promtool test rules` drives synthetic series through the real alert expressions
+and asserts which alerts come out — the healthy-idle project producing *none* is
+pinned there as the regression D-271 exists to prevent (**D-275**). And
+`wal.e2e.test.ts` breaks archiving on a live project, then proves the numbers move:
+pending segments appear, lag rises, `pgbackrest check` fails, Postgres' failure
+counter moves — and after the config is repaired, all four go back. A metric that
+rises and never falls is an alert that cannot clear, so the repair half is as much
+of the criterion as the break.
+
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -1519,10 +1592,10 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-Eighty-six decisions came out of running the thing rather than planning it —
-D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-262 from Phase 2, and D-263…D-269 from Phase 3.
+Ninety-two decisions came out of running the thing rather than planning it —
+D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-262 from Phase 2, and D-263…D-275 from Phase 3.
 Full text in the [decision log](docs/00-foundation/05-decision-log.md); the log holds
-D-001…D-269 and is binding when two documents disagree.
+D-001…D-275 and is binding when two documents disagree.
 
 | ID | What changed | Why it surfaced |
 |---|---|---|
@@ -1612,6 +1685,12 @@ D-001…D-269 and is binding when two documents disagree.
 | D-267 | Every pgBackRest command retries through lock contention; real failures do not retry | The async archiver holds the lock, so busy projects — the ones whose backups matter most — were the ones failing |
 | D-268 | pgBackRest failures are reported from the `ERROR` lines or the tail, never the front | Its option banner is the first several hundred characters, so truncating from the front hid the cause completely |
 | D-269 | `initdb` runs with `--data-checksums` | Required by restore verification and simply absent; without it a verification pass reports a healthy restore of a rotting cluster |
+| D-270 | Project containers run a real init as PID 1, not the workload | pgBackRest's async worker double-forks onto PID 1; with the postmaster there, its failure looked like a backend crash and restarted the whole cluster |
+| D-271 | Archive lag is the age of the oldest unarchived segment, not time since the last archive | `archive_timeout=300` would peg every healthy idle Free project at the warn line, and an alert that always fires discredits the ones that matter |
+| D-272 | The archive rungs have no hysteresis, unlike the disk ladder | These are notifications: flapping costs a duplicate message, stickiness costs a stale alert — opposite consequence, opposite answer |
+| D-273 | `pgbackrest check` runs on a 15-minute schedule, overridden by trouble | The interval is a cost control; a stale failing check keeps the pager ringing for 15 minutes after the fix |
+| D-274 | An unreachable project keeps its rung and is never recorded healthy | "Cannot measure" is not "measured as fine" — that reports a green fleet during the incident the scan exists to catch |
+| D-275 | Alert rules are tested with `promtool test rules`, not merely syntax-checked | The criterion says alerts *fire*; a file that parses proves nothing, and the healthy-idle no-alert case is the regression worth pinning |
 
 ## 7. Measurements
 
@@ -1736,9 +1815,13 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   not exist, so no project should be described as protected yet. PITR is P3d,
   verification is P3e, and until they land the honest statement is that Corebase
   has an archive, not a recovery path.
-- Scheduled base backups, retention enforcement, the WAL-lag alert, and the
-  final-backup-on-delete interlock (D-077) are all still unbuilt — `final_backup`
-  in the deletion saga remains the Milestone 0 gate that refuses only when told to.
+- Scheduled base backups, retention enforcement, and the final-backup-on-delete
+  interlock (D-077) are still unbuilt — `final_backup` in the deletion saga remains
+  the Milestone 0 gate that refuses only when told to.
+- The archive alerts are proven against synthetic series and a sabotaged project,
+  but **nothing is wired to a receiver**: Prometheus would fire and there is no
+  Slack or pager on the other end (OQ-146 owns the vendor choice). "Alerts fire" is
+  met in the sense the criterion tests; "someone is woken up" is Phase 4's sender.
 - `CB_REQUIRE_BACKUPS` is **off**, so a fleet with no repo configured still
   provisions projects that have no PITR. It flips on when Phase 3 completes.
 - **The density numbers cannot move the cost model, and the model is therefore

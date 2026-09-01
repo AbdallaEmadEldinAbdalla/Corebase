@@ -34,6 +34,10 @@ It is built on the design system that already existed in `design-exports/` rathe
 
 **How the UI stays consistent.** The first version of this shell was right in every colour and wrong in every mechanic, so the fix was not nicer screens but a written interaction contract: [docs/09-dashboard/05-ux-standards.md](docs/09-dashboard/05-ux-standards.md), ending in a 20-question gate that **runs on every UI change** (D-224) as the `ux-review` role in [.claude/skills/](.claude/skills/ux-review/SKILL.md). Its first run found two real failures in the code written to satisfy it — the palette was missing two actions a row menu already had, and the project list printed "Showing 20 of 20" while hiding a second page.
 
+**When archiving breaks, something notices.** WAL-archive lag is measured every two minutes, and the definition turned out to be the whole problem: the obvious one — time since the last successful archive — pegs every *healthy* idle free-tier project at the alert threshold, because `archive_timeout` closes a segment every five minutes and nothing happens in between. An alert that always fires is worse than no alert, since it discredits the ones that matter. What is measured instead is the age of the oldest segment closed but not yet archived, so nothing waiting means zero lag.
+
+Proving it works meant breaking it, and breaking it found something worse: pointing a project's repo at a bucket that did not exist made the **database restart its whole cluster**. pgBackRest's async archiver double-forks, which reparented its worker onto PID 1 — the postmaster — where a non-zero exit is indistinguishable from a crashed backend. An archiving failure had become an availability incident, which is exactly backwards.
+
 **Every project has an encrypted backup repo in object storage — and nothing has been restored from one yet.** Phase 3 leads with the backups doc's own rule: a backup that has not been restore-tested is treated as not existing. So what is true today is narrower than "backups work": each project gets its own pgBackRest repo under its own cipher-pass, and provisioning does not finish until `pgbackrest check` has forced a WAL switch and confirmed the segment landed. Point-in-time restore and the verification loop are the next two steps, and until they exist Corebase has an archive, not a recovery path.
 
 Building it turned up that `initdb` was never given `--data-checksums`, which the restore-verification checks require. That absence is silent twice over: page corruption goes undetected, and a verification pass then reports a healthy restore of a rotting cluster — a backup system whose checks cannot fail is worse than none.
@@ -95,7 +99,7 @@ There is no seeded password anywhere, so create an account on `/signup`; a new a
 
 The demo script creates a project, waits for it, connects to the database it made with the credentials the API handed back, runs real SQL, and deletes it — using only `curl` and `psql`, which is exactly what a customer has.
 
-The full suite is **512 tests**, integration included; they need the staging stack above and **fail rather than skip** without it:
+The full suite is **524 tests**, integration included; they need the staging stack above and **fail rather than skip** without it:
 
 ```bash
 pnpm test

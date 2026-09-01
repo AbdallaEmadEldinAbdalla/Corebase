@@ -35,7 +35,7 @@ Prometheus on `mon-1` ([infra phases](01-infra-phases.md), D-140) scrapes over t
 | `corebase_gateway_request_seconds` (histogram) | plane only — **no project_ref** | ❌ | platform latency is fleet-level; per-project latency questions go to logs |
 | `corebase_provisioning_job_seconds` (histogram) | job_type, outcome | ❌ | provisioning funnel percentiles |
 | `corebase_reconcile_{drift_repairs,pass_seconds}` | node, action | ❌ | D-053 health |
-| `corebase_backup_{last_success_ts,wal_archive_lag_seconds}` | node, project_ref | ✅ (2) | pages (below) |
+| `corebase_backup_{last_success_ts,wal_archive_lag_seconds,check_ok,wal_pending_segments}` | node, project_ref | ✅ (4) | pages (below). `check_ok` is a second, independent signal: a project can have nothing waiting and a repo whose credentials expired last week |
 | `corebase_node_{ram,disk}_reserved_ratio` | node | ❌ | bin-packing / headroom (D-148) |
 | API/worker internals (event loop lag, pool waits, Redis) | service | ❌ | standard runtime SLIs |
 
@@ -78,7 +78,7 @@ Routing: **page** = phone/push via on-call app + Slack; **warn** = Slack only; *
 | Node volume usage | >75% warn; >85% (auto-cordon fired, D-073) | **page** |
 | Project disk 80/90/95% | ladder events (D-073) — 80/90 ticket; 95 (soft read-only applied) warn | ticket/warn |
 | Backup failure | any project base-backup failure, or last-success age >26h | **page** (D-019: untested/absent backups are fiction) |
-| WAL archive lag | >5 min warn (RPO promise, D-148); >15 min **page** | warn/page |
+| WAL archive lag | >5 min warn (RPO promise, D-148); >15 min **page**. **Lag is the age of the oldest WAL segment closed but not yet archived** (D-271) — *not* time since the last successful archive, which `archive_timeout=300` would peg at the warn line for every healthy idle Free project | warn/page |
 | Restore-verification failure | any (continuous sampling run, D-176) | **page** |
 | **Isolation-suite failure** | any (D-085) | **page, Sev-1, freezes releases** |
 | Provisioning job stuck | any job >10 min in non-terminal state; queue depth >50 for 10 min | **page** / warn |
