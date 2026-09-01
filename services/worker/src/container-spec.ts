@@ -154,6 +154,11 @@ export function buildPoolerSpec(a: PoolerSpecArgs): ContainerSpec {
       // and it means the same thing it does for the database: whatever ends up
       // running inside this container cannot exhaust the node's pids.
       PidsLimit: 64,
+      // Same reasoning as the database's (D-270), pre-emptively: PgBouncer forks
+      // nothing today, but a container whose PID 1 is the workload rather than an
+      // init reaps nothing, and that is a property worth having by default rather
+      // than discovering.
+      Init: true,
       RestartPolicy: { Name: a.restartPolicy ?? 'no' },
       Mounts: [],
       PortBindings: { [`${POOLER_PORT}/tcp`]: [{ HostPort: String(a.hostPort) }] },
@@ -227,6 +232,21 @@ export function buildContainerSpec(a: SpecArgs): ContainerSpec {
       // saturate gets a static ceiling; the ones left open are the ones that take
       // the node down rather than the project.
       PidsLimit: PIDS_LIMIT,
+      /**
+       * A real init as PID 1, so the postmaster is not it (P3b, D-270).
+       *
+       * pgBackRest's async archiver (`archive-async=y`) double-forks to survive the
+       * `archive_command` invocation, which reparents its worker to PID 1. With the
+       * postmaster there, a worker that exits non-zero looks exactly like one of
+       * Postgres' own backends crashing — and Postgres responds the only way it
+       * can, by terminating every session and reinitialising the cluster.
+       *
+       * Observed, not theorised: pointing a project's repo at a nonexistent bucket
+       * made the *database* restart. An archiving failure has to stay a backup
+       * problem; turning it into an availability incident is precisely backwards,
+       * since the reason to archive is to survive incidents.
+       */
+      Init: true,
       // The I/O weight is set only where the node's kernel has `io.weight` at all
       // (see node-caps.ts). Setting it on a kernel without a weight-capable I/O
       // policy does not degrade to "no weight" — runc refuses to start the

@@ -495,6 +495,17 @@ export interface ContainerSpec {
     BlkioWeight?: number;
     BlkioDeviceReadBps?: Array<{ Path: string; Rate: number }>;
     BlkioDeviceWriteBps?: Array<{ Path: string; Rate: number }>;
+    /**
+     * Run a real init as PID 1 (Docker ships tini) instead of the entrypoint.
+     *
+     * Not a nicety. Without it the postmaster *is* PID 1, so it inherits every
+     * orphaned process in the namespace — and pgBackRest's async archiver
+     * double-forks, which reparents its worker to the postmaster. A worker that
+     * exits non-zero then reads to Postgres as one of its own backends crashing,
+     * and Postgres does what it must on a backend crash: kills every session and
+     * reinitialises the cluster (P3b, D-270).
+     */
+    Init?: boolean;
     RestartPolicy: { Name: string };
     Mounts: Array<{ Type: string; Source: string; Target: string }>;
     PortBindings: Record<string, Array<{ HostPort: string }>>;

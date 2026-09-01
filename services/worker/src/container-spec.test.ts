@@ -87,6 +87,19 @@ describe('noisy-neighbour walls (D-055)', () => {
     expect(pooler.HostConfig.PidsLimit).toBe(64);
   });
 
+  it('runs a real init as PID 1, so the postmaster is not it (D-270)', () => {
+    // pgBackRest's async archiver double-forks, which reparents its worker to
+    // PID 1. With the postmaster there, a worker exiting non-zero is
+    // indistinguishable from one of Postgres' own backends crashing — and
+    // Postgres responds by terminating every session and reinitialising the
+    // cluster. Observed: a project pointed at a nonexistent backup bucket
+    // restarted its own database.
+    expect(buildContainerSpec(base).HostConfig.Init).toBe(true);
+    expect(buildPoolerSpec({
+      ref: base.ref, networkName: 'cb-x-net', hostPort: 6433, authPassword: 'pw',
+    }).HostConfig.Init).toBe(true);
+  });
+
   it('disables swap by pinning MemorySwap to Memory', () => {
     // A tenant that swaps degrades every neighbour on the node, and a memory
     // limit with swap left open is a limit that does not bite.
