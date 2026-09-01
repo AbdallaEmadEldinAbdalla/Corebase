@@ -1,0 +1,100 @@
+{
+  "measurement": "M-008",
+  "what": "how many projects one node actually holds, and what each costs idle and under load",
+  "at": "2026-09-01T11:31:34.904Z",
+  "target_projects": 100,
+  "provisioned": 100,
+  "failed": 0,
+  "failures": [],
+  "provision_seconds": 98.9,
+  "create_to_ready_ms": {
+    "p50": 3514,
+    "p95": 5309,
+    "max": 6247
+  },
+  "provision_concurrency": 4,
+  "containers_running": 200,
+  "ram": {
+    "booked_mb": 35000,
+    "idle_anon_mib": 868,
+    "load_anon_mib": 1306.1,
+    "per_project_idle_mib": 8.68,
+    "per_project_load_mib": 13.06,
+    "booked_to_used_ratio_idle": 40.3,
+    "booked_to_used_ratio_load": 26.8,
+    "per_container_idle_mib": {
+      "min": 1.2,
+      "p50": 7.5,
+      "max": 7.5,
+      "mean": 4.3
+    },
+    "per_container_load_mib": {
+      "min": 1.2,
+      "p50": 11.9,
+      "max": 12,
+      "mean": 6.5
+    },
+    "by_role_idle_mib": {
+      "pooler": {
+        "n": 100,
+        "anon_mib": 120
+      },
+      "database": {
+        "n": 100,
+        "anon_mib": 750
+      }
+    },
+    "by_role_load_mib": {
+      "pooler": {
+        "n": 100,
+        "anon_mib": 120
+      },
+      "database": {
+        "n": 100,
+        "anon_mib": 1190.3
+      }
+    }
+  },
+  "node_memory": {
+    "idle": {
+      "mem_total_mib": 7934.1,
+      "mem_available_mib": 2208.3,
+      "mem_used_mib": 5725.8
+    },
+    "under_load": {
+      "mem_total_mib": 7934.1,
+      "mem_available_mib": 1765.2,
+      "mem_used_mib": 6168.9
+    }
+  },
+  "disk": {
+    "source": "pg_database_size(current_database())",
+    "idle_total_mib": 831.4,
+    "load_total_mib": 854.4,
+    "per_project_idle_mib": 8.3
+  },
+  "load": {
+    "connections_attached": 200,
+    "connections_refused": 0,
+    "seconds": 60,
+    "statements": 1414854,
+    "cores_busy": 8.21
+  },
+  "d209": {
+    "full_triplet": false,
+    "x86_launch_sku_class": false,
+    "at_least_50_co_resident": true,
+    "client_load_attached": true,
+    "may_rebase_planning_numbers": false
+  },
+  "conditions": {
+    "arch": "arm64",
+    "platform": "darwin",
+    "substrate": "Docker-in-Docker on a developer laptop",
+    "node_declared_ram_mb": 41984,
+    "node_declared_disk_gb": 168,
+    "node_actual_ram_mib": 7934.1,
+    "stack": "postgres + pgbouncer (no PostgREST — Phase 5)",
+    "connections_per_project": 2
+  }
+}

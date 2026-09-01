@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-09-01 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2: P2a–P2f done**
+**Last updated:** 2026-09-01 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g)
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -1265,6 +1265,74 @@ throws on it now. And the project image declares `VOLUME
 volume that `v=0` keeps forever — caught by reconciliation two suites away,
 reporting each one correctly as disk with no owner (**D-258**).
 
+### P2g — the density measurement · done · M-008
+
+Exit criterion 1: *"100 test projects on one node within RAM budget; density
+matches the cost model assumptions or the model is corrected."*
+
+**It holds. 100/100 projects, 200 containers, 98.9 seconds, no failures** —
+create→`ready` p50 3514 ms / p95 5309 ms at concurrency 4, with a pooler started
+for each, still 5× inside the 30 s target. All 200 client connections attached and
+ran 1.4 million statements over 60 s.
+
+`pnpm --filter @corebase/worker density` is the instrument; the numbers are
+**[M-008](docs/14-roadmap/05-measurements.md)** and the raw JSON is beside it.
+
+| per project (anon working set) | idle | under load |
+|---|---|---|
+| Postgres | 7.5 MiB | 11.9 MiB |
+| its pooler | 1.2 MiB | 1.2 MiB |
+| **total** | **8.68 MiB** | **13.06 MiB** |
+| booked by placement | 350 MB | 350 MB |
+| **booked : used** | **40 : 1** | **27 : 1** |
+
+**The finding is not the memory — it is the CPU.** RAM was over-booked 27-fold
+while **CPU sat at 8.21 of 10 cores** with two connections per project. The cost
+model books RAM and reasons about density in RAM (D-091, D-174); it does not model
+cores at all. That is a claim about *this* hardware — 10 ARM vCPU against a
+CCX43's 16 dedicated x86 cores — but it is the first measurement here taken with
+load attached, and it points at a different binding constraint than the one the
+model watches. Recorded as **OQ-182** and as a new early-warning signal on
+**R-2**.
+
+Two smaller findings. The pooler's measured working set is **1.2 MiB** against a
+budgeted 10–20 MiB and a 64 MiB ceiling — 53× headroom on a sidecar that may cost
+almost nothing (**OQ-183**). And disk is **8.3 MiB per project** from
+`pg_database_size`, which is *not* comparable to M-002's ~59 MB: that was volume
+footprint including WAL and filesystem overhead, and it remains the number that
+matters for capacity.
+
+**Criterion 1 is closed on its functional half and deliberately left open on its
+modelling half** (**D-259**). D-209 permits re-basing the 350 MB budget and
+D-091's 150-active/node only on a measurement with the full triplet, x86
+launch-SKU-class hardware, ≥50 co-resident projects, and client load. This run
+satisfies **two of four** — it cannot satisfy the others, because PostgREST is
+Phase 5 and this is ARM. The measured numbers are ~27× more favourable than the
+assumption, which is precisely when D-209 matters: a planning figure lowered on
+favourable partial data is the failure it was written to prevent.
+
+**What the run cost to get right**, all of it environmental rather than in the
+product:
+
+The first attempt stopped at exactly 20 projects, with 80 refused by a 409. That
+is the per-org project ceiling — an abuse control, not a capacity one — and
+leaving it in place for a node density run measures the ceiling (**D-261**).
+
+Widening the node's published port range failed with *"invalid ranges specified
+for container and host Ports"*: the compose file parameterised the host side of
+the mapping and pinned the container side to `5433-5462` (**D-262**). The way
+that mismatch fails when it does *not* fail loudly is the reason it earned a row —
+a project whose port the node does not publish provisions perfectly and then dies
+nine steps later at `wait_pooler_healthy` with `ECONNREFUSED`, reading as a broken
+pooler. The harness now pre-flights the highest port it will need.
+
+And `nodes.ram_reserved_mb` is a counter, not a view over `project_databases`, so
+truncating the project tables between runs frees nothing — the node still believes
+it holds the memory. The packer refused half the projects, correctly, against
+bookings whose rows no longer existed. The harness recomputes the reservation from
+the rows, which is what the reconciler's `reservation_drift` repair already does
+and for the same reason: the rows are the truth and the counter is a cache.
+
 ### The P2 review — what a deep pass over everything found
 
 Asked to revisit the whole build, not a step of it. Eight findings, all fixed; the
@@ -1362,10 +1430,10 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-Seventy-five decisions came out of running the thing rather than planning it —
-D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-258 from Phase 2.
+Seventy-nine decisions came out of running the thing rather than planning it —
+D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-262 from Phase 2.
 Full text in the [decision log](docs/00-foundation/05-decision-log.md); the log holds
-D-001…D-258 and is binding when two documents disagree.
+D-001…D-262 and is binding when two documents disagree.
 
 | ID | What changed | Why it surfaced |
 |---|---|---|
@@ -1444,6 +1512,10 @@ D-001…D-258 and is binding when two documents disagree.
 | D-256 | Hard pid ceiling per container: 256 project, 64 pooler | Exhausting the node's pid space stops every tenant's database and the reconciler; accepted cost is that a saturated container cannot be exec'd into |
 | D-257 | Verify limits by reading `/sys/fs/cgroup` in the container, never `docker inspect` | Inspect echoes our own request; it is why the T5d limits test stayed green while the I/O weight broke every container |
 | D-258 | `removeContainer` keeps anonymous volumes by default, deletes them only on explicit opt-in | `v=1` on a project would delete the customer's database; `v=0` on a mount-less probe leaks a volume reconciliation then reports as an orphan |
+| D-259 | Exit criterion 1 closed on its functional half, left open on its modelling half | 100 projects run on one node; D-209 forbids re-basing the planning numbers on ARM without the full triplet, and the data being *favourable* is exactly when that matters |
+| D-260 | Density measured on `anon`, never on cgroup `usage` | `usage` counts page cache, which a node under pressure reclaims; anon also keeps M-008 comparable with M-001 |
+| D-261 | The per-org project ceiling is an abuse control, not a capacity one, and a density run raises it | Left in place it measures itself: 20 created, 80 refused, the node nowhere near its limits |
+| D-262 | The staging node publishes the same port range on both sides of the mapping | A pinned container side broke the widening, and an unpublished port fails nine steps later as a pooler `ECONNREFUSED` rather than at allocation |
 
 ## 7. Measurements
 
@@ -1486,12 +1558,11 @@ enforces it (P1b), and CI runs both suites on every PR (P1f). The dashboard shel
 (P1g) covers login, signup, the org switcher, the projects grid, the create-project
 flow and a project overview.
 
-**Phase 2 is at P2f of seven planned steps**, with **exit criteria 2 and 4 met and
-3 met apart from its hard backstop**. Done: the per-project network, PgBouncer with
-the two-URL contract, pause/resume with idle detection, credential rotation, the
-disk ladder, and bin-packing placement with the full cgroup control set. Remaining:
-**P2g**, the density measurement (criterion 1) — which D-209 already constrains,
-since this hardware cannot satisfy its conditions.
+**Phase 2 is complete** — all seven steps. **Exit criteria 2 and 4 are met**,
+**3 is met apart from its hard backstop** (the XFS project quota needs a real
+node), and **1 is met on its functional half**: 100 projects run on one node, but
+D-209 forbids re-basing the density model on ARM without the full triplet, so the
+modelling half stays open by design rather than by omission.
 
 The measurement that would move the cost model most is the one Phase 1/2 makes
 possible:
@@ -1564,6 +1635,15 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   node cordon — is implemented and tested.
 - No email or dashboard banner at the 80% and 90% rungs. The ladder records the rung
   and audits nothing yet; notification is Phase 4's sender.
+- **The density numbers cannot move the cost model, and the model is therefore
+  still unvalidated.** M-008 satisfies two of D-209's four conditions (100
+  co-resident projects, client load) and cannot satisfy the other two here. The
+  350 MB booking and D-091's 150-active/node remain assumptions — favourable
+  assumptions, since measured usage is 27× lower, which is exactly the situation
+  D-209 exists for.
+- **Nothing models CPU.** M-008 found cores at 82% while RAM was 27× over-booked.
+  Placement books RAM and disk; there is no CPU term in the arithmetic and no
+  measurement of it on target hardware (OQ-182).
 - Placement is single-node in staging, so bin-packing across a real fleet is
   proven only against **synthetic node rows** in the control plane. That is the
   right level for the arithmetic and the locking — both are SQL — but nothing here

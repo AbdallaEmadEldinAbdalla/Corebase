@@ -248,6 +248,102 @@ Per D-209 this may not be used to re-base any density or RAM planning number: on
 
 **Next measurement to take:** resume latency with 20 projects resuming concurrently, and after a real interval rather than seconds — the two conditions that separate this number from the one customers will see.
 
+## M-008 — One hundred projects on one node, with clients attached
+
+**Date:** 2026-09-01 · **Task:** Phase 2, P2g (exit criterion 1) · **Answers:** the functional half of criterion 1; partially [OQ-090](../12-business/01-cost-model.md); adds a new finding to [R-2](../15-risks/01-risk-register.md)
+
+**Environment (matters — do not re-plan density on this alone):**
+
+| | |
+|---|---|
+| Host | macOS Docker Desktop VM, `linux/aarch64`, **7934 MiB** VM RAM, 10 vCPU — **not** the target Hetzner CCX43 (x86) |
+| Topology | Docker staging substitute: control-db + control-redis + one Docker-in-Docker data node over mTLS |
+| Node **declared** | 41984 MB RAM / 168 GB disk — **a fiction**, and the one deliberate lie in the run. Placement books the plan budget (D-174: 350 MB/project), so 100 projects reserve 35 GB and the 85% stop needs a ~41 GB node. Declaring the truth would have measured the bin-packer's refusal, which P2f already proves twice, and nothing about density |
+| Per-org ceiling | raised from 20 to 120 for the run. The ceiling is an abuse control, not a capacity one, and it was the first wall this hit: 20 created, 80 refused with a 409, the node nowhere near its limits |
+| Stack | **postgres + pgbouncer** — no PostgREST (Phase 5). Two containers per project, not three |
+| Load | 2 connections per project (200 total), each with its own table of 500 rows, looping an aggregate query for 60 s |
+| Harness | `pnpm --filter @corebase/worker density`; raw numbers in [measurements/m-008-density.json](measurements/m-008-density.json) |
+
+**It holds. 100/100 projects, 200 containers, no failures.**
+
+| | |
+|---|---|
+| Provisioned | **100/100** in **98.9 s** at concurrency 4 |
+| create → `ready` | p50 **3514 ms**, p95 **5309 ms**, max **6247 ms** |
+| Connections attached | **200/200**, none refused |
+| Statements in 60 s | 1,414,854 |
+
+Create latency is ~1.4× M-002's 2463 ms single-stream p50 while doing four at a
+time *and* starting a pooler each — still 5× inside the 30 s target.
+
+**What a project actually costs (anon working set, cgroup v2):**
+
+| | idle | under load |
+|---|---|---|
+| All 200 containers | 868 MiB | **1306 MiB** |
+| Per project (db + pooler) | 8.68 MiB | **13.06 MiB** |
+| — its Postgres | 7.5 MiB | 11.9 MiB |
+| — its pooler | 1.2 MiB | 1.2 MiB |
+| Booked by placement | 350 MB | 350 MB |
+| **Booked : used** | **40 : 1** | **27 : 1** |
+
+`anon` rather than `usage` on purpose: `usage` includes page cache, which a node
+under pressure reclaims, so quoting it as the cost of a project overstates it by
+whatever the kernel happened to be holding. It is also what M-001 measured, which
+keeps the two comparable — and they agree: M-001 saw 5.0 MiB idle and 27.9 MiB at
+ten backends for Postgres alone; this sees 7.5 MiB idle and 11.9 MiB at two.
+
+**The finding is not the memory. It is the CPU.**
+
+| | idle | under load |
+|---|---|---|
+| Node memory used (incl. page cache) | 5726 / 7934 MiB | 6169 / 7934 MiB |
+| Node `MemAvailable` | 2208 MiB | **1765 MiB** |
+| **Cores busy** | — | **8.21 of 10** |
+
+RAM was over-booked 27-fold while **CPU sat at 82%** with two connections per
+project. The cost model books RAM and reasons about density in RAM (D-091, D-174);
+on this evidence, with clients attached, the resource that runs out first is CPU.
+That is a claim about *this* hardware — 10 ARM vCPU against a CCX43's 16 dedicated
+x86 cores — and the ratio of cores to RAM differs on the target. But it is the
+first measurement here taken with load attached, and it points at a different
+binding constraint than the one the model watches.
+
+**Disk: 8.3 MiB per project**, from `pg_database_size` — the same source the
+enforcement ladder and billing use. Not comparable to M-002's ~59 MB, which was
+volume footprint (WAL, backup label, filesystem overhead); the two answer
+different questions and the earlier number is the one that matters for capacity.
+
+**The pooler is ~10× cheaper than budgeted.** [Connection pooling](../03-database-platform/02-connection-pooling.md)
+budgets 10–20 MiB RSS per pooler; the measured anon working set is **1.2 MiB**, flat
+between idle and 200 attached connections. Its 64 MiB container ceiling is 53× the
+observed working set.
+
+**Reading it honestly — what this may and may not do.**
+
+Under **D-209**, the 350 MB budget and D-091's 150-active/node may only be re-based
+on a measurement with the full triplet, x86 launch-SKU-class hardware, ≥50
+co-resident projects, and client load. This run satisfies **two of four**: 100
+co-resident projects and real client load. It cannot satisfy the other two —
+PostgREST is Phase 5, and this is ARM. So none of the numbers above move a planning
+figure, and that is D-209 working as intended rather than a shortfall in the run.
+
+What it does establish: the platform *functions* at the target density, the
+control plane places and provisions 100 projects on one node without a failure,
+and the direction of the earlier evidence holds with clients attached — booked RAM
+is roughly 27× used, not 3× as a pessimist would have guessed.
+
+**What it does not license.** Lowering the booking. The 350 MB exists to survive a
+project that is *used*, and two connections running one aggregate query is not a
+used project — it is a floor with clients on it. Nor does it license any statement
+about the third container, which is absent, or about x86.
+
+**Next measurement to take:** the full triplet on x86 launch-SKU hardware with ≥50
+co-resident projects and load — the one D-209 actually asks for, and the only one
+that can re-base D-091. Separately, a CPU-first density run: raise connections per
+project until something saturates, and find out whether the binding resource on
+target hardware is cores or memory. That question is now the interesting one.
+
 ## How to add an entry
 
 1. Number sequentially (`M-002`, …). Never renumber.
