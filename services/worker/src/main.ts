@@ -6,9 +6,10 @@ import { buildSagas } from './jobs/sagas.ts';
 import { registerNode } from './placement.ts';
 import { createDocker } from './docker.ts';
 import { createEnvelope } from '@corebase/crypto';
-import { createSecretStore } from '@corebase/secrets';
+import { createSecretStore, SECRET_NAMES } from '@corebase/secrets';
 import { createSweeper } from './sweeper.ts';
 import { createPurgeScan } from './purge-scan.ts';
+import { createIdleScan } from './idle-scan.ts';
 import { createReconciler } from './reconcile.ts';
 import {
   startMetricsServer, registerControlPlaneCollectors,
@@ -129,6 +130,31 @@ const purgeMs = Number(process.env.CB_PURGE_SCAN_MS ?? 3_600_000);
 const purgeTimer = setInterval(() => { void purgeScan.scanOnce().catch((e) =>
   log('error', 'purge scan failed', { error: (e as Error).message })); }, purgeMs);
 
+// The idle scan (P2c, D-008/D-072): what turns "nobody has used this in a week"
+// into a paused project. Hourly by default, for the same reason as the purge —
+// the window is days, so scanning faster only costs connections to every project.
+//
+// It needs the secret store to read each project's developer password, because it
+// asks the project's own database who is connected. Without a store it does not
+// run at all rather than running blind: a scan that cannot tell active from idle
+// would pause projects that are in use.
+const idleDays = Number(process.env.CB_IDLE_PAUSE_DAYS ?? 7);
+const idleMs = Number(process.env.CB_IDLE_SCAN_MS ?? 3_600_000);
+let idleTimer: NodeJS.Timeout | undefined;
+if (secrets) {
+  const idleScan = createIdleScan({
+    pool, queue, idleDays, log: (m, e) => log('info', m, e),
+    ...(docker ? { docker } : {}),
+  });
+  const store = secrets;
+  idleTimer = setInterval(() => {
+    void idleScan.scanOnce({
+      secretFor: (projectId) => store.get(projectId, SECRET_NAMES.developer),
+      poolerSecretFor: (projectId) => store.get(projectId, SECRET_NAMES.poolerAuth),
+    }).catch((e) => log('error', 'idle scan failed', { error: (e as Error).message }));
+  }, idleMs);
+}
+
 // Node reconciliation (D-065/D-173): 5 minutes, jittered so a fleet of workers
 // does not hit every node's Engine API at the same second. Container crashes are
 // Docker's restart policy to handle; this is the backstop that catches what the
@@ -172,7 +198,10 @@ registerControlPlaneCollectors(pool);
 const metricsPort = Number(process.env.CB_METRICS_PORT ?? 9101);
 const metricsServer = startMetricsServer(metricsPort);
 
-log('info', 'worker started', { sweepMs, purgeMs, reconcileMs, metricsPort });
+log('info', 'worker started', {
+  sweepMs, purgeMs, reconcileMs, metricsPort,
+  idle: idleTimer ? { scanMs: idleMs, days: idleDays } : 'disabled (no secret store)',
+});
 
 const shutdown = async (signal: string) => {
   log('info', 'shutting down', { signal });

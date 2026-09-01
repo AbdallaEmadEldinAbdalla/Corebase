@@ -295,6 +295,9 @@ export interface ContainerInspect {
   Id: string;
   Name: string;
   State: { Status: string; Running: boolean; Restarting: boolean; ExitCode: number; Error: string };
+  /** Per-network endpoint details; `IPAddress` is how we identify a container's
+   *  own connections in a database's `pg_stat_activity` (P2c). */
+  NetworkSettings?: { Networks?: Record<string, { IPAddress?: string }> };
   Config: { Image: string; Labels: Record<string, string> };
   HostConfig: { Memory: number; MemorySwap: number; NanoCpus: number; RestartPolicy: { Name: string } };
 }

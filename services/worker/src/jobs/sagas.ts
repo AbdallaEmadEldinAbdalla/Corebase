@@ -1,6 +1,6 @@
 import { Client as PgClient, type Pool } from 'pg';
 import type { SagaStep, SagaContext } from './runner.ts';
-import { allocateNode, releaseNode, volumeNameFor } from '../placement.ts';
+import { allocateNode, releaseNode, releaseRam, bookRam, volumeNameFor } from '../placement.ts';
 import type { Docker } from '../docker.ts';
 import {
   buildContainerSpec, buildPoolerSpec, bootstrapPassword, containerName, networkName,
@@ -102,8 +102,11 @@ const pending = (name: string): SagaStep<SagaContext> => ({
 
 /** Project fields the steps need, read once per step from the row of record. */
 async function loadProject(pool: Pool, projectId: string) {
-  const { rows } = await pool.query<{ id: string; ref: string; plan: string; name: string }>(
-    `SELECT id, ref::text AS ref, plan::text AS plan, name FROM projects WHERE id = $1`,
+  const { rows } = await pool.query<{
+    id: string; ref: string; plan: string; name: string; status: string;
+  }>(
+    `SELECT id, ref::text AS ref, plan::text AS plan, name, status::text AS status
+       FROM projects WHERE id = $1`,
     [projectId]);
   if (!rows[0]) throw new Error(`project ${projectId} no longer exists`);
   return rows[0];
@@ -948,6 +951,199 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
     },
   };
 
+  // ── pause / resume (P2c, D-008) ───────────────────────────────────────────
+  //
+  // Pause is what makes a database-per-free-project affordable: an idle project
+  // gives its RAM back and keeps everything else. The order below is the doc's,
+  // and each step is where it is for a reason worth stating.
+
+  /**
+   * Announce the intent before touching anything.
+   *
+   * `pausing` is a state the API and dashboard can read, so a customer who opens
+   * the project mid-pause sees "pausing" rather than a project that is briefly
+   * lying about being ready.
+   */
+  const markPausing: SagaStep<SagaContext> = {
+    name: 'mark_pausing',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const { rows } = await deps.pool.query<{ status: string }>(
+        `UPDATE projects SET status = 'pausing', updated_at = now()
+          WHERE id = $1 AND status IN ('ready', 'pausing')
+        RETURNING status::text AS status`, [projectId]);
+      if (!rows[0]) {
+        const cur = await loadProject(deps.pool, projectId);
+        // An already-paused project is a *completed* pause, not a bad request.
+        // Whole sagas get re-delivered — orphan recovery replays a job whose
+        // checkpoints all succeeded — and a re-delivered pause that fails here
+        // would raise an alarm about work that is already done.
+        //
+        // Validating user intent is the API's job, not this one: the endpoint
+        // returns 409 for "already paused" because a person asked for something
+        // that cannot happen. A job is not a person.
+        if (cur.status === 'paused') { ctx.log('already paused — nothing to do'); return; }
+        throw new Error(`refusing to pause a project that is ${cur.status}`);
+      }
+      ctx.log('pausing');
+    },
+  };
+
+  /**
+   * A clean Postgres shutdown, not a container stop.
+   *
+   * `CHECKPOINT` then a fast, graceful stop means the volume is left with no WAL to
+   * replay, which is most of why resume is single-digit seconds rather than tens.
+   * Killing the container instead would work — Postgres is crash-safe — and would
+   * spend the recovery on every single resume.
+   */
+  const checkpointAndStop: SagaStep<SagaContext> = {
+    name: 'checkpoint_and_stop',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const project = await loadProject(deps.pool, projectId);
+      const place = await loadPlacement(deps.pool, projectId);
+      const docker = requireDocker(deps);
+
+      // The pooler first: it should stop accepting before the database goes, or
+      // the last few clients get a connection that dies mid-query.
+      const pooler = await docker.inspectContainer(
+        place.pooler_container_id ?? poolerName(project.ref));
+      if (pooler?.State.Running) {
+        await docker.setRestartPolicy(pooler.Id, 'no');
+        await docker.stopContainer(pooler.Id);
+        ctx.log('pooler stopped');
+      }
+
+      const db = await docker.inspectContainer(place.container_id ?? containerName(project.ref));
+      if (!db) { ctx.log('no database container — nothing to stop'); return; }
+      if (db.State.Running) {
+        // CHECKPOINT inside the container, so a slow disk shows up here rather
+        // than as a stop timeout. Failure is logged and not fatal: the shutdown
+        // below is still clean, it just has more to flush.
+        const { exitCode } = await docker.exec(db.Id, ['psql', '-h', '127.0.0.1', '-U', 'postgres',
+          '-d', 'postgres', '-c', 'CHECKPOINT']);
+        ctx.log(exitCode === 0 ? 'checkpointed' : 'checkpoint did not run cleanly',
+          { exit_code: exitCode });
+
+        await docker.setRestartPolicy(db.Id, 'no');
+        await docker.stopContainer(db.Id);
+        ctx.log('database stopped cleanly — no WAL to replay on resume');
+      } else {
+        ctx.log('database already stopped');
+      }
+    },
+  };
+
+  /**
+   * Remove the containers, keep the volume, the network and the placement row.
+   *
+   * The doc is explicit that a paused project keeps its volume, network definition
+   * and config — so what is removed is only the two containers, and their removal is
+   * why a paused project costs no container overhead at all rather than the few MB a
+   * stopped container still holds.
+   *
+   * The placement row is what makes resume give back the *same* connection string:
+   * the port, the pooler port and the volume name all live there.
+   */
+  const removePausedContainers: SagaStep<SagaContext> = {
+    name: 'remove_paused_containers',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const project = await loadProject(deps.pool, projectId);
+      const place = await loadPlacement(deps.pool, projectId).catch(() => undefined);
+      const docker = requireDocker(deps);
+      for (const target of [
+        place?.pooler_container_id, poolerName(project.ref),
+        place?.container_id, containerName(project.ref),
+      ].filter(Boolean)) {
+        await docker.removeContainer(target as string);
+      }
+      await deps.pool.query(
+        `UPDATE project_databases
+            SET container_id = NULL, pooler_container_id = NULL
+          WHERE project_id = $1`, [projectId]);
+      ctx.log('containers removed; volume, network and placement kept');
+    },
+  };
+
+  /**
+   * Give the RAM back and record the state.
+   *
+   * Last, and deliberately after the containers are gone: crediting the node while
+   * containers were still running would let the placer put a new project on memory
+   * this one is still using.
+   */
+  const markPaused: SagaStep<SagaContext> = {
+    name: 'mark_paused',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const project = await loadProject(deps.pool, projectId);
+      const { released, freedMb } = await releaseRam(deps.pool, { projectId });
+      await deps.pool.query(
+        `UPDATE project_databases
+            SET status = 'paused', paused_at = COALESCE(paused_at, now())
+          WHERE project_id = $1`, [projectId]);
+      await deps.pool.query(
+        `UPDATE projects
+            SET status = 'paused', paused_at = COALESCE(paused_at, now()), updated_at = now()
+          WHERE id = $1`, [projectId]);
+      ctx.log('paused — disk kept, RAM returned', {
+        ref: project.ref, freed_mb: freedMb, already_released: !released,
+      });
+    },
+  };
+
+  /**
+   * Take the RAM back before starting anything.
+   *
+   * First, because it is the step that can legitimately fail: a node that filled up
+   * while this project slept cannot take it back, and finding that out *after*
+   * starting containers means running a project the node never agreed to hold.
+   */
+  const markResuming: SagaStep<SagaContext> = {
+    name: 'mark_resuming',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const project = await loadProject(deps.pool, projectId);
+      const { rows } = await deps.pool.query<{ status: string }>(
+        `UPDATE projects SET status = 'resuming', updated_at = now()
+          WHERE id = $1 AND status IN ('paused', 'resuming', 'pausing')
+        RETURNING status::text AS status`, [projectId]);
+      if (!rows[0]) {
+        const cur = await loadProject(deps.pool, projectId);
+        if (cur.status === 'ready') { ctx.log('already ready — nothing to resume'); return; }
+        throw new Error(`refusing to resume a project that is ${cur.status}`);
+      }
+      const { rebooked, bookedMb } = await bookRam(deps.pool, { projectId, plan: project.plan });
+      ctx.log('resuming', { booked_mb: bookedMb, already_booked: !rebooked });
+    },
+  };
+
+  /**
+   * Bring the project back and clear the paused marks.
+   *
+   * The heavy lifting is deliberately *not* here: the resume saga reuses
+   * `create_network`, `start_container`, `wait_healthy`, `start_pooler` and
+   * `wait_pooler_healthy` unchanged, because those steps are already idempotent and
+   * already know how to find an existing volume. A bespoke resume path would be a
+   * second, less-tested way to start a project.
+   */
+  const markResumed: SagaStep<SagaContext> = {
+    name: 'mark_resumed',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      await deps.pool.query(
+        `UPDATE project_databases
+            SET status = 'running', paused_at = NULL, last_active_at = now()
+          WHERE project_id = $1`, [projectId]);
+      await deps.pool.query(
+        `UPDATE projects SET status = 'ready', paused_at = NULL, updated_at = now()
+          WHERE id = $1`, [projectId]);
+      ctx.log('resumed — same port, same volume, same connection string');
+    },
+  };
+
   return {
     provision_project: [
       allocate,                      // T5c
@@ -972,6 +1168,24 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       stopContainer,                 // T7
       removeNetwork,                 // P2a — holds no data; frees the subnet
       markSoftDeleted,               // T7
+    ],
+    // Idle projects give their RAM back and keep everything else (D-008).
+    pause_project: [
+      markPausing,                   // P2c
+      finalBackup,                   // D-078 gate — unimplemented until Phase 3
+      checkpointAndStop,             // P2c
+      removePausedContainers,        // P2c
+      markPaused,                    // P2c — credits the node last
+    ],
+    // Resume reuses the provisioning steps rather than reimplementing them.
+    resume_project: [
+      markResuming,                  // P2c — books RAM first; this is what can fail
+      createNetwork,                 // P2a — idempotent
+      startContainer,                // T5d — finds the kept volume
+      waitHealthy,                   // T5d
+      startPooler,                   // P2b
+      waitPoolerHealthy,             // P2b
+      markResumed,                   // P2c
     ],
     // Phase two — irreversible, and gated on the window having closed.
     purge_project: [

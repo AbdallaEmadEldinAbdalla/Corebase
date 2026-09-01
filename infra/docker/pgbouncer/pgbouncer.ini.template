@@ -48,11 +48,20 @@ server_idle_timeout = 240
 ; Postgres connection exhaustion or a client that hangs forever.
 query_wait_timeout = 60
 
-; No admin console. `admin_users` is empty and stats are not exposed on the data
-; port — the pooler is not an operations surface for the customer, and anything we
-; need to know about it we ask through the control plane.
+; No admin commands from anywhere: `admin_users` stays empty, so nothing on this
+; port can RELOAD, PAUSE or KILL.
 admin_users =
-stats_users =
+;
+; Stats, though, the control plane does need. The idle scan (D-008) has to know how
+; many *clients* the pooler has, and only the pooler knows that: its parked server
+; connections appear in `pg_stat_activity` as the customer's role, so counting
+; backends alone reports a busy project for four minutes after the last real client
+; goes away — and a project that never looks idle never pauses, which is the free
+; tier's whole economic model.
+;
+; `pgbouncer_auth` is the only account here, it already exists for auth_query, and
+; stats_users grants SHOW and nothing else.
+stats_users = pgbouncer_auth
 
 ; Log to stdout so the node's logging driver collects it like everything else.
 logfile =

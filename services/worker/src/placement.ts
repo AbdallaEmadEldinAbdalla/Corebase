@@ -168,9 +168,10 @@ export async function allocateNode(
 
     await client.query(
       `INSERT INTO project_databases
-         (project_id, node_id, volume_name, port, pooler_port, ram_limit_mb, status)
-       VALUES ($1,$2,$3,$4,$5,$6,'provisioning')`,
-      [args.projectId, n.id, volumeName, port, poolerPort, limit]);
+         (project_id, node_id, volume_name, port, pooler_port, ram_limit_mb,
+          ram_booked_mb, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'provisioning')`,
+      [args.projectId, n.id, volumeName, port, poolerPort, limit, booking]);
 
     await client.query(
       `UPDATE nodes SET ram_reserved_mb = ram_reserved_mb + $2 WHERE id = $1`, [n.id, booking]);
@@ -192,20 +193,126 @@ export async function allocateNode(
  * being deleted inside the same transaction.
  */
 export async function releaseNode(
-  pool: Pool, args: { projectId: string; plan: string },
+  pool: Pool, args: { projectId: string; plan?: string },
 ): Promise<{ released: boolean; freedMb: number }> {
+  void args.plan;   // kept for call-site compatibility; the row is the authority now
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Credit what the row says is booked, not what the plan says it would be.
+    // Those differ for a paused project, whose booking is zero (P2c) — crediting
+    // the plan amount there would return RAM that was never reserved and leave the
+    // node permanently under-counted, which is worse than leaking a booking
+    // because it makes the node accept projects it cannot hold.
+    const del = await client.query<{ node_id: string; ram_booked_mb: number }>(
+      `DELETE FROM project_databases WHERE project_id = $1
+       RETURNING node_id, ram_booked_mb`, [args.projectId]);
+    if (!del.rows[0]) { await client.query('COMMIT'); return { released: false, freedMb: 0 }; }
+    const freed = del.rows[0].ram_booked_mb;
+    if (freed > 0) {
+      await client.query(
+        `UPDATE nodes SET ram_reserved_mb = GREATEST(0, ram_reserved_mb - $2) WHERE id = $1`,
+        [del.rows[0].node_id, freed]);
+    }
+    await client.query('COMMIT');
+    return { released: true, freedMb: freed };
+  } catch (err) {
+    await client.query('ROLLBACK'); throw err;
+  } finally { client.release(); }
+}
+
+/**
+ * Give a paused project's RAM back to its node, keeping everything else.
+ *
+ * The difference from `releaseNode` is the whole point of pause (D-008): the
+ * placement row survives, so the project keeps its port, its pooler port, its
+ * volume and its disk reservation — which is what lets resume hand back the same
+ * connection string rather than a new one.
+ *
+ * Idempotent by the same mechanism `releaseNode` uses: the update is conditional on
+ * there being a booking to release, inside the transaction, so a second call finds
+ * nothing and credits nothing.
+ */
+export async function releaseRam(
+  pool: Pool, args: { projectId: string },
+): Promise<{ released: boolean; freedMb: number }> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Read the booking under a row lock, *then* zero it.
+    //
+    // The obvious one-statement version is wrong: `UPDATE … SET ram_booked_mb = 0
+    // … RETURNING ram_booked_mb` returns the **new** value in Postgres, so it
+    // reports zero freed and the node is credited nothing. That is exactly what
+    // happened — pause looked successful, released no memory, and the node's
+    // accounting silently drifted until a resume double-booked it.
+    const cur = await client.query<{ node_id: string; ram_booked_mb: number }>(
+      `SELECT node_id, ram_booked_mb FROM project_databases
+        WHERE project_id = $1 AND ram_booked_mb > 0
+          FOR UPDATE`, [args.projectId]);
+    if (!cur.rows[0]) { await client.query('COMMIT'); return { released: false, freedMb: 0 }; }
+    const freed = cur.rows[0].ram_booked_mb;
+    await client.query(
+      `UPDATE project_databases SET ram_booked_mb = 0 WHERE project_id = $1`,
+      [args.projectId]);
+    await client.query(
+      `UPDATE nodes SET ram_reserved_mb = GREATEST(0, ram_reserved_mb - $2) WHERE id = $1`,
+      [cur.rows[0].node_id, freed]);
+    await client.query('COMMIT');
+    return { released: true, freedMb: freed };
+  } catch (err) {
+    await client.query('ROLLBACK'); throw err;
+  } finally { client.release(); }
+}
+
+/**
+ * Re-book a paused project's RAM on the node it is already placed on.
+ *
+ * This can fail, and the failure is the interesting part: a node that filled up
+ * while the project was paused cannot take it back. The doc's answer is to place it
+ * elsewhere and restore from backup, which needs backups (Phase 3) — so until then
+ * this throws `NoCapacityError` with the node named, rather than starting containers
+ * whose memory the node has not agreed to.
+ *
+ * Idempotent: a project that is already booked returns `rebooked: false` and the
+ * resume saga carries on, because the booking is the precondition, not the goal.
+ */
+export async function bookRam(
+  pool: Pool, args: { projectId: string; plan: string },
+): Promise<{ rebooked: boolean; bookedMb: number }> {
   const booking = PLAN_RAM_MB[args.plan] ?? PLAN_RAM_MB['free']!;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const del = await client.query<{ node_id: string }>(
-      `DELETE FROM project_databases WHERE project_id = $1 RETURNING node_id`, [args.projectId]);
-    if (!del.rows[0]) { await client.query('COMMIT'); return { released: false, freedMb: 0 }; }
+    // Lock the node first, in the same order allocate() takes it, so a resume and
+    // a fresh placement racing for the last slot serialise instead of both winning.
+    const row = await client.query<{
+      node_id: string; ram_booked_mb: number; hostname: string;
+      ram_total_mb: number; ram_reserved_mb: number;
+    }>(`SELECT d.node_id, d.ram_booked_mb, n.hostname, n.ram_total_mb, n.ram_reserved_mb
+          FROM project_databases d JOIN nodes n ON n.id = d.node_id
+         WHERE d.project_id = $1
+           FOR UPDATE OF n`, [args.projectId]);
+    const r = row.rows[0];
+    if (!r) throw new Error('no placement row — a project cannot be resumed onto nothing');
+    if (r.ram_booked_mb > 0) {
+      await client.query('COMMIT');
+      return { rebooked: false, bookedMb: r.ram_booked_mb };
+    }
+    if (!canFit({ ramTotalMb: r.ram_total_mb, ramReservedMb: r.ram_reserved_mb }, booking)) {
+      throw new NoCapacityError(
+        `node ${r.hostname} is at ${r.ram_reserved_mb}/${r.ram_total_mb} MB and cannot ` +
+        `take back ${booking} MB — resuming this project needs a different node, which ` +
+        'means restoring from backup (Phase 3)');
+    }
     await client.query(
-      `UPDATE nodes SET ram_reserved_mb = GREATEST(0, ram_reserved_mb - $2) WHERE id = $1`,
-      [del.rows[0].node_id, booking]);
+      `UPDATE project_databases SET ram_booked_mb = $2 WHERE project_id = $1`,
+      [args.projectId, booking]);
+    await client.query(
+      `UPDATE nodes SET ram_reserved_mb = ram_reserved_mb + $2 WHERE id = $1`,
+      [r.node_id, booking]);
     await client.query('COMMIT');
-    return { released: true, freedMb: booking };
+    return { rebooked: true, bookedMb: booking };
   } catch (err) {
     await client.query('ROLLBACK'); throw err;
   } finally { client.release(); }
