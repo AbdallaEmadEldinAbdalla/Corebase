@@ -250,8 +250,8 @@ boot. Don't use them.
 
 ## 4. What is built, in detail
 
-Test counts are from `pnpm test` and are all currently green: **409 tests**, of
-which **216** need no infrastructure (`pnpm test:unit`).
+Test counts are from `pnpm test` and are all currently green: **429 tests**, of
+which **~220** need no infrastructure (`pnpm test:unit`).
 
 Every task below has a command that proves it; they are listed with the task.
 
@@ -1091,6 +1091,64 @@ on exactly the endpoints that take no body. Every HTTP client sets a JSON
 content-type by default. This supersedes the half of D-198 that made the best of the
 rejection; malformed JSON still keeps its 400, which was D-198's actual point.
 
+### The P2 review — what a deep pass over everything found
+
+Asked to revisit the whole build, not a step of it. Eight findings, all fixed; the
+two sharpest were the same shape — a protection this codebase applies carefully in
+one place and not in another.
+
+**A hardcoded credential** (**D-240**). `CB_STATIC_TOKEN` defaulted to the literal
+string `dev-token`, so an API deployed with no configuration accepted that header
+as the **bootstrap owner** — full rights, no expiry, no revocation, attributed to a
+real user so nothing in the audit log looked unusual. Verified before fixing:
+`buildApp({})` answered 200. The project refuses this deliberately elsewhere — the
+bootstrap user has no password hash, `trust` auth is banned at image build time
+(D-185), `corebase_app` is NOLOGIN (D-216) — and it arrived through a `??`.
+
+**An unmetered 64 MiB-per-request hash** (**D-241**). Only login was rate limited.
+Signup is the one unauthenticated endpoint that runs scrypt, at 64 MiB a call
+(D-211) — twenty concurrent requests is ~1.3 GiB, reachable by anyone with a
+socket. D-211's own rationale worried about precisely this and then protected only
+login.
+
+**A database password is as powerful as the `service_role` key** (**D-242**), and
+one was gated and audited while the other came back on every project read,
+unlogged. Connection strings now need `?reveal=true` and taking them is recorded,
+deduplicated per person per project per hour so a polling dashboard cannot bury the
+reveals that matter. The capability is deliberately not raised: a member may create
+projects, so a member must be able to use them.
+
+**The one that threatened an exit criterion** (**D-245**). The data node answered
+*"all predefined address pools have been fully subnetted"* **with three networks on
+it**. dockerd's built-in default carves /16s from 172.17–172.31 and inside dind most
+collide with the outer engine's routes — so with a network per project (D-228) a
+node runs out of *addresses* at roughly ten projects while Phase 2 is aiming at a
+hundred. In production that would have surfaced as a mysterious provisioning
+failure. An explicit `--default-address-pool` of `10.201.0.0/16` in /24s gives 256;
+verified by creating 60 project-shaped networks where the default managed three.
+
+Also fixed: a project stuck in a transitional status with no job running is now
+drift rather than invisible (**D-243**, and `pausing` was the silent case);
+reconciliation no longer reports a repair it deferred; projects per organization are
+capped so one tenant cannot consume a node's whole RAM budget (**D-244**); the
+pooler's `userlist.txt` quoting is asserted rather than assumed, ahead of credential
+rotation touching it; and two foreign keys to `users(id)` gained `ON DELETE SET
+NULL`, so the first person to write a user-deletion path meets a design decision
+rather than a constraint violation.
+
+**What the review found clean:** SQL is parameterised, and the two interpolation
+sites assert their alphabet and throw rather than escape; every route has an
+authorization check except signup, login and JWKS, which are correctly public;
+`audit_logs` deliberately has no foreign keys so history outlives what it describes;
+no secrets are tracked in git; and reconciliation had already classified
+`paused`/`pausing` correctly before pause existed.
+
+**A known local constraint, not a product one:** Docker Desktop's host port-forward
+to the data node wedges under sustained load — every later connection is reset, from
+our client and the `docker` CLI alike, until the engine is restarted. Bounding the
+worker's connection pool (D-230) made it far rarer but did not remove it. CI runs
+Linux with a native dockerd and does not have this failure mode.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -1130,10 +1188,10 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-Fifty-six decisions came out of running the thing rather than planning it —
-D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-239 from Phase 2.
+Sixty-two decisions came out of running the thing rather than planning it —
+D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-245 from Phase 2.
 Full text in the [decision log](docs/00-foundation/05-decision-log.md); the log holds
-D-001…D-239 and is binding when two documents disagree.
+D-001…D-245 and is binding when two documents disagree.
 
 | ID | What changed | Why it surfaced |
 |---|---|---|
@@ -1193,6 +1251,12 @@ D-001…D-239 and is binding when two documents disagree.
 | D-237 | A project's RAM booking lives on its placement row; release credits what the row says, never what the plan says | Purging an already-paused project would have credited RAM that was never reserved, leaving the node under-counted and accepting work it cannot hold |
 | D-238 | An empty body under a JSON content-type parses as `{}` rather than being rejected (supersedes half of D-198) | It was a framework 400 blaming the client for our contract, on exactly the endpoints that take no body |
 | D-239 | Pause removes containers and keeps volume, network and placement row; resume reuses the provisioning steps | The row is what makes the connection string survive an idle week; a bespoke resume path would be a second, less-tested way to start a project |
+| D-240 | `CB_STATIC_TOKEN` has no default; a short or placeholder value refuses to boot | It defaulted to `dev-token`, so an unconfigured API accepted that header as the bootstrap owner — verified, 200 |
+| D-241 | Every unauthenticated endpoint that hashes a password is rate limited, on its own budget, before the work | Signup ran a 64 MiB scrypt call unmetered; ~1.3 GiB for twenty concurrent requests |
+| D-242 | Connection strings need `?reveal=true` and revealing them is audited, deduplicated hourly | A database password is as powerful as the service_role key, which was gated and audited while the password was neither |
+| D-243 | A transitional status with no job running is `stuck_transition` drift — reported, not resolved | A `pausing` project whose job died read as "pausing" to its owner forever, and no sweep saw anything wrong |
+| D-244 | Live projects per organization are capped, counting soft-deleted ones | Otherwise the only limit is the placer's capacity error, and one tenant can fail every other tenant's creates |
+| D-245 | The data node runs with an explicit `--default-address-pool` sized for the target density | The default pool exhausted with three networks on the node — a per-project network design runs out of addresses at ~10 projects, against a target of 100 |
 
 ## 7. Measurements
 
