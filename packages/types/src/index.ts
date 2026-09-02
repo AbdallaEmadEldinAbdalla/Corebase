@@ -10,7 +10,19 @@ import { z } from 'zod';
  */
 export const ProjectStatus = z.enum([
   'creating', 'provisioning', 'configuring', 'ready', 'failed',
-  'pausing', 'paused', 'resuming', 'deleting', 'soft_deleted', 'deleted',
+  'pausing', 'paused', 'resuming',
+  /**
+   * A restore in progress, and a restored copy waiting to be validated (P3d).
+   *
+   * `restored` is deliberately not `ready`. A restored instance is a *copy*, and
+   * double-serving live traffic against two databases loses data by construction —
+   * the customer writes to whichever one their application is pointed at and
+   * nothing can reconcile that afterwards. Marking it `ready` would make it
+   * indistinguishable from production in every list, badge and API response, which
+   * is precisely the confusion that ends with writes going to the wrong copy.
+   */
+  'restoring', 'restored',
+  'deleting', 'soft_deleted', 'deleted',
 ]);
 export type ProjectStatus = z.infer<typeof ProjectStatus>;
 

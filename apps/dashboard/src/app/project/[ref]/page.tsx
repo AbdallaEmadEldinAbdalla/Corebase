@@ -57,13 +57,24 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
             <div className="cb-banner__title">
               {p?.status === 'resuming' ? 'Resuming this project'
                 : p?.status === 'deleting' ? 'Deleting this project'
+                : p?.status === 'restoring' ? 'Restoring to a point in time'
                 : 'Setting up your database'}
             </div>
             <div className="cb-banner__text">
-              Usually a few seconds. This page updates itself — there is no need to reload.
+              {p?.status === 'restoring'
+                // A restore is not a create, and the create copy is actively
+                // alarming here: someone recovering data does not want to read
+                // "setting up your database" over the top of it.
+                ? 'Replaying write-ahead log to your target time. This can take '
+                  + 'longer than a create — the page updates itself.'
+                : 'Usually a few seconds. This page updates itself — there is no need to reload.'}
             </div>
-            <div className="cb-progress" style={{ marginTop: 'var(--cb-space-3)' }}>
-              <div className="cb-progress__fill" style={{ width: '55%' }} />
+            {/* Indeterminate, because nothing here knows a percentage. The bar was
+                a fixed 55% fill, which is a number on screen that is not real
+                (§8 Q19) and reads as stuck rather than as working. */}
+            <div className="cb-progress cb-progress--indeterminate"
+                 style={{ marginTop: 'var(--cb-space-3)' }}>
+              <div className="cb-progress__fill" />
             </div>
           </div>
         </div>
@@ -79,6 +90,29 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
             <div className="cb-banner__text">
               Nothing was charged. The control plane retries on its own; if it stays failed,
               quote <code className="mono">{ref}</code> to support.
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* A restored copy has to say what it is. The badge says "RESTORED COPY" and
+          that is not enough on its own: the risk of this state is someone reading
+          it as "restored, so we're fine" and pointing an application at it while
+          the original is still serving — two live databases and nothing that can
+          reconcile them afterwards. */}
+      {p?.status === 'restored' ? (
+        <div className="cb-banner cb-banner--warning" role="status" style={{ marginBottom: 'var(--cb-space-5)' }}>
+          <span className="cb-banner__icon" aria-hidden="true">
+            <svg viewBox="0 0 12 12"><path d="M6 2v5M6 9v1" /></svg>
+          </span>
+          <div className="cb-banner__body">
+            <div className="cb-banner__title">This is a restored copy, not your live project</div>
+            <div className="cb-banner__text">
+              It holds your data as of the point in time you asked for, and it is
+              serving no application traffic. Your original project is untouched and
+              still live. Connect to this copy to check the data is what you expected —
+              switching your application over is a separate, explicit step, and it is
+              not built yet.
             </div>
           </div>
         </div>

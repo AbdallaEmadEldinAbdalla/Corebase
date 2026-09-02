@@ -27,6 +27,16 @@ export const TONE: Record<ProjectStatus, string> = {
   pausing: 'cb-badge--warning',
   paused: '',
   resuming: 'cb-badge--info',
+  restoring: 'cb-badge--info',
+  /**
+   * A restored copy is not healthy production and must not read as it (P3d).
+   *
+   * Warning rather than success, because the state needs the customer to *do*
+   * something — validate it, then promote or discard — and rather than neutral,
+   * because neutral is what `paused` uses and a paused project is inert. This one
+   * is running, serving nothing, and costing money.
+   */
+  restored: 'cb-badge--warning',
   deleting: 'cb-badge--warning',
   soft_deleted: '',
   deleted: '',
@@ -35,10 +45,25 @@ export const TONE: Record<ProjectStatus, string> = {
 /** Every state the control plane is still working through. */
 export const SETTLING: ReadonlySet<string> = new Set<ProjectStatus>([
   'creating', 'provisioning', 'configuring', 'pausing', 'resuming', 'deleting',
+  // `restoring` settles; `restored` does not. A restored copy is waiting for a
+  // person, not for the control plane, so polling it forever would be a spinner
+  // that never resolves — the state *is* the answer.
+  'restoring',
 ]);
 
-/** What the label says. `soft_deleted` reads badly in a badge; the rest are fine. */
-const LABEL: Partial<Record<ProjectStatus, string>> = { soft_deleted: 'DELETED' };
+/**
+ * What the label says. `soft_deleted` reads badly in a badge; the rest are fine.
+ *
+ * `restored` becomes "RESTORED COPY" because one word is not enough here. The
+ * whole risk of this state is someone reading it as "restored, so we're fine" and
+ * pointing an application at it while the original is still serving — two live
+ * databases and no way to reconcile them afterwards. The noun makes the badge say
+ * what the thing *is*, not what happened to it.
+ */
+const LABEL: Partial<Record<ProjectStatus, string>> = {
+  soft_deleted: 'DELETED',
+  restored: 'RESTORED COPY',
+};
 
 export function ProjectStateBadge({ status, compact }: {
   status: string;

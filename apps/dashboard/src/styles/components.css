@@ -241,11 +241,23 @@ body{margin:0;background:var(--cb-bg);color:var(--cb-text);font:var(--cb-body-m)
 .cb-progress{height:6px;border-radius:var(--cb-radius-full);background:var(--cb-surface-alt);
   overflow:hidden;max-width:280px}
 .cb-progress__fill{height:100%;background:var(--cb-accent);border-radius:var(--cb-radius-full)}
+/* Indeterminate: the honest bar when nothing knows the percentage.
+   A determinate fill at a made-up value is a number on screen that is not real
+   (§8 Q19), and it reads worse than no bar — a user who watches 55% sit still
+   concludes the thing is stuck. D-225 allows exactly one looping indicator. */
+.cb-progress--indeterminate .cb-progress__fill{width:40%;
+  animation:cb-progress-slide 1.4s ease-in-out infinite}
+@keyframes cb-progress-slide{
+  0%{transform:translateX(-100%)}100%{transform:translateX(250%)}}
 .cb-skeleton{height:12px;border-radius:6px;background:var(--cb-surface-alt)}
 .cb-spinner{width:26px;height:26px;border-radius:50%;border:3px solid var(--cb-surface-alt);
   border-top-color:var(--cb-accent);animation:cb-spin .8s linear infinite}
 @keyframes cb-spin{to{transform:rotate(360deg)}}
-@media (prefers-reduced-motion:reduce){.cb-spinner{animation-duration:2s}}
+@media (prefers-reduced-motion:reduce){.cb-spinner{animation-duration:2s}
+  /* Not disabled outright: a bar that stops moving looks stuck, which is the
+     misreading it exists to prevent. Slowed well below the vestibular
+     threshold instead (D-225). */
+  .cb-progress--indeterminate .cb-progress__fill{animation-duration:4s}}
 
 /* ── reference-page chrome (not part of the system) ── */
 .ref-head{padding:var(--cb-space-8) var(--cb-space-8) var(--cb-space-6);border-bottom:1px solid var(--cb-border)}

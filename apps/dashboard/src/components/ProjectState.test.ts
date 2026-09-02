@@ -25,7 +25,8 @@ describe('project state', () => {
   it('treats every in-flight state as settling', () => {
     // These are the states where the control plane is still working, so the page
     // must keep asking.
-    for (const s of ['creating', 'provisioning', 'configuring', 'pausing', 'resuming', 'deleting']) {
+    for (const s of ['creating', 'provisioning', 'configuring', 'pausing', 'resuming',
+                     'deleting', 'restoring']) {
       expect(SETTLING.has(s), `${s} must be polled`).toBe(true);
     }
   });
@@ -33,7 +34,9 @@ describe('project state', () => {
   it('treats every resting state as terminal', () => {
     // And these are where it must stop, or a ready project polls once a second
     // forever — one request per second per open tab, for nothing.
-    for (const s of ['ready', 'failed', 'paused', 'soft_deleted', 'deleted']) {
+    // `restored` belongs here and not above: it waits for a *person*, not for the
+    // control plane, so polling it would be a spinner that never resolves.
+    for (const s of ['ready', 'failed', 'paused', 'soft_deleted', 'deleted', 'restored']) {
       expect(SETTLING.has(s), `${s} must not be polled`).toBe(false);
     }
   });
