@@ -49,6 +49,7 @@ jobs:
           ./scripts/migrate-staging.sh
           ./scripts/staging.sh kek
           ./scripts/staging.sh app-role
+          ./scripts/staging.sh backup-store
           ./scripts/staging.sh seed-images
           ./scripts/staging.sh verify
 

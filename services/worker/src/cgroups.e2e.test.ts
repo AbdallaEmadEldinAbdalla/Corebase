@@ -27,11 +27,24 @@ const NAME = 'cb-p2f-cgroups-probe';
 let docker: Docker; let up = false; let reason = '';
 let caps = { ioWeight: false };
 
-const SPEC = buildContainerSpec({
+/**
+ * The spec under test, built **after** the node has been probed.
+ *
+ * It used to be a module-level constant built without `ioWeight`, which made this
+ * suite pass only on a kernel that *lacks* `io.weight`: the container carried no
+ * weight, the `else` branch ran, and the assertion was never exercised. On a kernel
+ * that has the feature — a CI runner's — the other branch fired and compared the
+ * plan's weight against the container's `default 100`, because nothing had asked
+ * for a weight. A test that only passes where the feature is missing is not a test
+ * of the feature.
+ */
+const specFor = (ioWeight: boolean) => buildContainerSpec({
   ref: 'p2fcgroupsaaaaaaaaaa', projectId: '33333333-3333-4333-8333-333333333333',
   volumeName: 'unused-no-mount', hostPort: 0, ramLimitMb: 512,
   bootstrapSecret: 'p2f-cgroup-probe-secret-0123456789', plan: 'free',
+  ioWeight,
 });
+let SPEC = specFor(false);
 
 beforeAll(async () => {
   try {
@@ -41,6 +54,9 @@ beforeAll(async () => {
       throw new Error(`${IMAGE} is not on the data node — run ./scripts/staging.sh seed-images`);
     }
     caps = await probeNodeCaps(docker, IMAGE);
+    // Built from what the node can actually do, so the container under test is the
+    // one provisioning would create on *this* node.
+    SPEC = specFor(caps.ioWeight);
     await docker.removeContainer(NAME, true, true).catch(() => {});
     // The real spec, with the entrypoint given something cheap to run instead of
     // Postgres. The cgroup walls are HostConfig and identical either way, and
@@ -232,10 +248,19 @@ describe('P2f — disk I/O', () => {
     // i.e. the container never starts. The probe and the spec must agree, whichever
     // way the answer goes, and that agreement is what this test pins.
     const present = await cgExists('io.weight');
+    // The probe and the kernel must agree, whichever way the answer goes. That is
+    // the property worth pinning: everything else here follows from it.
     expect(caps.ioWeight).toBe(present);
     if (caps.ioWeight) {
+      // The kernel has weights, so the spec asked for one and the kernel took it.
+      expect(SPEC.HostConfig.BlkioWeight).toBe(PLAN_IO_WEIGHT['free']);
       expect(await cg('io.weight')).toContain(String(PLAN_IO_WEIGHT['free']));
     } else {
+      // On this node the answer is *no*: the LinuxKit kernel has no weight-capable
+      // I/O policy (no BFQ, no blk-iocost), so `io.weight` does not exist — and
+      // runc turns a BlkioWeight against that kernel into
+      //   openat2 /sys/fs/cgroup/docker/<id>/io.weight: no such file or directory
+      // i.e. the container never starts. So the spec must omit it entirely.
       expect(SPEC.HostConfig).not.toHaveProperty('BlkioWeight');
     }
   });

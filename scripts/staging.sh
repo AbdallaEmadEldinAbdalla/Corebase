@@ -54,6 +54,13 @@ cmd_up() {
   # the Docker daemon creates as root on Linux — which then locks this script out
   # of a directory it is about to write. Creating it first is the whole fix.
   mkdir -p "$CERTS"
+  # The object store's cert directory too, and for the same reason as $CERTS
+  # (D-227): compose bind-mounts it, and any directory the Docker daemon has to
+  # create for a bind mount is created **as root** on Linux — which then locks this
+  # script out of a directory it is about to write a certificate into. It worked on
+  # Docker Desktop for macOS, where ownership is remapped, and would have failed on
+  # the first Linux runner.
+  mkdir -p "$STAGING_DIR/object-store-certs"
   $DC up -d
   wait_for "control-db"    60 docker exec cb-control-db pg_isready -U corebase -d corebase_control
   wait_for "control-redis" 30 docker exec cb-control-redis redis-cli ping
@@ -134,6 +141,11 @@ cmd_backup_store() {
       -addext "subjectAltName=DNS:cb-object-store,DNS:object-store,DNS:localhost,IP:127.0.0.1" \
       >/dev/null 2>&1
     [ -s "$cert_dir/public.crt" ] || { echo "  ✗ could not generate the store's certificate"; return 1; }
+    # openssl ran as root inside that container, so the key landed root-owned and
+    # 0600. MinIO runs as its own unprivileged user and would simply fail to read
+    # it — a TLS handshake error with nothing to say about permissions.
+    chmod 0644 "$cert_dir/public.crt" "$cert_dir/private.key" 2>/dev/null \
+      || sudo chmod 0644 "$cert_dir/public.crt" "$cert_dir/private.key"
     echo "  ✓ generated a self-signed certificate for the object store"
     docker restart cb-object-store >/dev/null
     sleep 4
