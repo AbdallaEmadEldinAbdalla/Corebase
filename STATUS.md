@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-09-01 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 started** (P3a–P3c done; **P3d code-complete, exit criterion 1 unconfirmed**)
+**Last updated:** 2026-09-01 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 started** (P3a–P3e done; **exit criterion 1 met**)
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -251,8 +251,8 @@ boot. Don't use them.
 
 ## 4. What is built, in detail
 
-Test counts are from `pnpm test` and are all currently green: **550 tests**, of
-which **309** need no infrastructure (`pnpm test:unit`).
+Test counts are from `pnpm test` and are all currently green: **580 tests**, of
+which **319** need no infrastructure (`pnpm test:unit`).
 
 Every task below has a command that proves it; they are listed with the task.
 
@@ -1627,13 +1627,18 @@ the per-plan day counts) is pinned by unit test. What is unverified is the calen
 arithmetic, not the plumbing.
 
 
-### P3d — restore to a new instance, and PITR · code-complete · 3 of 5 live tests green
+### P3d — restore to a new instance, and PITR · done · 5 live tests + 22 unit
 
-**Exit criterion 1 is NOT confirmed.** The restore runs end to end — every saga step
-green, `recovery paused at the target`, promoted, writable — but the run that would
-have proved the *data* is from the requested second has not completed on this
-machine. Read the verification note at the end of this section before treating PITR
-as working.
+**Exit criterion 1 is met.** Restoring to a chosen second produces a database
+holding every row committed before that instant and none committed after it:
+
+```
+rows restored: [1, 2]   target 2026-09-02T11:24:21.299Z
+```
+
+Rows 3 and 4 — including the one the test calls `THE MISTAKE` — are gone from the
+copy and still present in the original. The copy is writable, not a paused
+replica.
 
 `POST /v1/projects/:ref/restore { target_time }` creates a **different** project and
 returns that one. Production is never overwritten (proposal §36), so the ref in the
@@ -1648,7 +1653,22 @@ filled before Postgres has ever run on it. A throwaway container that starts no
 database runs `pgbackrest restore`, and only then does the real container start on
 top of the restored data directory.
 
-**Three findings, all from running it.**
+**Four findings, all from running it, and the fourth is the one that mattered.**
+
+**The PITR target was being rounded backwards.** The target was formatted for
+pgBackRest by trimming the milliseconds off an ISO timestamp — `11:23:16.819Z`
+became `11:23:16+00` — which silently moves the requested instant back by up to a
+second. It is not a rounding detail: a row committed at `11:23:16.5` is *before*
+the customer's target and *after* the truncated one, so the restore came back
+looking perfectly correct and one transaction short. A customer restoring to the
+second before a bad migration would have lost the writes in that second with no way
+to tell it had happened. `recovery_target_time` takes fractional seconds; there was
+never a reason to drop them. Pinned by a unit test that walks several millisecond
+values, because a single round-number case passes against the broken version.
+
+That is also the answer to why the earlier report said the criterion was
+unconfirmed: the data assertions had never run. Once the machine was quiet enough
+to reach them, they failed immediately and correctly.
 
 **The restored container needs the *source's* repo config before Postgres starts**
 (**D-284**). pgBackRest writes `restore_command = 'pgbackrest … archive-get'` into
@@ -1693,26 +1713,80 @@ The typed `Record<ProjectStatus, string>` turned two new enum values into a comp
 error rather than a silently-neutral badge. That guard was written after the
 `creating` incident and this is the first time it has caught what it was written for.
 
-**Verification — what actually ran, and what did not.**
+**Verification.** `restore.e2e.test.ts` 5/5 on the live stack: the point-in-time
+proof above, the copy getting its own credentials so the source's no longer open
+it, the copy landing as `restored` with a repo of its own, a target predating every
+backup **failing loudly** rather than serving an earlier point, and a restore whose
+source is gone refusing rather than producing an empty database. Plus 22 unit tests
+in `backup.test.ts` covering the config and the target format, and dashboard 13/13.
 
-Green on the live stack: the restored copy gets its own credentials and the
-source's no longer open it; a restore whose target predates every backup **fails
-loudly** rather than serving an earlier point; a restore whose source is gone
-refuses rather than producing an empty database. Dashboard 13/13; typecheck clean
-across all eleven packages.
+**What the earlier attempts cost, and what they taught.** Three runs reported
+"timed out" and nothing else, on a machine at load average 12 where a provisioning
+step that normally takes 0.4 s took 25 s and a `sed` over one file exceeded two
+minutes. The first version of the harness collected saga logs into an array it
+returned only on success, so a hang printed nothing at all; it prints each step as
+it happens now, which is what turned the next failure into one readable line. The
+suite is still heavy — five tests each provision a source *and* restore it — and
+sharing one provisioned source across the file would cut four provisions.
 
-Not green: the exit-criterion test's final data assertions, and the
-`restored`-not-`ready` test. Both timed out — not on a defect, but on a developer
-machine at load average 12, where a provisioning step that normally takes 0.4 s took
-25 s and a `sed` over one file exceeded two minutes. An isolated run *did* carry the
-same test through the entire restore in 73 s with every step green and `recovery
-paused at the target` logged; it stopped at the over-strict `reached_time`
-assertion, now fixed. So the remaining gap is one clean run on a quiet machine, and
-until that run exists **PITR is unproven and this section does not claim otherwise**.
 
-The suite is also too heavy as written: five tests each provision a source *and*
-restore it. Sharing one provisioned source across the file would cut four
-provisions and is the obvious next change.
+### P3e — a restored copy has a deadline · done · 14 tests
+
+Restored copies expire. **48 hours by default, never more than a week** — a copy
+holds a second full dataset, a second RAM booking and a second disk booking while
+serving no traffic, and nothing about it ever finishes on its own: the customer
+validates their data on Tuesday and without a deadline the copy is still on the
+node in March. At ~100 projects per node (M-008), a handful of forgotten copies is
+a node's worth of capacity spent on databases nobody queries.
+
+The week is a **ceiling, not a setting** (**D-291**). A too-long TTL fails
+silently and cumulatively — nobody notices capacity going to idle copies until it
+is a fleet problem rather than a project one. Someone who wants a copy for longer
+should *promote* it, which is the operation that says "this is production now".
+
+**Expiry soft-deletes; it never purges** (**D-292**), and this is the part that
+needed the most care. Automatic deletion of a database is the operation you least
+want to get wrong, and the circumstances are the worst possible: the customer
+restored *because they lost data*, so the copy may be the only surviving version of
+something. So expiry hands the project to the **normal deletion pipeline**, which
+soft-deletes it, takes a final backup on the way, and keeps the data for the
+seven-day recovery window (D-038). The deadline the customer sees is when the copy
+stops *running*, not when their data is destroyed — there is a second window behind
+it, and an expiry nobody wanted is recoverable for a week. A bespoke expiry saga
+would have had to reimplement all three of those, and the one it would most likely
+have skipped is the backup that makes the undo possible.
+
+The TTL distinguishes two kinds of bad input (**D-293**): nonsense, zero and
+negatives fall back to 48 h, because they are not "a very short window" but the
+absence of an answer — and a TTL of zero would delete every copy before anyone
+could open it, which is indistinguishable from the feature being broken. A real
+number merely out of range is clamped to the nearest bound, because `0.5` and `200`
+*are* expressed intent, and a fleet that will not boot over a typo is worse than
+one that keeps copies for a week and says so.
+
+The deadline is written in the same transaction as the project (**D-294**) — a
+nullable column filled in later is a copy that lives forever whenever the later
+step is skipped — and it is returned on the project **detail**, not only in the
+reply to the create. The customer who needs it is the one coming back two days
+later. The dashboard banner states it, and states the second window with it, so the
+sentence a worried customer reads is not "your copy will be deleted".
+
+**Verification:** `restore-expiry.e2e.test.ts` 7/7 against the control plane, and
+deliberately *without* provisioning anything — the sweep's job is a decision over
+rows, which is entirely SQL, and provisioning five databases to test a `WHERE`
+clause is exactly how the P3d suite became too heavy to finish under load. It runs
+in 187 ms and covers what must be left alone as carefully as what must be swept:
+a copy inside its window, one still being built, a failed restore, a copy with no
+deadline, and — the one that would be catastrophic — an ordinary production
+project, which has no restore row and must never be a candidate. Plus 7 unit tests
+on the clamping. `store.pg.e2e` grew 7 more covering the store's half: a new
+project rather than the source, the lineage and deadline written in one
+transaction, the ceiling refusing with the remedy named, and a non-restore project
+reporting no restore block at all.
+
+**Still not built:** promote. A copy can be validated and then expires; there is no
+credential/endpoint swap yet (backups §4 step 6), so the way to keep a restore is
+not available and the banner says so rather than offering a dead button.
 
 
 ## 5. Rules the code follows
@@ -1754,10 +1828,10 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-One hundred and seven decisions came out of running the thing rather than planning it —
-D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-262 from Phase 2, and D-263…D-290 from Phase 3.
+One hundred and twelve decisions came out of running the thing rather than planning it —
+D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-262 from Phase 2, and D-263…D-295 from Phase 3.
 Full text in the [decision log](docs/00-foundation/05-decision-log.md); the log holds
-D-001…D-290 and is binding when two documents disagree.
+D-001…D-295 and is binding when two documents disagree.
 
 | ID | What changed | Why it surfaced |
 |---|---|---|
@@ -1868,6 +1942,11 @@ D-001…D-290 and is binding when two documents disagree.
 | D-288 | A restore counts against the per-org ceiling, refusing with the remedy named | It consumes a real node slot; OQ-079 owns the per-plan concurrent-restore policy |
 | D-289 | A future or out-of-window `target_time` is refused, never clamped | Clamping returns a restore that silently is not what was asked for — the exact failure the flow prevents |
 | D-290 | In-flight work uses an indeterminate progress indicator, never an invented percentage | A fixed 55% fill is a number nothing computed, and it reads as stuck rather than as working |
+| D-291 | A restored copy lives 48h by default, 7 days at most — a ceiling, not a setting | A copy holds a second dataset and two bookings while serving nothing, and a long TTL fails silently and cumulatively |
+| D-292 | Expiry soft-deletes through the normal pipeline, never purges | The customer restored because they lost data, so the copy may be the only surviving version; the pipeline keeps it recoverable for a week |
+| D-293 | Invalid TTL → default; valid-but-out-of-range → clamped | Zero is the absence of an answer, not a short window; a typo must not stop a fleet booting |
+| D-294 | The deadline is written with the project and shown on the detail, not only on create | A column filled in later is a copy that lives forever; the customer who needs the deadline returns two days later |
+| D-295 | A PITR target keeps its sub-second precision | Trimming milliseconds moves the target back by up to a second, returning a restore that looks correct and is one transaction short |
 
 ## 7. Measurements
 
@@ -1992,17 +2071,13 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   not exist, so no project should be described as protected yet. PITR is P3d,
   verification is P3e, and until they land the honest statement is that Corebase
   has an archive, not a recovery path.
-- **PITR is not proven.** P3d's restore runs end to end and its failure paths are
-  tested, but the assertion that the restored data is from the requested second has
-  not completed a green run — the machine could not sustain it. Exit criterion 1 is
-  open, and one clean run closes it.
-- The P3d suite provisions a source per test, which is why it cannot finish under
-  load. Sharing one source across the file is the fix.
-- **Promote and auto-expiry are not built.** A restored copy stays `restored`
-  forever: there is no credential/endpoint swap (backups §4 step 6) and no 48-hour
-  expiry (step 7), so a copy nobody promotes is a project nobody deletes. The
-  dashboard banner says switching over is not built rather than offering a dead
-  button.
+- The P3d suite provisions a source per test, which makes it slow and made it
+  unfinishable on a loaded machine. Sharing one provisioned source across the file
+  would cut four provisions.
+- **Promote is not built** (backups §4 step 6). A restored copy can be validated
+  and then expires; there is no credential/endpoint swap, so the way to *keep* a
+  restore does not exist yet. The dashboard banner says so rather than offering a
+  dead button. Expiry (step 7) is built — P3e.
 - **Time-based retention is not verified over real calendar days.** pgBackRest
   decides expiry from timestamps in the repo, so proving a 7-day policy needs a
   7-day-old backup or repo surgery. The mechanism is tested with a count-based

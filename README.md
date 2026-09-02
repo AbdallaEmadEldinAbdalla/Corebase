@@ -34,9 +34,11 @@ It is built on the design system that already existed in `design-exports/` rathe
 
 **How the UI stays consistent.** The first version of this shell was right in every colour and wrong in every mechanic, so the fix was not nicer screens but a written interaction contract: [docs/09-dashboard/05-ux-standards.md](docs/09-dashboard/05-ux-standards.md), ending in a 20-question gate that **runs on every UI change** (D-224) as the `ux-review` role in [.claude/skills/](.claude/skills/ux-review/SKILL.md). Its first run found two real failures in the code written to satisfy it — the palette was missing two actions a row menu already had, and the project list printed "Showing 20 of 20" while hiding a second page.
 
-**Restoring to a point in time is built, and not yet proven.** `POST /v1/projects/:ref/restore` provisions a *new* project and replays write-ahead log into it up to the second you name — the original is never touched, and the copy is marked `restored` rather than `ready` because two databases serving one application loses data by construction. Its failure paths are tested: a target predating every backup fails loudly instead of quietly serving an earlier day, and the copy gets its own credentials so the original's stop opening it. What has not completed a green run is the assertion that the restored rows are from the requested second — the machine could not sustain it — so the exit criterion is open and the README will not claim otherwise.
+**A restored copy has a deadline — 48 hours, never more than a week.** It holds a second full dataset and two capacity bookings while serving no traffic, and nothing about it ever finishes on its own: without a deadline the copy a customer validated on Tuesday is still on the node in March. Expiry hands it to the *normal* deletion pipeline rather than destroying it, which matters more here than anywhere — the customer restored because they lost data, so the copy may be the only surviving version of something. What the deadline ends is the copy *running*; its data stays recoverable for the usual week behind that, and the screen says so rather than reading "your copy will be deleted".
 
-Building it turned up a guard of mine that could not fail: checking for a file with `ls` and a substring match passes whether the file exists or not, because `ls` prints the path in its own error message.
+**Restoring to a point in time works.** `POST /v1/projects/:ref/restore` provisions a *new* project and replays write-ahead log into it up to the second you name — the original is never touched, and the copy is marked `restored` rather than `ready`, because two databases serving one application loses data by construction. Proven the only way that counts: a row written before the target is there, the row written after it is not, and the original still has both.
+
+Getting there found the bug that would have mattered most. The target was formatted for pgBackRest by trimming the milliseconds off a timestamp, which moves the requested instant backwards by up to a second — so a restore would come back looking perfectly correct and one transaction short, and a customer restoring to the second before a bad migration would have lost that second's writes with no way to tell. It also found a guard of mine that could not fail: checking for a file with `ls` and a substring match passes whether the file exists or not, because `ls` prints the path in its own error message.
 
 **Backups happen without being asked, and failures are visible.** A nightly full on the free tier, weekly fulls with nightly incrementals on paid plans, jittered across a maintenance window so a node with 150 projects does not read 150 databases at 03:00. Every attempt is recorded — including the ones that fail, which is the point: a repo can tell you what it holds but never what was tried, so a project whose nightly full has failed for six days looks exactly like one whose retention window starts six days ago.
 
@@ -107,7 +109,7 @@ There is no seeded password anywhere, so create an account on `/signup`; a new a
 
 The demo script creates a project, waits for it, connects to the database it made with the credentials the API handed back, runs real SQL, and deletes it — using only `curl` and `psql`, which is exactly what a customer has.
 
-The full suite is **550 tests**, integration included; they need the staging stack above and **fail rather than skip** without it:
+The full suite is **580 tests**, integration included; they need the staging stack above and **fail rather than skip** without it:
 
 ```bash
 pnpm test
