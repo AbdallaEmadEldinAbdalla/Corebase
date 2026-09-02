@@ -101,13 +101,13 @@ Honesty notes we publish verbatim: WAL not yet archived at the moment of a node 
 
 The scheduler runs a **continuous verification loop**, not a monthly ceremony:
 
-- **Sampling**: the verifier runs **weekly batches**, prioritizing never-verified and longest-unverified backup chains, with binding per-plan floors (D-176): **every project's backups are restore-verified at least every 90 days (Free) and 30 days (Pro/Team)**. Every *paused* project is verified once within 30 days of pausing (its backup is its only life, §8).
+- **Sampling**: the verifier runs continuously, **never-verified chains first** and then longest-unverified — that ordering matters and the obvious one gets it backwards, because a project nobody has ever verified has no timestamp to be old and sorts *last* under a longest-unverified sort (**D-310**), with binding per-plan floors (D-176): **every project's backups are restore-verified at least every 90 days (Free) and 30 days (Pro/Team)**. Every *paused* project is verified once within 30 days of pausing (its backup is its only life, §8).
 - **Job**: provision a scratch container on a designated verification node (not customer capacity) → `pgbackrest restore` to latest → recover → checks:
   1. recovery reached consistency and the expected timeline;
   2. `pg_amcheck --all` (btree integrity) and data-checksum verification (possible because `initdb --data-checksums`, [provisioning §3](01-postgres-provisioning.md));
   3. sanity counts: `corebase_migrations.schema_migrations` row count matches control-plane knowledge; the five largest user tables return `count(*) > 0` where the live stats say they're non-empty;
   4. wall-clock restore time recorded → feeds the §5 RTO table with *measured* numbers instead of aspirations.
-- **Record**: `restore_verifications(project_id, backup_label, started_at, duration, result, failure_reason)`; per-project `last_verified_restore_at` surfaces in the ops dashboard; fleet metric "% of projects verified in last 90 d" is a standing SLO.
+- **Record**: `restore_verifications(project_id, backup_label, started_at, duration, result, failure_reason, failed_check, restore_ms)`. `failed_check` names which of the four checks caught it, so a pattern across the fleet is visible without reading every reason string, and `restore_ms` feeds §5's RTO table with measured numbers. The last passing verification is derived from this table rather than denormalised onto the project, because a **failed** verification must not count as one (**D-310**) and a single `last_verified_at` column invites exactly that. The fleet metric `corebase_projects_restore_verified_ratio` is the standing SLO — one number, since one project at 200 days is the whole story and an average of per-project ages hides it.
 - **Failure = page**, at the same severity as a failed backup, because it is one: the runbook treats the project's backups as nonexistent until a verified backup exists (immediate fresh full + re-verify).
 - `pgbackrest verify` (repo-side checksum audit) additionally runs monthly per repo — cheap, catches bit-rot without a full restore.
 

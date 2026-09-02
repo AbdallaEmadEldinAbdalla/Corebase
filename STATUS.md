@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-09-01 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 started** (P3a–P3g done; **exit criteria 1, 3 and 4 met**)
+**Last updated:** 2026-09-02 · **Phase:** Phase 4 next (auth) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 complete** (P3a–P3h; **all four exit criteria met**)
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -251,7 +251,7 @@ boot. Don't use them.
 
 ## 4. What is built, in detail
 
-Test counts are from `pnpm test` and are all currently green: **595 tests**, of
+Test counts are from `pnpm test` and are all currently green: **606 tests**, of
 which **319** need no infrastructure (`pnpm test:unit`).
 
 Every task below has a command that proves it; they are listed with the task.
@@ -1916,6 +1916,83 @@ which is precisely why a rewrite with `COALESCE` would destroy every undecided r
 on its first sweep.
 
 
+### P3h — restore verification · done · 11 tests
+
+**Exit criterion 2 is met, and with it Phase 3.** Verification runs on a schedule
+and fails on a sabotaged backup — which was the point of the criterion, because a
+verifier that passes healthy backups and also passes broken ones is worse than
+none: it manufactures the confidence the whole phase exists to earn.
+
+This is also the step that changes what the previous seven mean. Everything before
+it built an archive — a repo, a schedule, retention, interlocks at delete and
+pause, provable destruction. The backups doc's first line is that **a backup which
+has not been restore-tested is treated as not existing**, so until now the honest
+description was "files in a bucket that we believe are restorable". Now something
+restores them without being asked and checks what comes back.
+
+**Four checks, each catching what the others cannot** (**D-308**):
+
+1. **Recovery reached consistency** — the only one that fails loudly on its own.
+2. **Data checksums verify** — the reason `initdb --data-checksums` exists
+   (D-269). Page rot is otherwise silent and a rotting cluster restores clean.
+3. **`pg_amcheck`** — a heap can be intact while a btree points at rows that are
+   not there, and the index is what queries actually read.
+4. **Sanity counts** — the strongest and least mechanical. Tables the *live*
+   project reports as non-empty must be non-empty in the restore, because a backup
+   can pass every structural test and contain an empty database. The expectation
+   is read from the live project *before* the scratch instance is touched: a
+   comparison between two databases proves nothing if both sides came from the
+   thing under test. It uses `reltuples` rather than `count(*)` (**D-309**) —
+   this runs against a customer's production database and must not scan it.
+
+The scratch instance has its own volume, joins no project network, publishes no
+port, and is destroyed in a `finally` on every path (**D-307**). It deliberately
+carries no `project.ref` label, because the reconciler keys on that one and an
+unexpected container wearing it is drift.
+
+**The queue puts never-verified projects first** (**D-310**), and the obvious
+ordering gets that exactly backwards: a project nobody has ever verified is the
+likeliest to be broken in a way nobody noticed — a misconfigured repo, a
+cipher-pass that never matched, a schedule that never fired — and it has no
+timestamp to be old, so a longest-unverified sort ranks it last. A **failed**
+verification does not count as one, which is D-176's "treat the backups as
+nonexistent" expressed as scheduling: the project stays at the front until one
+passes. Paused projects are included and need it most — their backup is their only
+life.
+
+Two alerts, not one (**D-311**): a failure pages at the same severity as a failed
+backup, and low coverage warns — because a verifier that stopped looks exactly
+like a fleet whose backups are all fine, and nothing fires when nothing runs.
+
+**Three findings, two of them mine and one the same trap twice.**
+
+`${PIPESTATUS[0]}` is a bash-ism, and the image's `/bin/sh` is dash — the check's
+own plumbing exited non-zero, so **every healthy cluster was reported as corrupt**.
+The identical trap as `/dev/tcp` in P3a, in the same phase. And `pg_amcheck` takes
+the database *positionally*; `--dbname` is psql's spelling and pg_amcheck rejects
+it outright, which failed the same way. A check that cannot pass is as useless as
+one that cannot fail, and both of these were the former.
+
+The third: the control plane's S3 client has **no `PUT`** (**D-312**), because
+delete rights are the only write rights it is meant to hold. The sabotage test
+needed to overwrite an object, and does it with `mc` from outside the product
+rather than adding a `PUT` that would have quietly broken the access model this
+same phase documents.
+
+**Verification.** `verify-restore.e2e.test.ts` 11/11. A healthy backup restores
+and passes all four checks; a backup file overwritten with random bytes **fails**,
+and the record names which check caught it; an empty repo fails rather than
+reporting a vacuous pass — "verified" and "found to have nothing to verify" must
+not look alike; a wrong cipher-pass fails; nothing is left on the node afterwards.
+Five more cover the scheduler's choices, including that a failed verification does
+not count and that paused projects are candidates.
+
+**Substitute limitation:** backups §7 wants verification on a node designated for
+it rather than customer capacity. There is one node here, so the scratch instance
+shares it — isolated by its own volume and network-less container, but not by
+hardware. Recorded rather than pretended away.
+
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -1955,10 +2032,10 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-One hundred and twenty-three decisions came out of running the thing rather than planning it —
-D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-262 from Phase 2, and D-263…D-306 from Phase 3.
+One hundred and twenty-nine decisions came out of running the thing rather than planning it —
+D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-262 from Phase 2, and D-263…D-312 from Phase 3.
 Full text in the [decision log](docs/00-foundation/05-decision-log.md); the log holds
-D-001…D-306 and is binding when two documents disagree.
+D-001…D-312 and is binding when two documents disagree.
 
 | ID | What changed | Why it surfaced |
 |---|---|---|
@@ -2085,6 +2162,12 @@ D-001…D-306 and is binding when two documents disagree.
 | D-304 | The repo path is stored, and the S3 prefix drops its leading slash | pgBackRest spells it `/projects/<id>`, S3 keys have none — the unmodified path matches nothing, silently |
 | D-305 | Control plane and project containers reach the store at separate configured endpoints | Identical in production; locally the host cannot route to a container IP, and the mismatch is a timeout that looks like a bad secret |
 | D-306 | Every signed S3 request with a body sends an explicit `Content-Length` | Node uses chunked encoding otherwise and S3 answers 411 MissingContentLength |
+| D-307 | Verification uses a scratch container with its own volume, no network, no port, destroyed in a finally | It exists to be read once; a reachable copy of a customer's database is a hole opened by the mechanism meant to protect them |
+| D-308 | Four checks, and the sanity count is the one that cannot be faked | A backup can pass every structural test and contain an empty database |
+| D-309 | The sanity expectation uses `reltuples`, not `count(*)` | It runs against a customer's live production database and must not scan it |
+| D-310 | Never-verified projects go first, and a failed verification does not count as one | A longest-unverified sort ranks the never-verified last, because they have no timestamp to be old |
+| D-311 | Two alerts: any failure pages, low coverage warns | A verifier that stopped looks exactly like a fleet whose backups are all fine |
+| D-312 | The control plane's S3 client has no `PUT` | Delete is the only write right it should hold; the sabotage test overwrites with `mc`, from outside the product |
 
 ## 7. Measurements
 
@@ -2204,11 +2287,15 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   node cordon — is implemented and tested.
 - No email or dashboard banner at the 80% and 90% rungs. The ladder records the rung
   and audits nothing yet; notification is Phase 4's sender.
-- **Backups exist but nothing has restored one.** P3a builds the repo and proves
-  WAL reaches it; the operating rule of the phase is that an unrestored backup does
-  not exist, so no project should be described as protected yet. PITR is P3d,
-  verification is P3e, and until they land the honest statement is that Corebase
-  has an archive, not a recovery path.
+- **Verification shares the one node with customer projects.** Backups §7 wants a
+  node designated for verification; there is one node here, so the scratch instance
+  is isolated by its own volume and a network-less container rather than by
+  hardware. A verification restore competing with a customer's database for I/O is
+  a real effect this substrate cannot rule out.
+- `pgbackrest verify` — the monthly repo-side checksum audit that catches bit-rot
+  without a full restore (backups §7's last bullet) — is not scheduled. The
+  restore-based verification is the stronger of the two and is the one the criterion
+  names; the cheap one is still worth having.
 - The P3d suite provisions a source per test, which makes it slow and made it
   unfinishable on a loaded machine. Sharing one provisioned source across the file
   would cut four provisions.
@@ -2229,8 +2316,10 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   but **nothing is wired to a receiver**: Prometheus would fire and there is no
   Slack or pager on the other end (OQ-146 owns the vendor choice). "Alerts fire" is
   met in the sense the criterion tests; "someone is woken up" is Phase 4's sender.
-- `CB_REQUIRE_BACKUPS` is **off**, so a fleet with no repo configured still
-  provisions projects that have no PITR. It flips on when Phase 3 completes.
+- `CB_REQUIRE_BACKUPS` and `CB_REQUIRE_FINAL_BACKUP` are both **on** now that
+  Phase 3 is complete: a fleet with no object storage refuses to provision and
+  refuses to delete rather than doing either silently. `=false` on each is the
+  deliberate opt-out.
 - **The density numbers cannot move the cost model, and the model is therefore
   still unvalidated.** M-008 satisfies two of D-209's four conditions (100
   co-resident projects, client load) and cannot satisfy the other two here. The
