@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-09-01 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 started** (P3a–P3c done)
+**Last updated:** 2026-09-01 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 started** (P3a–P3c done; **P3d code-complete, exit criterion 1 unconfirmed**)
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -1627,6 +1627,94 @@ the per-plan day counts) is pinned by unit test. What is unverified is the calen
 arithmetic, not the plumbing.
 
 
+### P3d — restore to a new instance, and PITR · code-complete · 3 of 5 live tests green
+
+**Exit criterion 1 is NOT confirmed.** The restore runs end to end — every saga step
+green, `recovery paused at the target`, promoted, writable — but the run that would
+have proved the *data* is from the requested second has not completed on this
+machine. Read the verification note at the end of this section before treating PITR
+as working.
+
+`POST /v1/projects/:ref/restore { target_time }` creates a **different** project and
+returns that one. Production is never overwritten (proposal §36), so the ref in the
+response is not the ref in the path and the caller polls the new one. The copy is
+marked **`restored`, never `ready`** (**D-283**): two databases serving one
+application loses data by construction, and `ready` would make the copy
+indistinguishable from production in every list, badge and API response.
+
+The saga reuses the provisioning path's placement, volume and network steps, then
+diverges where it must: `start_container` is *absent*, because the volume has to be
+filled before Postgres has ever run on it. A throwaway container that starts no
+database runs `pgbackrest restore`, and only then does the real container start on
+top of the restored data directory.
+
+**Three findings, all from running it.**
+
+**The restored container needs the *source's* repo config before Postgres starts**
+(**D-284**). pgBackRest writes `restore_command = 'pgbackrest … archive-get'` into
+`postgresql.auto.conf`, and that runs *inside the project container* for every WAL
+segment recovery wants. Writing the copy's own config first — the obvious ordering —
+points archive-get at an empty repo. It surfaced twice in two disguises: first as
+`FATAL: could not locate required checkpoint record at 0/4000080`, a message about
+checkpoints that is really about a missing config file, and then as a recovery that
+waited for WAL forever.
+
+**A guard that could not fail.** Checking for `recovery.signal` with
+`ls … | includes('recovery.signal')` passes whether the file exists or not, because
+`ls` prints the path *in its error message*. That version ran green against a data
+directory without the file. It uses `test -f` and an exit code now — the repo has
+been bitten by vacuous guards before, and this one was written in the same hour as
+a comment about proving guards before trusting them.
+
+**`reached_time` is informational and may be NULL** (**D-286**).
+`pg_last_xact_replay_timestamp()` reports the last *transaction* replayed, and
+recovery can reach its target having replayed none — so requiring it fails restores
+that worked. `reached_lsn` is the load-bearing evidence.
+
+`--target-action=pause` is the design's safety property and worth restating
+(**D-285**): it leaves the cluster in recovery at the target, which is the only
+moment at which "did this land where I asked?" can be answered. Under `promote`
+there is no such moment, and a restore that ran out of WAL early would arrive as a
+healthy database holding the wrong day.
+
+**Dashboard** (ux-review run per D-224, three failures found and fixed):
+
+- Q18 — adding `restoring` to `SETTLING` made the banner read *"Setting up your
+  database"* over the top of someone's recovery. Now its own copy.
+- Q19 — the progress bar was a fixed `width: 55%`, a number nothing computed. It
+  reads *worse* than no bar: a user watching 55% sit still concludes the operation
+  is stuck. Now indeterminate (**D-290**).
+- Q14 — a `restored` project was terminal with a warning badge and no explanation.
+  Now a banner saying what the copy holds, that it serves no traffic, that the
+  original is untouched, and that switching over is a separate step that is not
+  built yet.
+
+The typed `Record<ProjectStatus, string>` turned two new enum values into a compile
+error rather than a silently-neutral badge. That guard was written after the
+`creating` incident and this is the first time it has caught what it was written for.
+
+**Verification — what actually ran, and what did not.**
+
+Green on the live stack: the restored copy gets its own credentials and the
+source's no longer open it; a restore whose target predates every backup **fails
+loudly** rather than serving an earlier point; a restore whose source is gone
+refuses rather than producing an empty database. Dashboard 13/13; typecheck clean
+across all eleven packages.
+
+Not green: the exit-criterion test's final data assertions, and the
+`restored`-not-`ready` test. Both timed out — not on a defect, but on a developer
+machine at load average 12, where a provisioning step that normally takes 0.4 s took
+25 s and a `sed` over one file exceeded two minutes. An isolated run *did* carry the
+same test through the entire restore in 73 s with every step green and `recovery
+paused at the target` logged; it stopped at the over-strict `reached_time`
+assertion, now fixed. So the remaining gap is one clean run on a quiet machine, and
+until that run exists **PITR is unproven and this section does not claim otherwise**.
+
+The suite is also too heavy as written: five tests each provision a source *and*
+restore it. Sharing one provisioned source across the file would cut four
+provisions and is the obvious next change.
+
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -1666,10 +1754,10 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-Ninety-nine decisions came out of running the thing rather than planning it —
-D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-262 from Phase 2, and D-263…D-282 from Phase 3.
+One hundred and seven decisions came out of running the thing rather than planning it —
+D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-262 from Phase 2, and D-263…D-290 from Phase 3.
 Full text in the [decision log](docs/00-foundation/05-decision-log.md); the log holds
-D-001…D-282 and is binding when two documents disagree.
+D-001…D-290 and is binding when two documents disagree.
 
 | ID | What changed | Why it surfaced |
 |---|---|---|
@@ -1772,6 +1860,14 @@ D-001…D-282 and is binding when two documents disagree.
 | D-280 | A project's window slot is derived from its id, never random | Random re-rolls each sweep — a lottery firing at a different time nightly, not a schedule |
 | D-281 | A never-backed-up or badly overdue project is backed up outside the window | The window spreads load; it is not a reason to keep delaying a backup already late |
 | D-282 | A `running` backup row stops blocking the schedule after six hours | A crash must not freeze a project's backups until a human notices |
+| D-283 | A restored project is `restored`, never `ready` | Two databases serving one application loses data by construction; `ready` makes a copy indistinguishable from production |
+| D-284 | The restored container gets the source's repo config before Postgres starts | `restore_command` runs archive-get *inside* that container; the copy's own config points it at an empty repo |
+| D-285 | Restore with `--target-action=pause`; confirm the target was reached before promoting | `promote` leaves no moment at which "did this land where I asked?" can be answered |
+| D-286 | `reached_lsn` is the evidence; `reached_time` may legitimately be NULL | Recovery can reach its target having replayed no transaction, so requiring the timestamp fails restores that worked |
+| D-287 | The restore rotates the copy's credentials, connecting with the source's | Otherwise one password opens two databases and a rotation on the original misses the copy |
+| D-288 | A restore counts against the per-org ceiling, refusing with the remedy named | It consumes a real node slot; OQ-079 owns the per-plan concurrent-restore policy |
+| D-289 | A future or out-of-window `target_time` is refused, never clamped | Clamping returns a restore that silently is not what was asked for — the exact failure the flow prevents |
+| D-290 | In-flight work uses an indeterminate progress indicator, never an invented percentage | A fixed 55% fill is a number nothing computed, and it reads as stuck rather than as working |
 
 ## 7. Measurements
 
@@ -1896,6 +1992,17 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   not exist, so no project should be described as protected yet. PITR is P3d,
   verification is P3e, and until they land the honest statement is that Corebase
   has an archive, not a recovery path.
+- **PITR is not proven.** P3d's restore runs end to end and its failure paths are
+  tested, but the assertion that the restored data is from the requested second has
+  not completed a green run — the machine could not sustain it. Exit criterion 1 is
+  open, and one clean run closes it.
+- The P3d suite provisions a source per test, which is why it cannot finish under
+  load. Sharing one source across the file is the fix.
+- **Promote and auto-expiry are not built.** A restored copy stays `restored`
+  forever: there is no credential/endpoint swap (backups §4 step 6) and no 48-hour
+  expiry (step 7), so a copy nobody promotes is a project nobody deletes. The
+  dashboard banner says switching over is not built rather than offering a dead
+  button.
 - **Time-based retention is not verified over real calendar days.** pgBackRest
   decides expiry from timestamps in the repo, so proving a 7-day policy needs a
   7-day-old backup or repo surgery. The mechanism is tested with a count-based
