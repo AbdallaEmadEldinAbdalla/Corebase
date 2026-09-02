@@ -13,6 +13,7 @@ import { createIdleScan } from './idle-scan.ts';
 import { createDiskScan } from './disk-scan.ts';
 import { createWalScan } from './wal-scan.ts';
 import { createBackupScan } from './backup-scan.ts';
+import { createRestoreExpiry, restoreTtlHours } from './restore-expiry.ts';
 import { createReconciler } from './reconcile.ts';
 import {
   startMetricsServer, registerControlPlaneCollectors,
@@ -286,6 +287,22 @@ const backupGaugeTimer = setInterval(() => {
     .catch((e) => log('error', 'backup gauge refresh failed', { error: (e as Error).message }));
 }, 60_000);
 
+/**
+ * Restored copies past their deadline (P3e). Every ten minutes.
+ *
+ * Not more often: the deadline is measured in days, so a few minutes of slack
+ * either side is invisible to a customer and the sweep is one indexed query. Not
+ * less often either — a copy that outlives its deadline by hours is capacity spent
+ * on a database nobody queries, which is the thing the deadline exists to stop.
+ */
+const restoreExpiryMs = Number(process.env.CB_RESTORE_EXPIRY_SCAN_MS ?? 600_000);
+const restoreExpiry = createRestoreExpiry({
+  pool, queue, log: (m, e) => log('info', m, e) });
+const restoreExpiryTimer = setInterval(() => {
+  void restoreExpiry.scanOnce()
+    .catch((e) => log('error', 'restore expiry sweep failed', { error: (e as Error).message }));
+}, restoreExpiryMs);
+
 // Node reconciliation (D-065/D-173): 5 minutes, jittered so a fleet of workers
 // does not hit every node's Engine API at the same second. Container crashes are
 // Docker's restart policy to handle; this is the backstop that catches what the
@@ -335,6 +352,7 @@ log('info', 'worker started', {
   disk: diskTimer ? { scanMs: diskMs } : 'disabled (no secret store)',
   wal: walTimer ? { scanMs: walMs } : 'disabled (no secret store)',
   backups: { scanMs: backupScanMs },
+  restore_expiry: { scanMs: restoreExpiryMs, ttlHours: restoreTtlHours() },
 });
 
 const shutdown = async (signal: string) => {
@@ -348,6 +366,7 @@ const shutdown = async (signal: string) => {
   clearInterval(sweepTimer);
   clearInterval(purgeTimer);
   clearInterval(backupGaugeTimer);
+  clearInterval(restoreExpiryTimer);
   if (idleTimer) clearInterval(idleTimer);
   if (diskTimer) clearInterval(diskTimer);
   if (walTimer) clearInterval(walTimer);

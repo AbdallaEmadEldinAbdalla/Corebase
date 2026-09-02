@@ -46,14 +46,9 @@ CREATE TABLE IF NOT EXISTS project_restores (
   -- The requested point in time. Null means "latest" — the node-loss case, where
   -- there is no target beyond "everything you have".
   target_time       timestamptz,
-  -- What recovery actually reached, read back from the restored cluster.
-  --
-  -- `reached_lsn` is the load-bearing one: a non-null replay LSN means WAL was
-  -- actually replayed rather than the cluster starting from its base backup and
-  -- stopping there. `reached_time` comes from `pg_last_xact_replay_timestamp()`
-  -- and is informational — it reports the last *transaction* replayed, and
-  -- recovery can legitimately reach its target having replayed none, so NULL here
-  -- is not a failure. Treating it as one would fail restores that worked.
+  -- What recovery actually reached, read back from the restored cluster. Compared
+  -- against target_time, this is the only honest answer to "did the restore give
+  -- me what I asked for".
   reached_time      timestamptz,
   reached_lsn       text,
   -- The backup pgBackRest chose to restore from, for the record.
