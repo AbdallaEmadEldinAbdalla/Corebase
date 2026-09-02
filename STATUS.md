@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-09-01 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 started** (P3a–P3e done; **exit criterion 1 met**)
+**Last updated:** 2026-09-01 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 started** (P3a–P3f done; **exit criteria 1, 3 and 4 met**)
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -251,7 +251,7 @@ boot. Don't use them.
 
 ## 4. What is built, in detail
 
-Test counts are from `pnpm test` and are all currently green: **580 tests**, of
+Test counts are from `pnpm test` and are all currently green: **586 tests**, of
 which **319** need no infrastructure (`pnpm test:unit`).
 
 Every task below has a command that proves it; they are listed with the task.
@@ -1789,6 +1789,68 @@ credential/endpoint swap yet (backups §4 step 6), so the way to keep a restore 
 not available and the banner says so rather than offering a dead button.
 
 
+### P3f — the two interlocks · done · 6 live tests
+
+**Exit criterion 4 is met**: deleting a project produces a final backup that is
+retrievable during the recovery window. And D-077's pause interlock is real: pause
+does not complete until the project is restorable from object storage alone.
+
+**On delete.** `final_backup` was a gate that could only ever *refuse*; it now takes
+a backup, and always a **full** (**D-296**). Everything else in the schedule
+balances cost against restore time — this is the only copy that will survive the
+project, and a chain whose earlier links are expiring is not something to hand a
+customer who is already having a bad day. A failure **stops the deletion**, which
+is the whole point of an interlock: nothing about a `DELETE` distinguishes "we are
+done with this" from "I typed the wrong ref", and a deletion that proceeded past a
+failed backup would close a recovery window with nothing behind it at the one moment
+nobody is watching, because the customer has already moved on. `CB_REQUIRE_FINAL_BACKUP`
+now defaults **on** (**D-299**) — the failure it prevents is invisible, since a
+recovery window with nothing behind it looks exactly like a recovery window.
+
+Deleting an already-paused project is the normal Free case and is handled
+separately: there is no container to back up from, so the step relies on the
+pause-time backup and says which one it is relying on. "There was already one" and
+"we could not take one" must not look alike.
+
+**On pause.** A paused project has no running Postgres, so **WAL archiving stops
+with the container** — unhandled, the only current copy of the data is one node's
+disk with a backup behind it already older than the pause, which is not what D-008's
+economics promise. So pause now takes a backup *after* the checkpoint (the order is
+not incidental — a backup before it omits exactly what the checkpoint flushed, the
+tail of the data), confirms it with `pgbackrest check`, and **refuses to stop the
+containers if either fails** (**D-297**). Leaving them running is the deliberate
+part: a paused project whose backup failed is strictly worse than a running one.
+
+An incremental when the last full is under 7 days old, a full otherwise
+(**D-298**). The chain matters more here than anywhere, because nothing extends it
+again until the project resumes.
+
+**Two test premises of mine were wrong, and both were worth finding.** I asserted
+the container was *gone* after a soft delete — it is stopped, not removed, because
+phase one of deletion is reversible by design and removal is the purge seven days
+later. A test asserting it had gone would have been asserting the window did not
+exist. And I assumed a freshly provisioned project pausing immediately would take
+an incremental; provisioning takes no backup at all, so it correctly takes a full.
+An incremental with no base is not a thing.
+
+**Verification.** `interlocks.e2e.test.ts` 6/6 on the live stack. The criterion
+test proves *retrievability* the only way that counts (**D-300**): after the
+project is soft-deleted and its containers are stopped, the repo is read from a
+**different** container with nothing but the stored cipher-pass, and the final
+backup's label is there. A `backup_runs` row saying `succeeded` is our own
+bookkeeping; the criterion is about the repo. Both refusal paths are tested by
+breaking the repo the way a botched credential rotation would — delete refuses and
+the project stays `ready`, pause refuses and the containers stay running.
+
+**Not built:** repo destruction after purge + 30 days (D-066). The repo currently
+outlives the project indefinitely, which D-038's "provable destruction" requires
+closing — and it needs a path this codebase does not have yet: after purge there is
+no container to run `pgbackrest stop` in, so the control plane has to delete the
+bucket prefix itself over S3. That is also the design the doc already asks for
+("delete rights live only with the control plane"), so it is a step rather than a
+patch.
+
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -1828,10 +1890,10 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-One hundred and twelve decisions came out of running the thing rather than planning it —
-D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-262 from Phase 2, and D-263…D-295 from Phase 3.
+One hundred and seventeen decisions came out of running the thing rather than planning it —
+D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-262 from Phase 2, and D-263…D-300 from Phase 3.
 Full text in the [decision log](docs/00-foundation/05-decision-log.md); the log holds
-D-001…D-295 and is binding when two documents disagree.
+D-001…D-300 and is binding when two documents disagree.
 
 | ID | What changed | Why it surfaced |
 |---|---|---|
@@ -1947,6 +2009,11 @@ D-001…D-295 and is binding when two documents disagree.
 | D-293 | Invalid TTL → default; valid-but-out-of-range → clamped | Zero is the absence of an answer, not a short window; a typo must not stop a fleet booting |
 | D-294 | The deadline is written with the project and shown on the detail, not only on create | A column filled in later is a copy that lives forever; the customer who needs the deadline returns two days later |
 | D-295 | A PITR target keeps its sub-second precision | Trimming milliseconds moves the target back by up to a second, returning a restore that looks correct and is one transaction short |
+| D-296 | `final_backup` is always a full, and its failure stops the deletion | The only copy that survives the project; nothing about a DELETE distinguishes "done with this" from "wrong ref" |
+| D-297 | Pause backs up after the checkpoint, confirms with `check`, and leaves containers running on failure | A paused project whose backup failed has one node disk as the only copy — worse than a running one |
+| D-298 | The pause backup is incremental under 7 days, full otherwise | Nothing extends the chain until resume, so a link nobody watches is a restore that depends on it |
+| D-299 | `CB_REQUIRE_FINAL_BACKUP` defaults on | The failure is invisible: a recovery window with nothing behind it looks exactly like one |
+| D-300 | Retrievability is proven by reading the repo from a container that is not the deleted project's | A `succeeded` row is our bookkeeping; the criterion is about the repo |
 
 ## 7. Measurements
 
@@ -2083,11 +2150,17 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   7-day-old backup or repo surgery. The mechanism is tested with a count-based
   override and the production policy is pinned by unit test; the calendar
   arithmetic is taken on pgBackRest's word.
-- The final-backup-on-delete interlock and the pause interlock (D-077) are still
-  unbuilt — `final_backup` in the deletion saga remains the Milestone 0 gate that
-  refuses only when told to. Pause does not yet take a final backup, so a paused
-  project's PITR window is frozen at whatever its last scheduled backup was rather
-  than at the pause instant.
+- **A purged project's repo is never destroyed.** D-066 keeps the final backup 30
+  days past purge and then requires `pgbackrest stop` plus repo-path destruction,
+  audited; today the repo outlives the project indefinitely, which leaves D-038's
+  "provable destruction" unmet. It needs a path this codebase does not have: after
+  purge there is no container to run pgBackRest in, so the control plane must delete
+  the bucket prefix itself over S3 — which is the design the doc already asks for
+  ("delete rights live only with the control plane"), and a step rather than a patch.
+- Retention expiry is frozen for a paused project only *incidentally*: expire runs
+  as part of a backup, a paused project takes none, so nothing expires its chain.
+  That is the right outcome and it is not enforced anywhere — nothing would stop a
+  future explicit `expire` from running against a paused project.
 - The archive alerts are proven against synthetic series and a sabotaged project,
   but **nothing is wired to a receiver**: Prometheus would fire and there is no
   Slack or pager on the other end (OQ-146 owns the vendor choice). "Alerts fire" is
