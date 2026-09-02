@@ -9,6 +9,7 @@ import {
   info as backupInfo, backup as takePgbackrest, restore as pgbackrestRestore,
 } from '../backup.ts';
 import { decideBackup } from '../backup-schedule.ts';
+import { createRepoDestroy, REPO_RETENTION_DAYS } from '../repo-destroy.ts';
 import { backupRunsTotal } from '../metrics.ts';
 import {
   buildContainerSpec, buildPoolerSpec, bootstrapPassword, containerName, networkName,
@@ -1271,6 +1272,44 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
    * silent state D-066 forbids, and it would do so at the only moment nobody is
    * watching, because the customer has already moved on.
    */
+  /**
+   * Schedule the repo's destruction (P3g, D-066).
+   *
+   * Runs at purge and writes the only thing that must outlive it: what still needs
+   * deleting and when. The repo itself is *not* touched here — D-066 keeps the
+   * final backup for 30 days past purge, so that a customer who deleted the wrong
+   * project has a month rather than the week the volume gets.
+   *
+   * Placed before `delete_credentials` for a reason that only matters on a retry:
+   * the bucket comes from the fleet's configuration rather than the project's
+   * secrets, but a step that reads *anything* about the project has to run while
+   * the project still has it.
+   */
+  const scheduleRepoDestruction: SagaStep<SagaContext> = {
+    name: 'schedule_repo_destruction',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const repo = repoTargetFromEnv();
+      if (!repo) {
+        // Nothing to destroy that we know how to reach. Recorded with no deadline
+        // rather than skipped, so the row exists and a fleet that later gains
+        // object storage can be given a schedule for it — an absent row is a repo
+        // nobody will ever look for.
+        await deps.pool.query(
+          `INSERT INTO project_repos (project_id, repo_path, bucket, destroy_after)
+           VALUES ($1, $2, 'unconfigured', NULL)
+           ON CONFLICT (project_id) DO NOTHING`,
+          [projectId, repoPathFor(projectId)]);
+        ctx.log('no repo configured — recorded with no destruction deadline', {});
+        return;
+      }
+      await createRepoDestroy({ pool: deps.pool }).schedule(projectId, repo.bucket);
+      ctx.log('backup repo scheduled for destruction', {
+        repo_path: repoPathFor(projectId), in_days: REPO_RETENTION_DAYS,
+      });
+    },
+  };
+
   const finalBackup: SagaStep<SagaContext> = {
     name: 'final_backup',
     async run(ctx) {
@@ -2122,6 +2161,7 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       removeContainer,               // T7
       removeNetwork,                 // P2a — after the container, which pins it
       removeVolume,                  // T7
+      scheduleRepoDestruction,       // P3g — before the credentials go
       deleteCredentials,             // T7
       release,                       // T5c's idempotent inverse
       verifyGone,                    // T7 — asserts against the node, last

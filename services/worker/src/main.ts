@@ -14,6 +14,7 @@ import { createDiskScan } from './disk-scan.ts';
 import { createWalScan } from './wal-scan.ts';
 import { createBackupScan } from './backup-scan.ts';
 import { createRestoreExpiry, restoreTtlHours } from './restore-expiry.ts';
+import { createRepoDestroy, REPO_RETENTION_DAYS } from './repo-destroy.ts';
 import { createReconciler } from './reconcile.ts';
 import {
   startMetricsServer, registerControlPlaneCollectors,
@@ -314,6 +315,20 @@ const restoreExpiryTimer = setInterval(() => {
     .catch((e) => log('error', 'restore expiry sweep failed', { error: (e as Error).message }));
 }, restoreExpiryMs);
 
+/**
+ * Destroying purged projects' backup repos (P3g, D-038/D-066). Hourly.
+ *
+ * The deadline is measured in days, so an hour of slack is invisible — and an
+ * hourly sweep means a repo that *cannot* be destroyed is retried often enough for
+ * its stored error to be current when someone looks.
+ */
+const repoDestroyMs = Number(process.env.CB_REPO_DESTROY_SCAN_MS ?? 3_600_000);
+const repoDestroy = createRepoDestroy({ pool, log: (l, m, e) => log(l, m, e) });
+const repoDestroyTimer = setInterval(() => {
+  void repoDestroy.scanOnce()
+    .catch((e) => log('error', 'repo destruction sweep failed', { error: (e as Error).message }));
+}, repoDestroyMs);
+
 // Node reconciliation (D-065/D-173): 5 minutes, jittered so a fleet of workers
 // does not hit every node's Engine API at the same second. Container crashes are
 // Docker's restart policy to handle; this is the backstop that catches what the
@@ -364,6 +379,7 @@ log('info', 'worker started', {
   wal: walTimer ? { scanMs: walMs } : 'disabled (no secret store)',
   backups: { scanMs: backupScanMs },
   restore_expiry: { scanMs: restoreExpiryMs, ttlHours: restoreTtlHours() },
+  repo_destruction: { scanMs: repoDestroyMs, retentionDays: REPO_RETENTION_DAYS },
 });
 
 const shutdown = async (signal: string) => {
@@ -378,6 +394,7 @@ const shutdown = async (signal: string) => {
   clearInterval(purgeTimer);
   clearInterval(backupGaugeTimer);
   clearInterval(restoreExpiryTimer);
+  clearInterval(repoDestroyTimer);
   if (idleTimer) clearInterval(idleTimer);
   if (diskTimer) clearInterval(diskTimer);
   if (walTimer) clearInterval(walTimer);

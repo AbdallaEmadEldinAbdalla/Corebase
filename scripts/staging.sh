@@ -159,6 +159,15 @@ cmd_backup_store() {
   cat > "$env_file" <<EOF
 CB_BACKUP_S3_ENDPOINT=$ip
 CB_BACKUP_S3_PORT=9000
+# The *control plane's* view of the same store, which is not the projects' view.
+#
+# A project container reaches it through the node's NAT egress, so its endpoint is
+# the address above — on the compose network. The control plane runs on the host,
+# which cannot route to a container IP at all, so it uses the published port. In
+# production both are R2 over the internet and these two are identical, which is
+# why the control-plane pair falls back to the project pair when unset.
+CB_BACKUP_S3_CONTROL_ENDPOINT=127.0.0.1
+CB_BACKUP_S3_CONTROL_PORT=${OBJECT_STORE_PORT:-59000}
 CB_BACKUP_S3_BUCKET=$bucket
 CB_BACKUP_S3_KEY=$key
 CB_BACKUP_S3_SECRET=$secret
