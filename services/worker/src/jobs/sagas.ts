@@ -6,7 +6,7 @@ import { nodeCaps } from '../node-caps.ts';
 import {
   repoTargetFromEnv, renderPgbackrestConf, writeConf, stanzaCreate, repoPathFor, STANZA,
   check as backupCheck, pgbackrestFailure,
-  info as backupInfo, backup as takePgbackrest,
+  info as backupInfo, backup as takePgbackrest, restore as pgbackrestRestore,
 } from '../backup.ts';
 import { decideBackup } from '../backup-schedule.ts';
 import { backupRunsTotal } from '../metrics.ts';
@@ -873,6 +873,384 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
     },
   };
 
+  /* ── restore to a new instance (P3d, backups §4) ─────────────────────── */
+
+  /**
+   * Fill the new project's volume from the *source* project's repo.
+   *
+   * This has to happen before Postgres has ever started on that volume, and that
+   * ordering is the reason this is not simply "provision then restore": the image's
+   * entrypoint runs `initdb` on an empty volume, and a restore into a directory
+   * that already contains a cluster is either refused or a mess. So the volume is
+   * created, filled by a throwaway container that runs nothing but pgBackRest, and
+   * only then does the real project container start on top of it.
+   *
+   * The config written into that throwaway container is the **source's** — its repo
+   * path, its cipher-pass. A restore reads someone else's history by definition,
+   * and this is the one place in the system where a project's container legitimately
+   * holds another project's credentials. It is a container that exists for the
+   * duration of one command and is removed in a `finally`.
+   */
+  /**
+   * Write the *source* project's repo config into a container.
+   *
+   * Needed twice, and the second time is the one that was missing. pgBackRest's
+   * restore writes `restore_command = 'pgbackrest --stanza=main archive-get …'`
+   * into `postgresql.auto.conf`, and that command runs **inside the project
+   * container** every time recovery wants a WAL segment. If the container has no
+   * `/etc/pgbackrest/pgbackrest.conf`, archive-get can reach no repo, recovery
+   * never gets the segments it needs, and Postgres either dies with
+   *   FATAL: could not locate required checkpoint record at 0/4000080
+   * — a message about checkpoints that is really about a missing config — or waits
+   * for WAL that will never arrive. Both were observed, in that order.
+   *
+   * It has to be the *source's* config: the WAL being replayed is the source's, and
+   * the copy's own repo does not exist until `configure_backups` runs after
+   * recovery has finished.
+   */
+  async function writeSourceRepoConf(
+    docker: Docker, container: string, sourceProjectId: string,
+  ): Promise<void> {
+    const secrets = requireSecrets(deps);
+    const repo = repoTargetFromEnv();
+    if (!repo) throw new Error('no backup repo configured — a restore has nothing to read');
+    const cipherPass = await secrets.get(sourceProjectId, SECRET_NAMES.backupCipherPass);
+    if (!cipherPass) {
+      throw new Error('no repo cipher-pass stored for the source — its repo cannot be decrypted');
+    }
+    const sourcePlan = (await loadProject(deps.pool, sourceProjectId)).plan;
+    await writeConf(docker, container, renderPgbackrestConf({
+      projectId: sourceProjectId, plan: sourcePlan, cipherPass, repo,
+    }));
+  }
+
+  const restoreIntoVolume: SagaStep<SagaContext> = {
+    name: 'restore_into_volume',
+    async run(ctx) {
+      const docker = requireDocker(deps);
+      const projectId = ctx.job.project_id!;
+      const project = await loadProject(deps.pool, projectId);
+      const place = await loadPlacement(deps.pool, projectId);
+
+      const restoreRow = await deps.pool.query<{
+        source_project_id: string | null; source_ref: string; target_time: Date | null;
+      }>(`SELECT source_project_id, source_ref, target_time
+            FROM project_restores WHERE project_id = $1`, [projectId]);
+      const r = restoreRow.rows[0];
+      if (!r) throw new Error('no project_restores row — this project was not created by a restore');
+      if (!r.source_project_id) {
+        throw new Error(
+          `the source project ${r.source_ref} is gone, so its repo cannot be read — ` +
+          'a restore cannot be replayed after its source is purged');
+      }
+
+      // Already restored? A `PG_VERSION` in the data directory means a previous
+      // attempt got this far, and re-running the restore would throw away whatever
+      // recovery has already replayed.
+      const probe = `cb-restore-${project.ref}`;
+
+      await docker.removeContainer(probe, true, true).catch(() => {});
+      const spec = buildContainerSpec({
+        ref: project.ref, projectId, volumeName: place.volume_name,
+        hostPort: place.port, ramLimitMb: place.ram_limit_mb,
+        bootstrapSecret: deps.bootstrapSecret ?? '', plan: project.plan,
+      });
+      try {
+        const id = await docker.createContainer(probe, {
+          ...spec,
+          // Nothing but a shell: the entrypoint must not run, or it would initdb
+          // the volume we are about to restore into.
+          Cmd: ['sleep', '900'],
+          Env: [],
+          HostConfig: { ...spec.HostConfig, PortBindings: {} },
+          ExposedPorts: {},
+        });
+        await docker.startContainer(id);
+
+        const already = await docker.execCapture(probe, ['sh', '-c',
+          'test -f /var/lib/postgresql/data/pgdata/PG_VERSION && echo yes || echo no']);
+        if (already.stdout.trim() === 'yes') {
+          ctx.log('data directory is already populated — leaving the previous restore alone', {});
+          return;
+        }
+
+        await writeSourceRepoConf(docker, probe, r.source_project_id);
+        const out = await pgbackrestRestore(docker, probe, {
+          targetTime: r.target_time ?? undefined });
+        // The label pgBackRest chose, for the record: which base it replayed from
+        // is the first thing anyone asks when a restore lands somewhere unexpected.
+        /**
+         * The restore is not finished when pgBackRest exits 0.
+         *
+         * Postgres needs `recovery.signal` in the data directory to enter archive
+         * recovery at all; without it, it finds a `backup_label` pointing at a
+         * checkpoint whose WAL it has no way to fetch, and dies with
+         *   FATAL: could not locate required checkpoint record at 0/4000080
+         * — a message about checkpoints that is really about a missing file. Checked
+         * here because this is where it can still be explained; at container start
+         * it is a database that will not boot for reasons three layers away.
+         */
+        // `test -f` and the exit code, not `ls` and a substring: `ls` on a missing
+        // file prints the path *in its error message*, so a substring check for the
+        // filename passes whether the file is there or not. That version of this
+        // guard ran green against a data directory that did not contain the file.
+        const signal = await docker.execCapture(probe, ['sh', '-c',
+          'cd /var/lib/postgresql/data/pgdata && test -f recovery.signal && echo PRESENT; '
+          + 'echo "---"; ls -a | head -30']);
+        if (!/\bPRESENT\b/.test(signal.stdout)) {
+          throw new Error(
+            'pgbackrest restore wrote no recovery.signal, so Postgres cannot enter ' +
+            'archive recovery and will refuse to start. ' +
+            `Data directory: ${signal.stdout.trim().slice(0, 200)}. ` +
+            `Restore output: ${out.output.split('\n').slice(-6).join(' | ').slice(0, 600)}`);
+        }
+
+        const label = /restore backup set (\S+)/.exec(out.output)?.[1];
+        await deps.pool.query(
+          `UPDATE project_restores SET backup_label = $2 WHERE project_id = $1`,
+          [projectId, label ?? null]);
+        ctx.log('volume restored from the source repo', {
+          source: r.source_ref, target: r.target_time?.toISOString() ?? 'latest', backup: label,
+        });
+      } finally {
+        await docker.removeContainer(probe, true, false).catch(() => {});
+      }
+    },
+  };
+
+  /**
+   * Start the restored cluster, confirm it stopped where it was told to, and only
+   * then let it out of recovery.
+   *
+   * The confirmation is the point of the whole step. `pg_get_wal_replay_pause_state()`
+   * reading `paused` while `pg_is_in_recovery()` is true can only happen if the
+   * recovery target was both *understood* and *reached* — if the recovery settings
+   * had been ignored, or the WAL had run out before the target, the server would
+   * have finished recovery and promoted itself on its own. So this is not a
+   * defensive assertion about our own code; it is the difference between a restore
+   * and a database quietly holding the wrong day.
+   */
+  const recoverToTarget: SagaStep<SagaContext> = {
+    name: 'recover_to_target',
+    async run(ctx) {
+      const docker = requireDocker(deps);
+      const projectId = ctx.job.project_id!;
+      const project = await loadProject(deps.pool, projectId);
+      const place = await loadPlacement(deps.pool, projectId);
+      const name = containerName(project.ref);
+
+      const { rows } = await deps.pool.query<{ target_time: Date | null }>(
+        `SELECT target_time FROM project_restores WHERE project_id = $1`, [projectId]);
+      const targetTime = rows[0]?.target_time ?? null;
+
+      const source = await deps.pool.query<{ source_project_id: string | null }>(
+        `SELECT source_project_id FROM project_restores WHERE project_id = $1`, [projectId]);
+      const sourceId = source.rows[0]?.source_project_id;
+
+      let inspect = await docker.inspectContainer(name);
+      if (!inspect) {
+        const id = await docker.createContainer(name, buildContainerSpec({
+          ref: project.ref, projectId, volumeName: place.volume_name,
+          hostPort: place.port, ramLimitMb: place.ram_limit_mb,
+          bootstrapSecret: deps.bootstrapSecret ?? '', plan: project.plan,
+          networkName: await ensureNetwork(ctx, project.ref),
+          ioWeight: (await nodeCaps(docker, IMAGE)).ioWeight,
+        }));
+        ctx.log('restored container created', { name, container: id.slice(0, 12) });
+        inspect = await docker.inspectContainer(name);
+      }
+
+      /**
+       * The source's repo config goes in *before* Postgres starts, and this ordering
+       * is the whole step working or hanging.
+       *
+       * Recovery fetches every WAL segment by running `restore_command` — which is
+       * `pgbackrest archive-get` — inside this container. `configure_backups` runs
+       * later in the saga and writes the *copy's* config, which is both too late and
+       * the wrong repo. Without this the container started, found a `backup_label`
+       * pointing at a checkpoint it could not fetch, and either died claiming it
+       * could not locate the checkpoint record or sat waiting for WAL forever.
+       *
+       * Written with the container created but not started, so the file is in place
+       * for the first thing the postmaster does.
+       */
+      if (sourceId) {
+        // The container has to be running to exec into it, but Postgres must not
+        // have started. `docker start` runs the entrypoint immediately, so instead
+        // the config is written into the stopped container's filesystem by a
+        // throwaway exec — which Docker cannot do — so the order is: start, write,
+        // and accept that the first second or two of archive-get will fail and be
+        // retried by Postgres, which retries `restore_command` indefinitely.
+        await docker.startContainer(inspect!.Id);
+        await writeSourceRepoConf(docker, name, sourceId);
+        ctx.log('source repo config in place — recovery can fetch WAL', {});
+      } else if (!inspect!.State.Running) {
+        await docker.startContainer(inspect!.Id);
+      }
+      const passwords = sourceId
+        ? await superuserCandidates(deps, sourceId)
+        : await superuserCandidates(deps, projectId);
+
+      const endpoint = adminEndpoint(place);
+      const deadline = Date.now() + (deps.healthTimeoutMs ?? 120_000);
+      let state: { in_recovery: boolean; pause_state: string | null; lsn: string | null;
+        reached: Date | null } | undefined;
+      let lastError = '';
+      while (Date.now() < deadline) {
+        try {
+          const client = await connectAsSuperuser({ ...endpoint, passwords });
+          try {
+            const q = await client.query<{
+              in_recovery: boolean; pause_state: string | null;
+              lsn: string | null; reached: Date | null;
+            }>(`SELECT pg_is_in_recovery() AS in_recovery,
+                       CASE WHEN pg_is_in_recovery()
+                            THEN pg_get_wal_replay_pause_state() ELSE NULL END AS pause_state,
+                       pg_last_wal_replay_lsn()::text AS lsn,
+                       pg_last_xact_replay_timestamp() AS reached`);
+            state = q.rows[0]!;
+          } finally { await client.end().catch(() => {}); }
+          if (!state.in_recovery || state.pause_state === 'paused') break;
+          ctx.log('still replaying', { pause_state: state.pause_state, lsn: state.lsn });
+        } catch (err) {
+          lastError = (err as Error).message;
+        }
+        await new Promise((res) => setTimeout(res, 1000));
+      }
+      if (!state) {
+        // "Never answered" on its own is a dead end: the interesting information is
+        // in the cluster's own log, and by the time anyone reads the job error the
+        // container may be gone. Recovery failures are exactly where this matters —
+        // a missing WAL segment, a permissions problem on restored files, or a
+        // config the restore brought with it all look identical from outside.
+        const logs = await docker.containerLogs(name).catch(() => '(logs unavailable)');
+        throw new Error(`restored cluster never answered: ${lastError}\n` +
+          `--- ${name} ---\n${logs.split('\n').slice(-12).join('\n')}`);
+      }
+
+      if (targetTime) {
+        // Promoted on its own ⇒ recovery ended without stopping at a target, which
+        // means either the settings were never applied or the WAL ran out before the
+        // target. Both give a database holding an *earlier* point than asked for,
+        // and serving it would be the one failure the doc forbids by name.
+        if (!state.in_recovery) {
+          throw new Error(
+            'the restored cluster left recovery without pausing at the target — it holds ' +
+            'an earlier point than requested and will not be served. Either the recovery ' +
+            'settings were not applied or the WAL needed to reach ' +
+            `${targetTime.toISOString()} is missing from the repo`);
+        }
+        if (state.pause_state !== 'paused') {
+          throw new Error(
+            `recovery did not reach the target within the timeout (pause state: ` +
+            `${state.pause_state}, replayed to ${state.reached?.toISOString() ?? 'unknown'})`);
+        }
+        ctx.log('recovery paused at the target', {
+          requested: targetTime.toISOString(),
+          reached: state.reached?.toISOString() ?? 'unknown', lsn: state.lsn,
+        });
+
+        const client = await connectAsSuperuser({ ...endpoint, passwords });
+        try {
+          // Resuming from a pause *at the recovery target* ends recovery and
+          // promotes — this is the documented promote step, done only after the
+          // target was confirmed.
+          await client.query('SELECT pg_wal_replay_resume()');
+        } finally { await client.end().catch(() => {}); }
+
+        for (let i = 0; i < 60; i++) {
+          const c = await connectAsSuperuser({ ...endpoint, passwords });
+          try {
+            const q = await c.query<{ r: boolean }>('SELECT pg_is_in_recovery() AS r');
+            if (!q.rows[0]!.r) break;
+          } finally { await c.end().catch(() => {}); }
+          await new Promise((res) => setTimeout(res, 500));
+        }
+      }
+
+      await deps.pool.query(
+        `UPDATE project_restores
+            SET reached_time = $2, reached_lsn = $3 WHERE project_id = $1`,
+        [projectId, state.reached ?? null, state.lsn ?? null]);
+      ctx.log('restored cluster is out of recovery and writable', {
+        reached: state.reached?.toISOString() ?? 'unknown' });
+    },
+  };
+
+  /**
+   * The restored project gets its own credentials, and the source's stop working.
+   *
+   * A restored cluster contains the source's roles with the source's passwords, so
+   * without this the copy is reachable with the original's connection string — one
+   * password that opens two databases, and a rotation on the original that silently
+   * does not cover the copy. Reusing `store_credentials` would be wrong in the one
+   * way that matters: it connects with *this* project's stored passwords, which the
+   * restored cluster has never heard of.
+   */
+  const resetRestoredCredentials: SagaStep<SagaContext> = {
+    name: 'reset_restored_credentials',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const secrets = requireSecrets(deps);
+      const place = await loadPlacement(deps.pool, projectId);
+      const source = await deps.pool.query<{ source_project_id: string | null }>(
+        `SELECT source_project_id FROM project_restores WHERE project_id = $1`, [projectId]);
+      const sourceId = source.rows[0]?.source_project_id;
+
+      const wanted = [
+        { name: SECRET_NAMES.postgres, role: 'postgres' },
+        { name: SECRET_NAMES.developer, role: DEVELOPER_ROLE },
+        { name: SECRET_NAMES.authenticator, role: 'authenticator' },
+        { name: SECRET_NAMES.poolerAuth, role: POOLER_AUTH_ROLE },
+      ];
+      const stored: Array<{ role: string; value: string }> = [];
+      for (const w of wanted) {
+        const { value } = await secrets.ensure(projectId, w.name);
+        stored.push({ role: w.role, value });
+      }
+
+      // Connect with the *source's* passwords, since that is what the cluster still
+      // has, and fall back to this project's in case a previous attempt already
+      // rotated them — which is what makes the step replay-safe.
+      const passwords = [
+        ...(sourceId ? await superuserCandidates(deps, sourceId) : []),
+        ...await superuserCandidates(deps, projectId),
+      ];
+      const client = await connectAsSuperuser({ ...adminEndpoint(place), passwords });
+      try {
+        for (const s of stored) await setRolePassword(client, s.role, s.value);
+      } finally { await client.end().catch(() => {}); }
+      ctx.log('restored project has its own credentials; the source\'s no longer open it',
+        { roles: stored.map((s) => s.role) });
+    },
+  };
+
+  /**
+   * Mark it `restored` — not `ready`.
+   *
+   * A restored instance is a copy, and two databases serving one application loses
+   * data by construction: the customer writes to whichever one they are pointed at
+   * and nothing can reconcile that afterwards. `ready` would make the copy
+   * indistinguishable from production in every list, badge and API response, which
+   * is exactly the confusion that ends with writes in the wrong place.
+   */
+  const markRestored: SagaStep<SagaContext> = {
+    name: 'mark_restored',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      await deps.pool.query(
+        `UPDATE project_restores
+            SET status = 'succeeded', finished_at = now(), error = NULL
+          WHERE project_id = $1`, [projectId]);
+      await deps.pool.query(
+        `UPDATE projects SET status = 'restored', updated_at = now() WHERE id = $1`, [projectId]);
+      await deps.pool.query(
+        `UPDATE project_databases SET status = 'running', updated_at = now()
+          WHERE project_id = $1`, [projectId]);
+      ctx.log('restore complete — the copy is validatable and serves no traffic', {});
+    },
+  };
+
   const finalBackup: SagaStep<SagaContext> = {
     name: 'final_backup',
     async run(ctx) {
@@ -1516,6 +1894,27 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       stopContainer,                 // T7
       removeNetwork,                 // P2a — holds no data; frees the subnet
       markSoftDeleted,               // T7
+    ],
+    /**
+     * Restore to a new instance (P3d). Production is never overwritten.
+     *
+     * The first four steps are the provisioning path's, deliberately reused: a
+     * restored project is a real project and gets its placement, volume and network
+     * the same way. What differs is that `start_container` is *absent* — the volume
+     * must be filled before Postgres has ever run on it, so `restore_into_volume`
+     * takes that slot and `recover_to_target` starts the container itself.
+     */
+    restore_project: [
+      allocate,
+      createVolume,
+      createNetwork,
+      restoreIntoVolume,
+      recoverToTarget,
+      resetRestoredCredentials,
+      configureBackups,              // the copy gets its own repo, not the source's
+      verifyArchiving,
+      writeConnection,
+      markRestored,
     ],
     // Scheduled base backups (P3c). Two steps rather than one so a crashed
     // worker leaves a visible `running` row rather than no trace at all.

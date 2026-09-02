@@ -119,6 +119,27 @@ export interface ControlPlaneStore {
    * Collapsing the middle case into a 404 would tell a caller their project does
    * not exist when it is merely already paused.
    */
+  /**
+   * Start a restore of `ref` to `targetTime`, as a **new** project (P3d).
+   *
+   * Returns the new project, never the source: production is never overwritten,
+   * so the thing the caller then polls is a different project with a different
+   * ref. A method that returned the source would be describing the wrong object.
+   */
+  requestRestore?(args: {
+    ref: string;
+    /** Absent means "latest" — everything the repo holds. */
+    targetTime?: Date | undefined;
+    newRef: string;
+    actor?: Actor;
+    projectsPerOrgLimit?: number;
+  }): Promise<
+    | undefined
+    | { conflict: string; project: Project }
+    | { refused: string }
+    | { project: Project; job: JobRow; source: Project }
+  >;
+
   requestLifecycle?(ref: string, kind: 'pause' | 'resume', actor?: Actor): Promise<
     | { project: Project; job: JobRow; alreadyRequested: boolean }
     | { project: Project; conflict: string }

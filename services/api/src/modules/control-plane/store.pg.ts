@@ -366,6 +366,94 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
       }
     },
 
+    /**
+     * Start a restore as a new project (P3d, backups §4).
+     *
+     * Everything in one transaction: the new project row, its restore row, and the
+     * job. A partial version of this is worse than a failed one — a project row
+     * with no restore row is a `restoring` project the saga cannot explain, and a
+     * restore row with no job is a project that stays `restoring` forever.
+     */
+    async requestRestore({ ref, targetTime, newRef, actor, projectsPerOrgLimit }) {
+      const client: PoolClient = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const found = await client.query<ProjectRowDb>(
+          `SELECT ${PROJECT_COLUMNS.replace(/p\./g, '')} FROM projects
+            WHERE ref = $1 AND status <> 'deleted' FOR UPDATE`, [ref]);
+        const source = found.rows[0];
+        if (!source) { await client.query('ROLLBACK'); return undefined; }
+
+        // A paused project can be restored — its repo is complete and pinned — but a
+        // project that never finished provisioning has no backup to read, and one
+        // mid-delete is about to have its repo destroyed.
+        if (!['ready', 'paused', 'restored'].includes(source.status)) {
+          await client.query('ROLLBACK');
+          return { conflict: source.status, project: toProject(source) };
+        }
+
+        // A restore consumes a real node slot, so it counts against the ceiling.
+        // Uncomfortable during an incident, which is exactly when a customer wants
+        // one — the real per-plan concurrent-restore policy is OQ-079's, and until
+        // it exists the honest behaviour is to refuse with the way out named rather
+        // than to quietly overrun a limit the rest of the system enforces.
+        if (projectsPerOrgLimit !== undefined) {
+          const live = await client.query<{ n: number }>(
+            `SELECT count(*)::int AS n FROM projects
+              WHERE organization_id = $1 AND status <> 'deleted'`, [source.organization_id]);
+          if ((live.rows[0]?.n ?? 0) >= projectsPerOrgLimit) {
+            await client.query('ROLLBACK');
+            return { refused:
+              `A restore creates a new project, and this organization already has ` +
+              `${live.rows[0]?.n} of its ${projectsPerOrgLimit}. Delete and purge one, ` +
+              'or promote a previous restore, to make room.' };
+          }
+        }
+
+        const created = await client.query<ProjectRowDb>(
+          `INSERT INTO projects (organization_id, ref, name, region, plan, status)
+           VALUES ($1, $2, $3, $4, $5::project_plan, 'restoring')
+           RETURNING ${PROJECT_COLUMNS.replace(/p\./g, '')}`,
+          [source.organization_id, newRef,
+           // The name says what it is and when, because a list of projects called
+           // "api" and "api (restore)" is unreadable the second time you do this.
+           `${source.name} — restore ${targetTime ? targetTime.toISOString().slice(0, 16).replace('T', ' ') : 'latest'}`,
+           source.region, source.plan]);
+        const project = toProject(created.rows[0]!);
+
+        await client.query(
+          `INSERT INTO project_restores
+             (project_id, source_project_id, source_ref, target_time)
+           VALUES ($1, $2, $3, $4)`,
+          [project.id, source.id, source.ref, targetTime ?? null]);
+
+        const key = `restore_${project.id}`;
+        const job = await client.query(
+          `INSERT INTO provisioning_jobs (project_id, job_type, idempotency_key, payload, state)
+           VALUES ($1, 'restore_project', $2, $3::jsonb, 'pending')
+           RETURNING id, job_type, project_id, idempotency_key, state::text AS state`,
+          [project.id, key, JSON.stringify({
+            project_id: project.id, ref: newRef, source_ref: source.ref,
+            target_time: targetTime?.toISOString() ?? null })]);
+
+        await writeAudit(client, actor ?? SYSTEM, {
+          action: 'project.restore_requested',
+          resourceType: 'project', resourceId: source.ref,
+          organizationId: source.organization_id, projectId: source.id,
+          metadata: {
+            target_time: targetTime?.toISOString() ?? 'latest',
+            restore_ref: newRef, restore_project_id: project.id,
+          },
+        });
+        await client.query('COMMIT');
+        return { project, job: jobFromDb(job.rows[0] as never), source: toProject(source) };
+      } catch (err) {
+        await client.query('ROLLBACK'); throw err;
+      } finally {
+        client.release();
+      }
+    },
+
     async requestDelete(ref, actor) {
       const client: PoolClient = await pool.connect();
       try {

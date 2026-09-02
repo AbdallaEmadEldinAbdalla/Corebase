@@ -390,3 +390,46 @@ export async function backup(
   }
   return { output: out };
 }
+
+/**
+ * Restore a repo into a volume (P3d, backups §4).
+ *
+ * `--delta` is not used: the target volume is empty by construction, since a
+ * restore always goes to a freshly created project (production is never
+ * overwritten). Delta would compare against files that are not there.
+ *
+ * `--target-action=pause` is the whole safety property. Postgres replays WAL to
+ * the target and then *stops*, still in recovery, still read-only — so the control
+ * plane can ask whether the target was actually reached before anything is allowed
+ * to write. The alternative, `promote`, ends recovery immediately and leaves no
+ * moment at which that question can be asked: a restore that ran out of WAL early
+ * would come up as a perfectly healthy database holding the wrong day, and nothing
+ * downstream could tell. The doc's rule is that failing to reach the target fails
+ * loudly and never silently serves an earlier point; pause is what makes "loudly"
+ * possible.
+ */
+export interface RestoreArgs {
+  /** Absent means "latest" — the node-loss case, where there is no target. */
+  targetTime?: Date | undefined;
+}
+
+export async function restore(
+  docker: Docker, container: string, a: RestoreArgs = {},
+): Promise<{ output: string }> {
+  const args = ['restore'];
+  if (a.targetTime) {
+    // pgBackRest wants a Postgres timestamp with an offset. ISO-8601 with the
+    // milliseconds trimmed and a space instead of the `T` is what it parses
+    // unambiguously; `Z` is accepted as the offset.
+    const target = a.targetTime.toISOString().replace('T', ' ').replace(/\.\d+Z$/, '+00');
+    args.push('--type=time', `--target=${target}`, '--target-action=pause');
+  }
+  const r = await withLockRetry(
+    () => pgbackrest(docker, container, args),
+    { attempts: 20, delayMs: 1500 });
+  const out = (r.stdout + r.stderr).trim();
+  if (r.exitCode !== 0) {
+    throw new Error(`pgbackrest restore failed (exit ${r.exitCode}): ${pgbackrestFailure(out)}`);
+  }
+  return { output: out };
+}

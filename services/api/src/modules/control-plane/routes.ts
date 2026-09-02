@@ -60,6 +60,19 @@ export interface ControlPlaneDeps {
 export const PROJECTS_PER_ORG_LIMIT = Number(process.env.CB_PROJECTS_PER_ORG ?? 20);
 
 /**
+ * How far back each plan can restore to (backups §3).
+ *
+ * Duplicated from the worker's retention table on purpose rather than imported:
+ * the API refuses a target the *customer* cannot have, and the worker configures
+ * what pgBackRest *keeps*. They must agree, and the day they diverge the honest
+ * failure is a refused restore rather than one that runs and lands early. A test
+ * pins them together.
+ */
+export const PITR_WINDOW_DAYS: Record<string, number> = {
+  free: 7, pro: 30, team: 90, enterprise: 90,
+};
+
+/**
  * Record that someone took a project's database credentials, at most once per
  * actor per project per hour.
  *
@@ -473,6 +486,118 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
     // Cacheable: verifiers fetch this on every cold start, and rotation is a
     // dual-publish window measured in days (credentials §4b).
     return reply.header('cache-control', 'public, max-age=300').send({ keys: [toJwk(pem, kid)] });
+  });
+
+
+  /**
+   * Restore to a point in time, as a new project (P3d, backups §4).
+   *
+   * `POST /v1/projects/:ref/restore { target_time }` — and what comes back is a
+   * **different** project. Production is never overwritten (proposal §36), so the
+   * ref in the response is not the ref in the path, and the caller polls the new
+   * one. Anything else would be describing the wrong object.
+   *
+   * `project.lifecycle`, not `project.delete`: a restore destroys nothing. It costs
+   * money and node capacity, which is a billing question, not a destructive one.
+   */
+  app.post('/v1/projects/:ref/restore', async (req, reply) => {
+    await requireAuth(req);
+    const { ref } = req.params as { ref: string };
+    const requestId = String(reply.getHeader('x-request-id') ?? req.id);
+    const body = (req.body ?? {}) as { target_time?: unknown };
+
+    let actor: Actor = actorFor(req as never, requestId);
+    let plan = 'free';
+    {
+      const project = await deps.store.getProject(ref);
+      if (!project) throw ApiError.notFound('Project');
+      plan = project.plan;
+      if (deps.orgs && deps.principals) {
+        const scoped = await scope(req, encodeId('organization', project.organization_id));
+        if (scoped) {
+          require_(scoped.role, 'project.lifecycle');
+          actor = { type: 'user', userId: scoped.userId, ip: req.ip ?? null, requestId };
+        }
+      }
+    }
+
+    let targetTime: Date | undefined;
+    if (body.target_time !== undefined && body.target_time !== null) {
+      if (typeof body.target_time !== 'string') {
+        throw new ApiError(400, ERROR_CODES.VALIDATION_FAILED,
+          'target_time must be an ISO-8601 timestamp, or omitted to restore the latest data.');
+      }
+      const parsed = new Date(body.target_time);
+      if (Number.isNaN(parsed.getTime())) {
+        throw new ApiError(400, ERROR_CODES.VALIDATION_FAILED,
+          `"${body.target_time}" is not a timestamp this API can read. Use ISO-8601, e.g. 2026-09-01T14:03:00Z.`);
+      }
+      // A future target is refused rather than clamped to "latest". Clamping would
+      // hand back a restore that silently is not what was asked for, which is the
+      // failure this whole flow is built to avoid — and a mistyped year is the most
+      // likely way to get here.
+      if (parsed.getTime() > Date.now() + 60_000) {
+        throw new ApiError(400, ERROR_CODES.VALIDATION_FAILED,
+          'target_time is in the future. Omit it to restore the latest data.');
+      }
+      // Outside the plan's PITR window there is no WAL left to replay, so the
+      // restore would land at whatever the oldest surviving base happens to be —
+      // an earlier point than requested, arriving as a success. Refused here, with
+      // the window named, because the customer can act on that and cannot act on
+      // "the restore finished but the data is old".
+      const windowDays = PITR_WINDOW_DAYS[plan] ?? PITR_WINDOW_DAYS['free']!;
+      const oldest = Date.now() - windowDays * 86_400_000;
+      if (parsed.getTime() < oldest) {
+        throw new ApiError(400, ERROR_CODES.VALIDATION_FAILED,
+          `target_time is outside this project's ${windowDays}-day recovery window. ` +
+          `The earliest point available is ${new Date(oldest).toISOString()}.`);
+      }
+      targetTime = parsed;
+    }
+
+    if (!deps.store.requestRestore) {
+      throw new ApiError(501, ERROR_CODES.INTERNAL, 'This deployment cannot restore projects.');
+    }
+    const result = await deps.store.requestRestore({
+      ref, newRef: generateProjectRef(), actor,
+      ...(targetTime ? { targetTime } : {}),
+      projectsPerOrgLimit,
+    });
+    if (!result) throw ApiError.notFound('Project');
+    if ('refused' in result) {
+      throw new ApiError(409, ERROR_CODES.VALIDATION_FAILED, result.refused);
+    }
+    if ('conflict' in result) {
+      throw new ApiError(409, ERROR_CODES.VALIDATION_FAILED,
+        `This project is ${result.conflict}, so it has no backup that can be restored.`);
+    }
+
+    const { project, job } = result;
+    if (deps.enqueue) {
+      try {
+        await deps.enqueue({
+          job_row_id: job.id, idempotency_key: job.idempotency_key,
+          job_type: job.kind, project_id: project.id,
+        });
+      } catch (err) {
+        req.log.warn({ err, project: project.ref }, 'enqueue failed; sweeper will recover');
+        deps.onEnqueueError?.(err as Error);
+      }
+    }
+    // 202 and the *new* project. `location` points at it too, so a client that
+    // follows the header is polling the restore rather than the original.
+    return reply.status(202)
+      .header('location', `/v1/projects/${project.ref}`)
+      .send({
+        project: serializeProject(project),
+        restore: {
+          source_ref: ref,
+          target_time: targetTime?.toISOString() ?? null,
+          note: 'This is a copy. It serves no application traffic, and your original '
+            + 'project is untouched and still live.',
+        },
+        job: { id: encodeId('job', job.id), type: job.kind, state: job.state },
+      });
   });
 
   /**
