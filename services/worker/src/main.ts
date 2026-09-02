@@ -15,6 +15,7 @@ import { createWalScan } from './wal-scan.ts';
 import { createBackupScan } from './backup-scan.ts';
 import { createRestoreExpiry, restoreTtlHours } from './restore-expiry.ts';
 import { createRepoDestroy, REPO_RETENTION_DAYS } from './repo-destroy.ts';
+import { createVerifyScan } from './verify-scan.ts';
 import { createReconciler } from './reconcile.ts';
 import {
   startMetricsServer, registerControlPlaneCollectors,
@@ -111,7 +112,16 @@ const sagas = buildSagas({
    * opt-out for a fleet with no object storage.
    */
   requireFinalBackup: process.env.CB_REQUIRE_FINAL_BACKUP !== 'false',
-  requireBackups: process.env.CB_REQUIRE_BACKUPS === 'true',
+  /**
+   * On by default now that Phase 3 is complete (P3h).
+   *
+   * A project provisioned without a repo has no PITR, no final backup at delete,
+   * and nothing behind its recovery window — and none of that is visible from the
+   * outside, which is the whole reason the gate exists rather than a log line.
+   * `CB_REQUIRE_BACKUPS=false` is the deliberate opt-out for a fleet with no
+   * object storage; it is the same shape as CB_REQUIRE_FINAL_BACKUP's (D-299).
+   */
+  requireBackups: process.env.CB_REQUIRE_BACKUPS !== 'false',
 });
 const runner = createRunner({
   repo, sagas,
@@ -329,6 +339,33 @@ const repoDestroyTimer = setInterval(() => {
     .catch((e) => log('error', 'repo destruction sweep failed', { error: (e as Error).message }));
 }, repoDestroyMs);
 
+/**
+ * Restore verification (P3h, D-176). One project per sweep, hourly.
+ *
+ * Deliberately slow. A verification restores a whole database into a scratch
+ * instance and runs `pg_amcheck` over it, so the load is real — and the guarantee
+ * is a *floor* measured in weeks, not a rate. One per hour clears a 90-day floor
+ * for a fleet of two thousand projects with room to spare, and doing more would
+ * spend node capacity to arrive early at a deadline nobody is waiting on.
+ *
+ * On a real fleet this runs on a node designated for verification rather than
+ * customer capacity (backups §7). Locally there is one node, which is recorded as
+ * a substitute limitation rather than pretended away.
+ */
+const verifyMs = Number(process.env.CB_VERIFY_SCAN_MS ?? 3_600_000);
+let verifyTimer: NodeJS.Timeout | undefined;
+if (docker) {
+  const verifyScan = createVerifyScan({
+    pool, docker, secrets,
+    batchSize: Number(process.env.CB_VERIFY_BATCH ?? 1),
+    log: (l, m, e) => log(l, m, e),
+  });
+  verifyTimer = setInterval(() => {
+    void verifyScan.scanOnce()
+      .catch((e) => log('error', 'verification sweep failed', { error: (e as Error).message }));
+  }, verifyMs);
+}
+
 // Node reconciliation (D-065/D-173): 5 minutes, jittered so a fleet of workers
 // does not hit every node's Engine API at the same second. Container crashes are
 // Docker's restart policy to handle; this is the backstop that catches what the
@@ -380,6 +417,7 @@ log('info', 'worker started', {
   backups: { scanMs: backupScanMs },
   restore_expiry: { scanMs: restoreExpiryMs, ttlHours: restoreTtlHours() },
   repo_destruction: { scanMs: repoDestroyMs, retentionDays: REPO_RETENTION_DAYS },
+  restore_verification: verifyTimer ? { scanMs: verifyMs } : 'disabled (no Docker)',
 });
 
 const shutdown = async (signal: string) => {
@@ -395,6 +433,7 @@ const shutdown = async (signal: string) => {
   clearInterval(backupGaugeTimer);
   clearInterval(restoreExpiryTimer);
   clearInterval(repoDestroyTimer);
+  if (verifyTimer) clearInterval(verifyTimer);
   if (idleTimer) clearInterval(idleTimer);
   if (diskTimer) clearInterval(diskTimer);
   if (walTimer) clearInterval(walTimer);

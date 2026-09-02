@@ -90,6 +90,34 @@ groups:
         annotations:
           summary: 'No successful base backup for {{ $labels.project_ref }} in over 26 hours'
 
+      # D-176: a failed verification treats that project's backups as
+      # nonexistent, so it pages at the same severity as a failed backup — which
+      # is what it is. The runbook's response is an immediate fresh full and a
+      # re-verify, and the project stays at the front of the verification queue
+      # until one passes.
+      - alert: RestoreVerificationFailed
+        expr: increase(corebase_restore_verifications_total{result="failed"}[6h]) > 0
+        for: 1m
+        labels: { severity: page }
+        annotations:
+          summary: 'A restore verification failed ({{ $labels.failed_check }})'
+          description: >-
+            A backup that cannot be restored is not a backup. Until a verification
+            passes, treat this project as having none.
+
+      # The standing SLO from backups §7. Distinct from the failure alert: this one
+      # fires when verifications are not *happening*, which is the quieter and
+      # likelier failure — a scheduler that stopped looks exactly like a fleet
+      # whose backups are all fine.
+      - alert: RestoreVerificationCoverageLow
+        expr: corebase_projects_restore_verified_ratio < 0.95
+        for: 1h
+        labels: { severity: warn }
+        annotations:
+          summary: >-
+            Only {{ $value | humanizePercentage }} of projects have a verified
+            restore inside their plan's floor
+
       # A base backup that was attempted and failed. Distinct from staleness,
       # which is silence: this is the repo or the database saying no, and the run
       # row carries the reason.

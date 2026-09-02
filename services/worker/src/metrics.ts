@@ -155,6 +155,34 @@ export const backupWalPending = registry.register(new Gauge({
   labelNames: ['node', 'project_ref'],
 }));
 
+/**
+ * Restore verifications, by result and by which check failed (P3h).
+ *
+ * No `project_ref`, deliberately, against D-146's cardinality budget: the alert on
+ * this is "any verification failure pages", so the *count* is what fires it, and
+ * which project it was lives in the log line and the `restore_verifications` row.
+ * A per-project counter would multiply by 10,000 to answer a question that is
+ * already answered.
+ */
+export const restoreVerificationsTotal = registry.register(new Counter({
+  name: 'corebase_restore_verifications_total',
+  help: 'Restore verifications finished, by result and the check that failed.',
+  labelNames: ['result', 'failed_check'],
+}));
+
+/**
+ * The standing SLO from backups §7: the fraction of projects with a passing
+ * verification inside their own plan's floor.
+ *
+ * One number, because "are our backups real" is one question. An average of
+ * per-project verification ages would hide the only case that matters — a single
+ * project at 200 days is the whole story.
+ */
+export const projectsVerifiedRatio = registry.register(new Gauge({
+  name: 'corebase_projects_restore_verified_ratio',
+  help: 'Fraction of live projects whose backups passed verification within their plan floor.',
+}));
+
 export const reconcilePassSeconds = registry.register(new Histogram({
   name: 'corebase_reconcile_pass_seconds',
   help: 'Duration of one reconciliation sweep.',
