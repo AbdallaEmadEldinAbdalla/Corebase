@@ -19,6 +19,12 @@ export const IMAGE_ROLES = [
   // P2b: the pooler's identity. Present as a passwordless LOGIN role in the
   // image; the worker sets its password at provision time (D-074).
   'pgbouncer_auth',
+  // P4a: the auth module's identity. Same pattern — the image creates it
+  // passwordless and the control plane gives it one at provision. It is the only
+  // role with table privileges in the `auth` schema, which is what keeps
+  // `auth.users.encrypted_password` out of reach of every role a customer's API
+  // traffic can arrive as, service_role included.
+  'corebase_auth',
 ];
 
 /** Roles the control plane owns and creates at provision time. */
@@ -26,6 +32,9 @@ export const DEVELOPER_ROLE = 'developer';
 
 /** The pooler's own login role (D-074). Created by the image, password set here. */
 export const POOLER_AUTH_ROLE = 'pgbouncer_auth';
+
+/** The auth module's own login role (P4a, D-110). */
+export const AUTH_ROLE = 'corebase_auth';
 
 export interface AdminTarget {
   host: string;

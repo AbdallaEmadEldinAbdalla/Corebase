@@ -21,7 +21,7 @@ import { createHash } from 'node:crypto';
 import { generateKeypair, sign as signJwt, projectKeyClaims } from '@corebase/jwt';
 import {
   auditImageRoles, connectAsSuperuser, ensureDeveloperRole, setRolePassword,
-  DEVELOPER_ROLE, POOLER_AUTH_ROLE,
+  DEVELOPER_ROLE, POOLER_AUTH_ROLE, AUTH_ROLE,
 } from '../project-admin.ts';
 
 export interface SagaDeps {
@@ -413,6 +413,11 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
         // auth_query lookup. Generated here like every other credential so the
         // pooler's config is rendered from the store, never from a literal.
         { name: SECRET_NAMES.poolerAuth, role: POOLER_AUTH_ROLE },
+        // P4a: the auth module's identity in this project's database. Set here so
+        // a project is auth-ready from provision — a role that exists and cannot
+        // log in is a half-built thing that is easy to forget. Its own credential
+        // and not `authenticator`'s, because this one owns the password hashes.
+        { name: SECRET_NAMES.authRole, role: AUTH_ROLE },
       ];
       const stored: Array<{ role: string; value: string; created: boolean }> = [];
       for (const w of wanted) {
@@ -1203,6 +1208,10 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
         { name: SECRET_NAMES.developer, role: DEVELOPER_ROLE },
         { name: SECRET_NAMES.authenticator, role: 'authenticator' },
         { name: SECRET_NAMES.poolerAuth, role: POOLER_AUTH_ROLE },
+        // A restored copy gets its own auth-role password too (P4a). The restored
+        // cluster carries the *source's*, and leaving it would mean one credential
+        // opening two projects' user tables.
+        { name: SECRET_NAMES.authRole, role: AUTH_ROLE },
       ];
       const stored: Array<{ role: string; value: string }> = [];
       for (const w of wanted) {

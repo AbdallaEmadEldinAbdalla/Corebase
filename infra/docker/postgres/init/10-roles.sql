@@ -29,6 +29,15 @@ BEGIN
     -- no credential is baked into the image.
     CREATE ROLE pgbouncer_auth NOINHERIT LOGIN PASSWORD NULL;
   END IF;
+
+  -- P4a: the auth module's identity. Passwordless here, given a password at
+  -- provision. It is the only role with table privileges in the `auth` schema
+  -- (25-auth-schema.sql), which is what keeps the end-user password hashes out of
+  -- reach of every role a customer's API traffic can arrive as — service_role
+  -- included, since BYPASSRLS does not grant table privileges.
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'corebase_auth') THEN
+    CREATE ROLE corebase_auth NOINHERIT LOGIN PASSWORD NULL;
+  END IF;
 END
 $$;
 

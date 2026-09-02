@@ -166,22 +166,72 @@ describe('P2e — the disk ladder against a real project', () => {
     expect(Number(s.used)).toBeGreaterThan(1024 * 1024);
   });
 
+  /**
+   * Pick an integer-MB cap that puts `mb` inside a band, and say so if none does.
+   *
+   * The first version of this test computed `ceil(mb / 0.85)` and trusted it. The
+   * cap is whole megabytes and a fresh database is only ~8 MB, so one megabyte of
+   * cap is more than ten percent of the ratio — and `ceil` always rounds the cap
+   * *up*, which pushes the ratio *down*. For some baselines that lands just under
+   * 80% and the rung stays `ok`.
+   *
+   * It broke when P4a added the `auth` tables to every project, shifting the
+   * baseline into exactly that gap: a test failure about the disk ladder, caused by
+   * a schema change, in a ladder that was never wrong. Searching for a cap and
+   * asserting the resulting percentage turns that from an intermittent mystery into
+   * a message naming the baseline.
+   */
+  const capForBand = (mb: number, lo: number, hi: number): number => {
+    const target = (lo + hi) / 2;
+    let best = Math.max(1, Math.round(mb / (target / 100)));
+    for (const cap of [best, best - 1, best + 1, best - 2, best + 2]) {
+      if (cap < 1) continue;
+      const pct = (mb / cap) * 100;
+      if (pct >= lo && pct <= hi) return cap;
+    }
+    throw new Error(
+      `no integer cap puts ${mb.toFixed(2)} MB between ${lo}% and ${hi}% — the ` +
+      'database is too small for the ladder\'s bands to be addressable in whole ' +
+      'megabytes. Grow it before asserting a rung.');
+  };
+
   t('climbs the rungs as usage rises', async () => {
     const p = await newProject();
     await runSaga('provision_project', p.id);
+
+    // Grow the database first, and this is not padding: the cap is whole
+    // megabytes, so at a fresh project's ~8.5 MB one megabyte of cap moves the
+    // ratio by more than ten percent and the ladder's 90–95% band is not
+    // addressable at all. `capForBand` says so explicitly now instead of the rung
+    // quietly coming back `ok`. Incompressible data for the same reason the
+    // exit-criterion test uses it — random hex does not TOAST-compress away.
+    await asCustomer(p.id, async (c) => {
+      await c.query(`create table rungs(id serial primary key, blob text)`);
+      await c.query(
+        `insert into rungs(blob)
+         select (select string_agg(md5(random()::text), '') FROM generate_series(1, 125))
+           from generate_series(1, 2000)`);
+    });
     await runScan();
     const used = Number((await state(p.id)).used);
     const mb = used / 1024 / 1024;
 
-    // Cap chosen so current usage lands in each band in turn.
-    await setCapMb(p.id, Math.ceil(mb / 0.85));       // ~85% -> warn
+    // Comfortably inside warn (>=80, <90) rather than on its edge.
+    const warnCap = capForBand(mb, 82, 88);
+    await setCapMb(p.id, warnCap);
     let r = await runScan();
-    expect((await state(p.id)).disk_state).toBe('warn');
+    expect((await state(p.id)).disk_state,
+      `${mb.toFixed(2)} MB against a ${warnCap} MB cap is ` +
+      `${((mb / warnCap) * 100).toFixed(1)}%`).toBe('warn');
     expect(r.transitions[0]).toMatchObject({ from: 'ok', to: 'warn' });
 
-    await setCapMb(p.id, Math.ceil(mb / 0.92));       // ~92% -> critical
+    // And inside critical (>=90, <95).
+    const critCap = capForBand(mb, 91, 94);
+    await setCapMb(p.id, critCap);
     r = await runScan();
-    expect((await state(p.id)).disk_state).toBe('critical');
+    expect((await state(p.id)).disk_state,
+      `${mb.toFixed(2)} MB against a ${critCap} MB cap is ` +
+      `${((mb / critCap) * 100).toFixed(1)}%`).toBe('critical');
     expect(r.transitions[0]).toMatchObject({ from: 'warn', to: 'critical' });
   });
 

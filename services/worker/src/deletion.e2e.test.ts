@@ -211,9 +211,10 @@ describe('T7 — soft delete keeps the data', () => {
     // The whole point of D-038: the data is still there.
     expect(await docker.volumeExists(volumeNameFor(p.ref))).toBe(true);
     expect(after.placements).toBe(1);
-    // Four passwords (the pooler's joined in P2b) + keypair (3 rows) + two minted
-    // keys: all kept, because a soft delete destroys nothing.
-    expect(after.secrets).toBe(9);
+    // Five passwords (the pooler's joined in P2b, the auth module's in P4a) +
+    // keypair (3 rows) + two minted keys: all kept, because a soft delete destroys
+    // nothing.
+    expect(after.secrets).toBe(10);
     expect(after.booked).toBe(350);      // capacity still booked; nothing reclaimed yet
 
     const inspect = await docker.inspectContainer(containerName(p.ref));

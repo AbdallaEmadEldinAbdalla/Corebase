@@ -58,6 +58,17 @@ export const SECRET_NAMES = {
    * property this exists for.
    */
   backupCipherPass: 'BACKUP_CIPHER_PASS',
+  /**
+   * The auth module's password for this project's database (P4a, D-110).
+   *
+   * Its own credential rather than reusing `authenticator`'s, because the two
+   * have opposite privileges and opposite blast radii: `authenticator` may only
+   * `SET ROLE` to anon/authenticated/service_role and can read no `auth` table,
+   * while this one owns every row in the `auth` schema including the password
+   * hashes. Sharing one password would mean a leak of the API's connection string
+   * is a leak of every user's credentials.
+   */
+  authRole: 'AUTH_ROLE_PASSWORD',
 } as const;
 
 export type SecretName = (typeof SECRET_NAMES)[keyof typeof SECRET_NAMES];
