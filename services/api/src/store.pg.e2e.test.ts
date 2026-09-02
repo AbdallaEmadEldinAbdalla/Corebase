@@ -143,3 +143,141 @@ describe('pg control-plane store', () => {
     expect(kinds).toEqual(['delete_project', 'provision_project']);
   });
 });
+
+/**
+ * P3d/P3e — what `requestRestore` writes, and what comes back.
+ *
+ * The store's half of the restore: a *new* project, its lineage, its deadline and
+ * its job, all in one transaction. A partial version is worse than a failure — a
+ * project row with no restore row is a `restoring` project the saga cannot explain,
+ * and a restore row with no job is a project that stays `restoring` forever.
+ */
+describe('requestRestore', () => {
+  const mkReady = async () => {
+    const ref = generateProjectRef();
+    const created = await store.createProject({
+      ref, name: 'src-' + ref.slice(0, 6), region: 'eu-central', plan: 'free',
+      idempotencyKey: 'restore-src-' + ref,
+    });
+    await store.markStatus(ref, 'ready');
+    return created.project;
+  };
+
+  t('creates a different project, and returns that one', async () => {
+    // Production is never overwritten, so the ref in the response is not the ref
+    // that was asked about. A method returning the source would describe the wrong
+    // object, and a caller polling it would watch the original forever.
+    const source = await mkReady();
+    const target = new Date(Date.now() - 60_000);
+    const result = await store.requestRestore!({
+      ref: source.ref, targetTime: target, newRef: generateProjectRef(), ttlHours: 48,
+    });
+    expect(result).toBeDefined();
+    expect('project' in result!).toBe(true);
+    const r = result as { project: { ref: string; status: string }; job: { kind: string };
+      source: { ref: string }; expiresAt: Date };
+    expect(r.project.ref).not.toBe(source.ref);
+    expect(r.project.status).toBe('restoring');
+    expect(r.source.ref).toBe(source.ref);
+    expect(r.job.kind).toBe('restore_project');
+
+    // The deadline exists from the moment the copy does. A nullable column filled
+    // in later is a copy that lives forever if the later step is ever skipped.
+    const { rows } = await pool.query<{
+      source_ref: string; target_time: Date; expires_at: Date; status: string;
+    }>(`select source_ref, target_time, expires_at, status from project_restores
+         where source_ref = $1`, [source.ref]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe('running');
+    expect(rows[0]!.expires_at).not.toBeNull();
+    const hours = (rows[0]!.expires_at.getTime() - Date.now()) / 3_600_000;
+    expect(hours).toBeGreaterThan(47);
+    expect(hours).toBeLessThan(49);
+  });
+
+  t('writes an audit row naming the source, with the copy in its metadata', async () => {
+    // Earning the entry in audit.p1.e2e's allowlist rather than just satisfying
+    // it: that guard checks a list of route names, so without this the list could
+    // say a route is audited while the route audited nothing.
+    //
+    // The resource is the *source*, because "who asked to restore this project" is
+    // the question anyone reviewing the log brings. The copy's ref is in the
+    // metadata, which is how the trail runs forward.
+    const source = await mkReady();
+    const r = await store.requestRestore!({
+      ref: source.ref, newRef: generateProjectRef(), targetTime: new Date(Date.now() - 60_000),
+    }) as { project: { ref: string } };
+
+    const { rows } = await pool.query<{ action: string; resource_id: string; metadata: string }>(
+      `select action, resource_id, metadata::text as metadata from audit_logs
+        where action = 'project.restore_requested' order by created_at desc limit 1`);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.resource_id).toBe(source.ref);
+    expect(rows[0]!.metadata).toContain(r.project.ref);
+    expect(rows[0]!.metadata).toContain('target_time');
+  });
+
+  t('leaves the source untouched and still ready', async () => {
+    const source = await mkReady();
+    await store.requestRestore!({ ref: source.ref, newRef: generateProjectRef() });
+    const after = await store.getProject(source.ref);
+    expect(after!.status).toBe('ready');
+  });
+
+  t('honours a shorter window, and never exceeds a week', async () => {
+    const source = await mkReady();
+    const r = await store.requestRestore!({
+      ref: source.ref, newRef: generateProjectRef(), ttlHours: 1,
+    }) as { expiresAt: Date };
+    const hours = (r.expiresAt.getTime() - Date.now()) / 3_600_000;
+    expect(hours).toBeGreaterThan(0.9);
+    expect(hours).toBeLessThan(1.2);
+  });
+
+  t('refuses a project that has no backup to restore', async () => {
+    // `creating` never finished provisioning, so there is nothing in its repo. A
+    // conflict names the state; a 404 would send the caller hunting a bug that is
+    // not there.
+    const ref = generateProjectRef();
+    await store.createProject({
+      ref, name: 'half-' + ref.slice(0, 6), region: 'eu-central', plan: 'free',
+      idempotencyKey: 'restore-half-' + ref,
+    });
+    const result = await store.requestRestore!({ ref, newRef: generateProjectRef() });
+    expect(result).toMatchObject({ conflict: 'creating' });
+  });
+
+  t('refuses when the organization is at its project ceiling', async () => {
+    // A restore consumes a real node slot, so it counts. Uncomfortable during an
+    // incident, which is exactly when one is wanted — OQ-079 owns the per-plan
+    // concurrent-restore policy, and until it exists refusing with the remedy
+    // named beats quietly overrunning a limit the rest of the system enforces.
+    const source = await mkReady();
+    const result = await store.requestRestore!({
+      ref: source.ref, newRef: generateProjectRef(), projectsPerOrgLimit: 1,
+    });
+    expect(result).toHaveProperty('refused');
+    expect((result as { refused: string }).refused).toMatch(/already has 1 of its 1/);
+    expect((result as { refused: string }).refused).toMatch(/make room/);
+  });
+
+  t('reports the lineage and the deadline on the restored project detail', async () => {
+    // The customer who needs the deadline is the one coming back two days later,
+    // not the one who just pressed the button — so it is on the detail response,
+    // not only on the reply to the create.
+    const source = await mkReady();
+    const r = await store.requestRestore!({
+      ref: source.ref, newRef: generateProjectRef(), ttlHours: 48,
+    }) as { project: { ref: string } };
+    const detail = await store.getProjectDetail(r.project.ref);
+    expect(detail!.restore).toBeDefined();
+    expect(detail!.restore!.source_ref).toBe(source.ref);
+    expect(detail!.restore!.expires_at).toBeTruthy();
+  });
+
+  t('says nothing about restores for a project that is not one', async () => {
+    const source = await mkReady();
+    const detail = await store.getProjectDetail(source.ref);
+    expect(detail!.restore).toBeUndefined();
+  });
+});

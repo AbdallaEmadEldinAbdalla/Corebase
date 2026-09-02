@@ -175,6 +175,12 @@ describe('P1b — the guard that keeps the exit criterion true', () => {
     // P2d: audits `project.credentials_rotation_requested` inside requestRotation,
     // in the same transaction as the job insert.
     'POST /v1/projects/:ref/rotate-credentials',
+    // P3d: audits `project.restore_requested` inside requestRestore, in the same
+    // transaction as the new project, its lineage row and its job. The audit names
+    // the *source* as its resource, not the copy — "who asked to restore this
+    // project" is the question anyone reviewing the log will bring, and the copy's
+    // ref is in the metadata for following the trail forward.
+    'POST /v1/projects/:ref/restore',
     'POST /v1/auth/signup',
     'POST /v1/auth/login',
     'POST /v1/auth/logout',

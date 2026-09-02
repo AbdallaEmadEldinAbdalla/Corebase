@@ -193,6 +193,19 @@ export interface Project {
 }
 
 /** `DatabaseInfo` in services/api/src/modules/control-plane/store.ts. */
+/**
+ * Where a restored copy came from and when it goes away (P3e).
+ *
+ * `expires_at` is the whole reason this is on the detail response: the customer who
+ * needs the deadline is the one coming back two days later, not the one who just
+ * pressed the button.
+ */
+export interface RestoreInfo {
+  source_ref: string;
+  target_time: string | null;
+  expires_at: string | null;
+}
+
 export interface DatabaseInfo {
   host: string;
   port: number;
@@ -245,7 +258,7 @@ export const api = {
    * the overview polls it while a project settles.
    */
   project: (ref: string) =>
-    request<{ project: Project; database?: DatabaseInfo }>(
+    request<{ project: Project; database?: DatabaseInfo; restore?: RestoreInfo }>(
       `/v1/projects/${encodeURIComponent(ref)}`),
 
   /**

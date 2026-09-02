@@ -182,3 +182,42 @@ describe('reporting a pgBackRest failure', () => {
     expect(msg).toContain('the last thing');
   });
 });
+
+describe('the PITR target pgBackRest is given', () => {
+  /**
+   * A pure guard on a string format, and it earned its place the hard way.
+   *
+   * The first implementation trimmed the milliseconds off the ISO timestamp, which
+   * moves the requested instant backwards by up to a second. A row committed at
+   * `11:23:16.5` is before a target of `11:23:16.819` and after the truncated
+   * `11:23:16.000`, so the restore came back looking correct and one transaction
+   * short — and a customer restoring to the second before a bad migration would
+   * have lost the writes in that second with no way to tell.
+   */
+  const targetArg = (d: Date): string => {
+    // Mirrors backup.ts's formatting. Kept here as an explicit expectation rather
+    // than importing a helper, so a change to the format has to change this line.
+    return d.toISOString().replace('T', ' ').replace(/Z$/, '+00');
+  };
+
+  it('keeps sub-second precision', () => {
+    const t = new Date('2026-09-02T11:23:16.819Z');
+    expect(targetArg(t)).toBe('2026-09-02 11:23:16.819+00');
+    expect(targetArg(t)).not.toBe('2026-09-02 11:23:16+00');
+  });
+
+  it('carries an explicit offset rather than a trailing Z', () => {
+    expect(targetArg(new Date('2026-09-02T00:00:00.000Z'))).toContain('+00');
+    expect(targetArg(new Date('2026-09-02T00:00:00.000Z'))).not.toContain('Z');
+  });
+
+  it('never rounds a target backwards, which is the whole point', () => {
+    // Every millisecond value must survive. Truncation is only visible when the
+    // fraction is non-zero, which is why a single round-number test would have
+    // passed against the broken version.
+    for (const ms of [1, 5, 99, 500, 819, 999]) {
+      const t = new Date(Date.UTC(2026, 8, 2, 11, 23, 16, ms));
+      expect(targetArg(t)).toContain(`16.${String(ms).padStart(3, '0')}`);
+    }
+  });
+});

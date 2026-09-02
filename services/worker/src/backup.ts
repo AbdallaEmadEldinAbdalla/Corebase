@@ -418,10 +418,23 @@ export async function restore(
 ): Promise<{ output: string }> {
   const args = ['restore'];
   if (a.targetTime) {
-    // pgBackRest wants a Postgres timestamp with an offset. ISO-8601 with the
-    // milliseconds trimmed and a space instead of the `T` is what it parses
-    // unambiguously; `Z` is accepted as the offset.
-    const target = a.targetTime.toISOString().replace('T', ' ').replace(/\.\d+Z$/, '+00');
+    /**
+     * A Postgres timestamp with an explicit offset, **keeping the milliseconds**.
+     *
+     * The first version trimmed them — `…T11:23:16.819Z` became `11:23:16+00` —
+     * which silently moves the requested instant backwards by up to a second. That
+     * is not a rounding detail; it is the failure this whole flow exists to
+     * prevent. It cost a real test: a row committed at `11:23:16.5` was *before*
+     * the customer's target of `11:23:16.819` and after the truncated
+     * `11:23:16.000`, so the restore came back correct-looking and one transaction
+     * short. A customer restoring to the second before a bad migration would have
+     * lost the writes in that second and had no way to tell.
+     *
+     * `recovery_target_time` takes fractional seconds, so there is no reason to
+     * drop them. A space instead of the `T` and `+00` instead of `Z` is what
+     * pgBackRest parses unambiguously.
+     */
+    const target = a.targetTime.toISOString().replace('T', ' ').replace(/Z$/, '+00');
     args.push('--type=time', `--target=${target}`, '--target-action=pause');
   }
   const r = await withLockRetry(

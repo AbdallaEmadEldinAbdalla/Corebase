@@ -68,6 +68,19 @@ export const PROJECTS_PER_ORG_LIMIT = Number(process.env.CB_PROJECTS_PER_ORG ?? 
  * failure is a refused restore rather than one that runs and lands early. A test
  * pins them together.
  */
+/**
+ * How long a restored copy is kept (P3e, backups §4 step 7).
+ *
+ * Clamped to a week, and the ceiling is deliberate: the failure mode of a
+ * too-long TTL is silent and cumulative — a copy holds a second dataset, a second
+ * RAM booking and a second disk booking while serving nothing, and nobody notices
+ * capacity going to databases no one queries until it is a fleet problem. An
+ * operator who wants one for longer should promote it, which is the operation that
+ * says "this is production now".
+ */
+export const RESTORE_TTL_HOURS = Math.min(168, Math.max(1,
+  Math.floor(Number(process.env.CB_RESTORE_TTL_HOURS)) || 48));
+
 export const PITR_WINDOW_DAYS: Record<string, number> = {
   free: 7, pro: 30, team: 90, enterprise: 90,
 };
@@ -404,6 +417,10 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
         ? { database: Object.fromEntries(
             Object.entries(database).filter(([, v]) => v !== undefined)) }
         : {}),
+      // Where this copy came from and when it goes away (P3e). Unconditional on
+      // the store having a row, so a project that is not a restore says nothing
+      // rather than saying null three times.
+      ...(detail.restore ? { restore: detail.restore } : {}),
     };
   });
 
@@ -562,6 +579,7 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
       ref, newRef: generateProjectRef(), actor,
       ...(targetTime ? { targetTime } : {}),
       projectsPerOrgLimit,
+      ttlHours: RESTORE_TTL_HOURS,
     });
     if (!result) throw ApiError.notFound('Project');
     if ('refused' in result) {
@@ -572,7 +590,7 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
         `This project is ${result.conflict}, so it has no backup that can be restored.`);
     }
 
-    const { project, job } = result;
+    const { project, job, expiresAt } = result;
     if (deps.enqueue) {
       try {
         await deps.enqueue({
@@ -593,8 +611,14 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
         restore: {
           source_ref: ref,
           target_time: targetTime?.toISOString() ?? null,
+          // Returned, not left to be discovered. A deadline the caller cannot read
+          // is a deadline they cannot act on, and this one has a second window
+          // behind it that is worth saying out loud.
+          expires_at: expiresAt.toISOString(),
           note: 'This is a copy. It serves no application traffic, and your original '
-            + 'project is untouched and still live.',
+            + 'project is untouched and still live. It is kept until '
+            + `${expiresAt.toISOString()}, then soft-deleted — its data stays `
+            + 'recoverable for the usual window after that. Promote it to keep it.',
         },
         job: { id: encodeId('job', job.id), type: job.kind, state: job.state },
       });

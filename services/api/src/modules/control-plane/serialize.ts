@@ -42,7 +42,25 @@ export function serializeProject(p: Project & { organization_id: string }): Proj
   };
 }
 
+/**
+ * Where a restored copy came from and when it goes away (P3e).
+ *
+ * On the detail response rather than only on the create response, because the
+ * customer who needs the deadline most is the one coming back to the project two
+ * days later — and a deadline they can only see in the reply to a request they
+ * already made is a deadline they cannot read.
+ */
+export interface RestoreInfo {
+  source_ref: string;
+  /** The point in time asked for; null means "the latest data available". */
+  target_time: string | null;
+  /** When the copy is soft-deleted. Its data stays recoverable after that. */
+  expires_at: string | null;
+}
+
 export interface ProjectDetailResponse {
   project: ProjectResponse;
   database?: DatabaseInfo;
+  /** Present only for projects that are themselves a restore. */
+  restore?: RestoreInfo;
 }

@@ -108,12 +108,29 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
           <div className="cb-banner__body">
             <div className="cb-banner__title">This is a restored copy, not your live project</div>
             <div className="cb-banner__text">
-              It holds your data as of the point in time you asked for, and it is
-              serving no application traffic. Your original project is untouched and
-              still live. Connect to this copy to check the data is what you expected —
-              switching your application over is a separate, explicit step, and it is
-              not built yet.
+              It holds your data as of{' '}
+              {q.data?.restore?.target_time
+                ? new Date(q.data.restore.target_time).toLocaleString()
+                : 'the latest point available'}
+              , and it is serving no application traffic. Your original project{' '}
+              <code className="mono">{q.data?.restore?.source_ref ?? ''}</code> is
+              untouched and still live. Connect to this copy to check the data is what
+              you expected — switching your application over is a separate, explicit
+              step, and it is not built yet.
             </div>
+            {/* The deadline, stated. A copy holds a second dataset and a second
+                booking while serving nothing, so it does not live forever — and a
+                deadline the customer cannot read is a deadline they cannot act on,
+                which is the same rule the soft-delete banner follows. The second
+                window is said out loud too: expiry is not destruction. */}
+            {q.data?.restore?.expires_at ? (
+              <div className="cb-banner__text" style={{ marginTop: 'var(--cb-space-2)' }}>
+                <strong>This copy is removed on{' '}
+                  {new Date(q.data.restore.expires_at).toLocaleString()}</strong>{' '}
+                — its data then stays recoverable for the usual window, so an expiry
+                you did not want is not a loss you cannot undo.
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}

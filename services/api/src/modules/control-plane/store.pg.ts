@@ -172,10 +172,31 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
       const row = rows[0];
       if (!row) return undefined;
       const project = toProject(row);
+
+      // Lineage and deadline, for projects that are a restore. Fetched separately
+      // rather than joined above so the common case — every project that is not a
+      // restore — pays nothing for a table it has no row in.
+      let restore: { source_ref: string; target_time: string | null; expires_at: string | null }
+        | undefined;
+      if (project.status === 'restoring' || project.status === 'restored') {
+        const r = await pool.query<{
+          source_ref: string; target_time: Date | null; expires_at: Date | null;
+        }>(`SELECT source_ref, target_time, expires_at FROM project_restores
+             WHERE project_id = $1`, [project.id]);
+        const rr = r.rows[0];
+        if (rr) {
+          restore = {
+            source_ref: rr.source_ref,
+            target_time: rr.target_time?.toISOString() ?? null,
+            expires_at: rr.expires_at?.toISOString() ?? null,
+          };
+        }
+      }
+
       if (!row.db_host || row.db_port === null || row.db_pooler_port === null) {
         // Provisioning has not reached write_connection yet; the project exists
         // and has a status, and that is the whole answer.
-        return { project };
+        return { project, ...(restore ? { restore } : {}) };
       }
 
       const database: DatabaseInfo = {
@@ -198,7 +219,7 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
           pooled: `postgres://${auth}@${database.host}:${database.pooler_port}/postgres`,
         };
       }
-      return { project, database };
+      return { project, database, ...(restore ? { restore } : {}) };
     },
 
     /**
@@ -374,7 +395,7 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
      * with no restore row is a `restoring` project the saga cannot explain, and a
      * restore row with no job is a project that stays `restoring` forever.
      */
-    async requestRestore({ ref, targetTime, newRef, actor, projectsPerOrgLimit }) {
+    async requestRestore({ ref, targetTime, newRef, actor, projectsPerOrgLimit, ttlHours = 48 }) {
       const client: PoolClient = await pool.connect();
       try {
         await client.query('BEGIN');
@@ -421,11 +442,14 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
            source.region, source.plan]);
         const project = toProject(created.rows[0]!);
 
+        // The deadline is set here, in the same transaction as the project, so a
+        // copy cannot exist without one. A nullable column filled in later is a
+        // copy that lives forever if the later step is ever skipped.
         await client.query(
           `INSERT INTO project_restores
-             (project_id, source_project_id, source_ref, target_time)
-           VALUES ($1, $2, $3, $4)`,
-          [project.id, source.id, source.ref, targetTime ?? null]);
+             (project_id, source_project_id, source_ref, target_time, expires_at)
+           VALUES ($1, $2, $3, $4, now() + make_interval(hours => $5::int))`,
+          [project.id, source.id, source.ref, targetTime ?? null, ttlHours]);
 
         const key = `restore_${project.id}`;
         const job = await client.query(
@@ -446,7 +470,8 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
           },
         });
         await client.query('COMMIT');
-        return { project, job: jobFromDb(job.rows[0] as never), source: toProject(source) };
+        return { project, job: jobFromDb(job.rows[0] as never), source: toProject(source),
+          expiresAt: new Date(Date.now() + ttlHours * 3_600_000) };
       } catch (err) {
         await client.query('ROLLBACK'); throw err;
       } finally {

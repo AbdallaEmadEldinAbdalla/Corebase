@@ -310,6 +310,20 @@ describe('P3d — EXIT CRITERION: point-in-time recovery', () => {
         const { rows } = await restored.query<{ id: number; note: string }>(
           `select id, note from ledger order by id`);
         const ids = rows.map((r) => r.id);
+
+        // Postgres says, in one line, exactly where recovery stopped:
+        //   LOG: recovery stopping before commit of transaction N, time ...
+        // Printed unconditionally rather than only on failure, because "which
+        // transaction was the boundary" is the only question worth asking about a
+        // PITR result and reading it after the fact needs the container to still
+        // exist.
+        const clusterLog = await docker.containerLogs(containerName(copy.ref))
+          .catch(() => '');
+        const boundary = clusterLog.split('\n')
+          .filter((l) => /recovery stopping|last completed transaction|consistent recovery/i.test(l));
+        process.stdout.write(
+          `        rows restored: [${ids.join(', ')}]  target ${target.toISOString()}\n` +
+          boundary.map((l) => `        ${l.trim()}\n`).join(''));
         // Written before the target: present.
         expect(ids).toContain(1);
         expect(ids).toContain(2);

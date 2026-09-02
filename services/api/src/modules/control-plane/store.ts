@@ -17,6 +17,8 @@ export interface DatabaseInfo {
 export interface ProjectDetail {
   project: Project;
   database?: DatabaseInfo;
+  /** Lineage and deadline, for a project that is itself a restore (P3e). */
+  restore?: { source_ref: string; target_time: string | null; expires_at: string | null };
 }
 
 export interface JobRow {
@@ -133,11 +135,13 @@ export interface ControlPlaneStore {
     newRef: string;
     actor?: Actor;
     projectsPerOrgLimit?: number;
+    /** How long the copy is kept before it is soft-deleted (P3e). */
+    ttlHours?: number;
   }): Promise<
     | undefined
     | { conflict: string; project: Project }
     | { refused: string }
-    | { project: Project; job: JobRow; source: Project }
+    | { project: Project; job: JobRow; source: Project; expiresAt: Date }
   >;
 
   requestLifecycle?(ref: string, kind: 'pause' | 'resume', actor?: Actor): Promise<
