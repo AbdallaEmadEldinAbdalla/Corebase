@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-09-01 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 started** (P3a–P3f done; **exit criteria 1, 3 and 4 met**)
+**Last updated:** 2026-09-01 · **Phase:** Phase 2 (the database platform) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 started** (P3a–P3g done; **exit criteria 1, 3 and 4 met**)
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -251,7 +251,7 @@ boot. Don't use them.
 
 ## 4. What is built, in detail
 
-Test counts are from `pnpm test` and are all currently green: **586 tests**, of
+Test counts are from `pnpm test` and are all currently green: **595 tests**, of
 which **319** need no infrastructure (`pnpm test:unit`).
 
 Every task below has a command that proves it; they are listed with the task.
@@ -1851,6 +1851,71 @@ bucket prefix itself over S3. That is also the design the doc already asks for
 patch.
 
 
+### P3g — a purged project's repo is destroyed, provably · done · 9 tests
+
+The gap the last step recorded is closed. A purged project's backup repo used to
+outlive it **indefinitely**: the data a customer asked us to destroy, retained
+forever, with nothing anywhere recording that it should not be. D-038 asks for
+*provable* destruction and D-066 sets the schedule — the final backup is kept **30
+days past purge**, so someone who deleted the wrong project has a month rather
+than the week the volume gets, and only then does the repo go.
+
+**The control plane deletes it, over S3** (**D-301**). By the time the deadline
+arrives the container, the volume, the placement row and the credentials are all
+gone — there is nowhere left to run `pgbackrest`. That is also the access model the
+design already asked for: nodes put/get/list their own prefixes and **delete rights
+live only with the control plane**, so a compromised node can read its tenants'
+encrypted repos and cannot destroy history. The client is hand-written for the
+reason the Docker one is — the surface is a list and a delete, SigV4 is a specified
+stable algorithm, and an SDK wrapping all of S3 is a large supply-chain cost for
+two operations.
+
+`project_repos` is the one thing that outlives everything else a project had
+(**D-302**), because what must survive a purge is the knowledge of *what still
+needs deleting and when*. `ON DELETE RESTRICT` rather than CASCADE: a future change
+that deleted the projects row would otherwise take the schedule with it and leave
+the objects behind, unreferenced.
+
+**"Provable" is implemented as re-listing** (**D-303**). Deleting and assuming is
+not destruction, so every sweep deletes the prefix and then lists it again, and the
+row is marked destroyed only when that list comes back empty — the same discipline
+as the purge's `verify_gone` against the node. A sweep that assumed would mark a
+repo destroyed while its objects remained: retained forever behind a row asserting
+they were gone, which is worse than never having tried. An audit row records the
+destruction with its object count, because provable also means someone can be shown
+the proof later.
+
+**Three findings from making it work.**
+
+**The control plane and the project containers need separate endpoints**
+(**D-305**). In production both are R2 and identical; locally they cannot be — a
+project container reaches the store through the node's NAT egress, so its endpoint
+is an address on the compose network, and the control plane runs on the host, which
+cannot route to a container IP at all. The first attempt timed out after 30 seconds
+in a way indistinguishable from a wrong secret.
+
+**A signed S3 request with a body needs an explicit `Content-Length`**
+(**D-306**) — Node falls back to chunked encoding without it and S3 answers `411
+MissingContentLength`.
+
+**The prefix is the stored path minus its leading slash** (**D-304**). pgBackRest
+spells the path `/projects/<id>`; S3 keys have none. A list for the unmodified path
+matches nothing *silently* — and the sweep would then have "proven" an untouched
+prefix empty, which is the worst available outcome.
+
+**Verification.** `repo-destroy.e2e.test.ts` 9/9 against the real store, with real
+objects seeded through `mc` rather than through the client under test — seeding with
+the code being verified would let a broken client produce a bucket that looks
+correct to itself. The two that matter most: **it touches only the project it was
+asked about** (a prefix bug here deletes a live customer's backups, and
+`projects/<uuid>` against `projects/<uuid>` is exactly the shape a substring match
+gets wrong), and **it refuses to mark a repo destroyed while objects remain**,
+tested by handing it a client whose deletes do nothing. Also pinned: a repo with no
+deadline is never destroyed — NULL comparisons make that true by construction,
+which is precisely why a rewrite with `COALESCE` would destroy every undecided repo
+on its first sweep.
+
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -1890,10 +1955,10 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-One hundred and seventeen decisions came out of running the thing rather than planning it —
-D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-262 from Phase 2, and D-263…D-300 from Phase 3.
+One hundred and twenty-three decisions came out of running the thing rather than planning it —
+D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-262 from Phase 2, and D-263…D-306 from Phase 3.
 Full text in the [decision log](docs/00-foundation/05-decision-log.md); the log holds
-D-001…D-300 and is binding when two documents disagree.
+D-001…D-306 and is binding when two documents disagree.
 
 | ID | What changed | Why it surfaced |
 |---|---|---|
@@ -2014,6 +2079,12 @@ D-001…D-300 and is binding when two documents disagree.
 | D-298 | The pause backup is incremental under 7 days, full otherwise | Nothing extends the chain until resume, so a link nobody watches is a restore that depends on it |
 | D-299 | `CB_REQUIRE_FINAL_BACKUP` defaults on | The failure is invisible: a recovery window with nothing behind it looks exactly like one |
 | D-300 | Retrievability is proven by reading the repo from a container that is not the deleted project's | A `succeeded` row is our bookkeeping; the criterion is about the repo |
+| D-301 | The control plane deletes purged repos itself over S3, with a hand-written SigV4 client | After purge there is no container to run pgBackRest in, and delete rights belong to the control plane alone |
+| D-302 | `project_repos` outlives every other trace of a project | What must survive a purge is what still needs deleting and when; RESTRICT so a future delete cannot orphan the objects |
+| D-303 | Destruction is proven by re-listing; the row is marked only when the prefix is empty | Deleting and assuming would retain objects forever behind a row asserting they were gone |
+| D-304 | The repo path is stored, and the S3 prefix drops its leading slash | pgBackRest spells it `/projects/<id>`, S3 keys have none — the unmodified path matches nothing, silently |
+| D-305 | Control plane and project containers reach the store at separate configured endpoints | Identical in production; locally the host cannot route to a container IP, and the mismatch is a timeout that looks like a bad secret |
+| D-306 | Every signed S3 request with a body sends an explicit `Content-Length` | Node uses chunked encoding otherwise and S3 answers 411 MissingContentLength |
 
 ## 7. Measurements
 
@@ -2150,13 +2221,6 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   7-day-old backup or repo surgery. The mechanism is tested with a count-based
   override and the production policy is pinned by unit test; the calendar
   arithmetic is taken on pgBackRest's word.
-- **A purged project's repo is never destroyed.** D-066 keeps the final backup 30
-  days past purge and then requires `pgbackrest stop` plus repo-path destruction,
-  audited; today the repo outlives the project indefinitely, which leaves D-038's
-  "provable destruction" unmet. It needs a path this codebase does not have: after
-  purge there is no container to run pgBackRest in, so the control plane must delete
-  the bucket prefix itself over S3 — which is the design the doc already asks for
-  ("delete rights live only with the control plane"), and a step rather than a patch.
 - Retention expiry is frozen for a paused project only *incidentally*: expire runs
   as part of a backup, a paused project takes none, so nothing expires its chain.
   That is the right outcome and it is not enforced anywhere — nothing would stop a

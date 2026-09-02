@@ -34,6 +34,8 @@ It is built on the design system that already existed in `design-exports/` rathe
 
 **How the UI stays consistent.** The first version of this shell was right in every colour and wrong in every mechanic, so the fix was not nicer screens but a written interaction contract: [docs/09-dashboard/05-ux-standards.md](docs/09-dashboard/05-ux-standards.md), ending in a 20-question gate that **runs on every UI change** (D-224) as the `ux-review` role in [.claude/skills/](.claude/skills/ux-review/SKILL.md). Its first run found two real failures in the code written to satisfy it — the palette was missing two actions a row menu already had, and the project list printed "Showing 20 of 20" while hiding a second page.
 
+**And thirty days after a project is purged, its backups are destroyed — provably.** A deleted project's repo used to outlive it indefinitely: data a customer asked us to destroy, retained forever, with nothing recording that it should not be. The control plane now deletes the bucket prefix itself, because by then there is no container left to run pgBackRest in and delete rights belong to the control plane alone. "Provably" is the operative word: every sweep deletes the prefix and then *lists it again*, and only records the destruction when that list comes back empty. Deleting and assuming would leave objects retained forever behind a row asserting they were gone.
+
 **Deleting a project takes a final backup first, and stops if it cannot.** Nothing about a `DELETE` distinguishes "we are done with this" from "I typed the wrong ref", so the seven-day recovery window exists — and a recovery window with nothing behind it looks exactly like a recovery window, right up to the moment somebody needs it. Always a full, never an incremental: this is the only copy that will outlive the project. Proven by reading the repo from a *different* container after the project is gone, because a database row saying `succeeded` is our own bookkeeping and the promise is about the archive.
 
 Pausing has the same interlock, for a reason that is easy to miss: a paused project has no running Postgres, so WAL archiving stops with the container. Left alone, the only current copy of a customer's data would be one node's disk with a backup behind it that is already older than the pause. So pause takes a backup after the checkpoint, confirms it landed, and **refuses to stop the containers** if either fails — a paused project whose backup failed is strictly worse than a running one, which is the opposite of what pausing is for.
@@ -113,7 +115,7 @@ There is no seeded password anywhere, so create an account on `/signup`; a new a
 
 The demo script creates a project, waits for it, connects to the database it made with the credentials the API handed back, runs real SQL, and deletes it — using only `curl` and `psql`, which is exactly what a customer has.
 
-The full suite is **586 tests**, integration included; they need the staging stack above and **fail rather than skip** without it:
+The full suite is **595 tests**, integration included; they need the staging stack above and **fail rather than skip** without it:
 
 ```bash
 pnpm test
