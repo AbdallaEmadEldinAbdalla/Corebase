@@ -1251,18 +1251,102 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
     },
   };
 
+  /**
+   * The last backup a project ever gets (P3f, D-066, exit criterion 4).
+   *
+   * D-066's rule is that the one moment a backup absolutely must work is when
+   * everything else is about to be deleted, and the reason is the shape of the
+   * mistake it protects against: a customer deletes the wrong project. Nothing
+   * about a `DELETE` distinguishes "we are done with this" from "I typed the wrong
+   * ref", so the recovery window (D-038) exists — and a recovery window with no
+   * backup behind it is a promise about data that no longer exists anywhere.
+   *
+   * Always a **full**, never an incremental. Everything else in the schedule
+   * balances cost against restore time; this one is the only copy that will
+   * survive the project, and a chain whose earlier links are expiring is not
+   * something to hand a customer who is already having a bad day.
+   *
+   * Fails the saga when it fails. That is the whole point of the interlock — a
+   * deletion that proceeded past a failed final backup would produce exactly the
+   * silent state D-066 forbids, and it would do so at the only moment nobody is
+   * watching, because the customer has already moved on.
+   */
   const finalBackup: SagaStep<SagaContext> = {
     name: 'final_backup',
     async run(ctx) {
-      if (deps.requireFinalBackup) {
-        // D-066: the one moment a backup absolutely must work is when everything
-        // else is about to be deleted. Fail closed.
-        throw new Error(
-          'a verified final backup is required before deletion (D-066) and no ' +
-          'backup system exists yet — unset CB_REQUIRE_FINAL_BACKUP to delete ' +
-          'without one, knowingly');
+      const projectId = ctx.job.project_id!;
+      const project = await loadProject(deps.pool, projectId);
+
+      if (!repoTargetFromEnv()) {
+        // The pre-P3a behaviour, kept for a fleet with no repo configured. The
+        // gate is what turns "there is no backup system" from a log line into a
+        // refusal, and it should be on wherever data matters.
+        if (deps.requireFinalBackup) {
+          throw new Error(
+            'a verified final backup is required before deletion (D-066) but no repo ' +
+            'is configured — set CB_BACKUP_S3_* or unset CB_REQUIRE_FINAL_BACKUP to ' +
+            'delete without one, knowingly');
+        }
+        ctx.log('FINAL BACKUP SKIPPED — no repo configured, so this project\'s ' +
+          'recovery window has nothing behind it', { project: project.ref });
+        return;
       }
-      ctx.log('final backup skipped — no backup system in Milestone 0 (D-066 gate is off)');
+
+      const docker = requireDocker(deps);
+      const container = containerName(project.ref);
+
+      // Nothing to back up from a container that is already gone: a delete of a
+      // paused project is the normal case (D-077 already took its final backup at
+      // pause, and it is pinned). Reported rather than skipped silently, because
+      // "there was already one" and "we could not take one" must not look alike.
+      const inspect = await docker.inspectContainer(container);
+      if (!inspect?.State.Running) {
+        const priorRuns = await deps.pool.query<{ label: string | null; finished_at: Date }>(
+          `SELECT label, finished_at FROM backup_runs
+            WHERE project_id = $1 AND status = 'succeeded'
+            ORDER BY finished_at DESC LIMIT 1`, [projectId]);
+        const prior = priorRuns.rows[0];
+        if (!prior && deps.requireFinalBackup) {
+          throw new Error(
+            `${project.ref} has no running database and no successful backup on ` +
+            'record, so deleting it would close a recovery window with nothing ' +
+            'behind it (D-066)');
+        }
+        ctx.log(prior
+          ? 'database is not running; relying on the existing backup taken at pause (D-077)'
+          : 'database is not running and there is no backup on record',
+          { last_backup: prior?.label ?? null,
+            taken_at: prior?.finished_at?.toISOString() ?? null });
+        return;
+      }
+
+      const { rows } = await deps.pool.query<{ id: string }>(
+        `INSERT INTO backup_runs (project_id, type, status, job_id)
+         VALUES ($1, 'full', 'running', $2) RETURNING id`, [projectId, ctx.job.id]);
+      const runId = rows[0]!.id;
+      try {
+        await takePgbackrest(docker, container, 'full');
+      } catch (err) {
+        await deps.pool.query(
+          `UPDATE backup_runs SET status = 'failed', finished_at = now(), error = $2
+            WHERE id = $1`, [runId, (err as Error).message.slice(0, 2000)]);
+        backupRunsTotal.inc({ type: 'full', outcome: 'failed' });
+        throw new Error(`final backup failed, so this deletion stops here (D-066): ` +
+          (err as Error).message);
+      }
+
+      const after = await backupInfo(docker, container);
+      const made = after.backups[after.backups.length - 1];
+      await deps.pool.query(
+        `UPDATE backup_runs
+            SET status = 'succeeded', finished_at = now(), label = $2, size_bytes = $3,
+                wal_start = $4, wal_stop = $5, error = NULL
+          WHERE id = $1`,
+        [runId, made?.label ?? null, made?.repoBytes ?? null,
+         made?.walStart ?? null, made?.walStop ?? null]);
+      backupRunsTotal.inc({ type: 'full', outcome: 'succeeded' });
+      ctx.log('final backup taken — the recovery window has something behind it',
+        { run: runId, label: made?.label, size_bytes: made?.repoBytes });
     },
   };
 
@@ -1634,6 +1718,91 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
           '-d', 'postgres', '-c', 'CHECKPOINT']);
         ctx.log(exitCode === 0 ? 'checkpointed' : 'checkpoint did not run cleanly',
           { exit_code: exitCode });
+
+        /**
+         * The pause interlock (P3f, D-077): pause does not complete until the
+         * project is restorable from object storage alone.
+         *
+         * A paused project has no running Postgres, so **WAL archiving stops with
+         * the container**. Unhandled, that means the only current copy of the
+         * customer's data is one node's disk, with a backup behind it that is
+         * already older than the pause and getting older — and the whole economic
+         * case for pausing free projects (D-008) is that the node keeps the disk
+         * cheaply, not that the data is safe because it is still there.
+         *
+         * So: a backup *after* the checkpoint, then `pgbackrest check` to confirm
+         * the last segment actually landed. Order matters — a backup taken before
+         * the checkpoint would not include what the checkpoint flushed, which is
+         * precisely the tail of the data.
+         *
+         * A **full** when the chain is stale, an incremental when it is fresh
+         * (backups §8). The chain matters more than usual here because nothing will
+         * extend it again until the project resumes: an incremental onto a base
+         * that is about to be the oldest thing in the repo is a restore that
+         * depends on a link nobody is watching.
+         */
+        if (repoTargetFromEnv()) {
+          const lastFull = await deps.pool.query<{ finished_at: Date }>(
+            `SELECT finished_at FROM backup_runs
+              WHERE project_id = $1 AND type = 'full' AND status = 'succeeded'
+              ORDER BY finished_at DESC LIMIT 1`, [projectId]);
+          const ageDays = lastFull.rows[0]
+            ? (Date.now() - lastFull.rows[0].finished_at.getTime()) / 86_400_000
+            : Infinity;
+          const type = ageDays < 7 ? 'incr' : 'full';
+
+          const { rows } = await deps.pool.query<{ id: string }>(
+            `INSERT INTO backup_runs (project_id, type, status, job_id)
+             VALUES ($1, $2, 'running', $3) RETURNING id`, [projectId, type, ctx.job.id]);
+          const runId = rows[0]!.id;
+          try {
+            const dbContainer = containerName(project.ref);
+            await takePgbackrest(docker, dbContainer, type);
+            const info = await backupInfo(docker, dbContainer);
+            const made = info.backups[info.backups.length - 1];
+            await deps.pool.query(
+              `UPDATE backup_runs SET status = 'succeeded', finished_at = now(),
+                      label = $2, size_bytes = $3, wal_start = $4, wal_stop = $5
+                WHERE id = $1`,
+              [runId, made?.label ?? null, made?.repoBytes ?? null,
+               made?.walStart ?? null, made?.walStop ?? null]);
+            backupRunsTotal.inc({ type, outcome: 'succeeded' });
+
+            // The confirmation, and the reason this is an interlock rather than a
+            // courtesy: `check` forces a WAL switch and verifies the segment
+            // arrived, so passing it means the repo holds everything up to this
+            // moment. Without it, "we took a backup" and "the backup is in object
+            // storage" are different claims and only the second one matters once
+            // the container is gone.
+            const verified = await backupCheck(docker, containerName(project.ref));
+            if (!verified.ok) {
+              throw new Error('pgbackrest check failed after the final backup: ' +
+                pgbackrestFailure(verified.output));
+            }
+            ctx.log('final backup taken and archiving confirmed — this project is ' +
+              'restorable from object storage alone', { run: runId, type, label: made?.label });
+          } catch (err) {
+            await deps.pool.query(
+              `UPDATE backup_runs SET status = 'failed', finished_at = now(), error = $2
+                WHERE id = $1`, [runId, (err as Error).message.slice(0, 2000)]);
+            backupRunsTotal.inc({ type, outcome: 'failed' });
+            // Refuse to stop the container. A paused project whose backup failed
+            // has its only current copy on a node disk and nothing watching it —
+            // strictly worse than a running project, which is the opposite of what
+            // pausing is for. Better to leave it running and let the pause retry.
+            throw new Error(
+              `pause stopped: ${project.ref} is not restorable from object storage, so ` +
+              'its containers were left running rather than leaving one node disk as ' +
+              `the only copy (D-077). ${(err as Error).message}`);
+          }
+        } else if (deps.requireBackups) {
+          throw new Error(
+            'backups are required but no repo is configured, so pausing would leave ' +
+            'this node\'s disk as the only copy of the data (D-077)');
+        } else {
+          ctx.log('NO BACKUP REPO CONFIGURED — pausing anyway leaves this node\'s disk ' +
+            'as the only current copy of the data', { project: project.ref });
+        }
 
         await docker.setRestartPolicy(db.Id, 'no');
         await docker.stopContainer(db.Id);

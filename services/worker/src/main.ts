@@ -98,7 +98,18 @@ const sagas = buildSagas({
   // D-038's recovery window. Shortened only in tests; a production value that
   // drifts short quietly removes the customer's ability to undo a deletion.
   softDeleteWindow: process.env.CB_SOFT_DELETE_WINDOW ?? '7 days',
-  requireFinalBackup: process.env.CB_REQUIRE_FINAL_BACKUP === 'true',
+  /**
+   * On by default now that a final backup is real (P3f).
+   *
+   * D-066's rule is that the one moment a backup absolutely must work is when
+   * everything else is about to be deleted, and until P3f this flag could only
+   * make deletion *fail* because there was no backup system to succeed with. It
+   * defaults on because the failure it prevents is invisible: a recovery window
+   * with nothing behind it looks exactly like a recovery window, right up to the
+   * moment someone needs it. `CB_REQUIRE_FINAL_BACKUP=false` is the deliberate
+   * opt-out for a fleet with no object storage.
+   */
+  requireFinalBackup: process.env.CB_REQUIRE_FINAL_BACKUP !== 'false',
   requireBackups: process.env.CB_REQUIRE_BACKUPS === 'true',
 });
 const runner = createRunner({
