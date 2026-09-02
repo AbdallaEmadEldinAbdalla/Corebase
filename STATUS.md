@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-09-02 · **Phase:** Phase 4 next (auth) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 complete** (P3a–P3h; **all four exit criteria met**)
+**Last updated:** 2026-09-02 · **Phase:** Phase 4 (auth) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 complete** (P3a–P3h; **all four exit criteria met**) · **Phase 4 started** (P4a done)
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -1993,6 +1993,59 @@ shares it — isolated by its own volume and network-less container, but not by
 hardware. Recorded rather than pretended away.
 
 
+## 4e. Phase 4 — auth
+
+### P4a — the `auth` schema in every project database · done · 10 tests
+
+Every project now has the six `auth` tables from the auth architecture doc, created
+by the image at `initdb` (**D-314**) rather than by a saga step: they are
+fleet-wide and identical, and `initdb` is the one moment when no client can see a
+half-created schema. It also makes D-004's export promise true — a project's users
+exist in the project's own database from its first second, so `corebase export`
+carries them out with a plain `pg_dump` and **nothing about a project's end-users
+is ever stored in the control plane**.
+
+The `auth` schema itself already existed with the RLS helpers (`auth.uid()` and
+friends, from D-015); this adds the tables, which the API roles are deliberately
+*not* allowed to touch.
+
+**The privilege boundary is the part worth reading.** `corebase_auth` is the only
+role with table privileges here (**D-315**), and `service_role` is what makes that
+non-obvious: it is handed to a customer's server-side code and holds `BYPASSRLS`,
+so nothing about row-level security constrains it and the **only** thing between it
+and every end-user's password hash is the absence of a table grant. `developer` is
+excluded for the same reason — the customer owns their database and can grant
+themselves anything, but the default must not hand them their users' hashes in the
+connection string the dashboard displays. The auth role's password is its own, not
+`authenticator`'s: sharing one would make a leak of the API's connection string a
+leak of every end-user's credentials.
+
+Two properties are pinned by tests precisely because they are properties of
+something *not* happening (**D-316**): no default privileges are altered for
+`auth`, so a table added there later is unreachable until somebody says otherwise;
+and the force-RLS event trigger stays scoped to `public`, because enabling RLS on
+`auth.users` would lock the auth module out of its own tables by a mechanism meant
+to protect customers' data — with every login on the platform failing at once as
+the symptom.
+
+**Password hashing is scrypt, not the argon2id the doc named** (**D-313**). D-211
+already made that trade for platform logins and the reasoning is stronger here: the
+auth module absorbs *every* project's login load in one process (D-110), so a
+native dependency would sit on the hottest auth path on the platform. D-111's
+properties are kept — parameters in the hash, weaker hashes upgraded on the next
+successful verify. What it defers is bcrypt verify-only compatibility for imported
+users, which D-111 promised so customers could migrate from GoTrue without a mass
+password reset; recorded as a gap rather than dropped, because D-004's portability
+is meant to cut both ways.
+
+**Verification:** `auth-schema.e2e.test.ts` 10/10 against a live project — all six
+tables present, a soft-deleted user freeing its email for re-registration (the
+partial index doing its job), the refresh-token lineage expressing a family and a
+session delete taking the whole family with it, one one-time token per type
+replacing the previous, and five privilege tests including `service_role` being
+refused `auth.users` while still able to call `auth.uid()`.
+
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -2032,10 +2085,10 @@ inside.
 
 ## 6. Decisions made while building (not from the plan)
 
-One hundred and twenty-nine decisions came out of running the thing rather than planning it —
-D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-262 from Phase 2, and D-263…D-312 from Phase 3.
+One hundred and thirty-three decisions came out of running the thing rather than planning it —
+D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-262 from Phase 2, and D-263…D-312 from Phase 3, and D-313…D-316 from Phase 4.
 Full text in the [decision log](docs/00-foundation/05-decision-log.md); the log holds
-D-001…D-312 and is binding when two documents disagree.
+D-001…D-316 and is binding when two documents disagree.
 
 | ID | What changed | Why it surfaced |
 |---|---|---|
@@ -2168,6 +2221,10 @@ D-001…D-312 and is binding when two documents disagree.
 | D-310 | Never-verified projects go first, and a failed verification does not count as one | A longest-unverified sort ranks the never-verified last, because they have no timestamp to be old |
 | D-311 | Two alerts: any failure pages, low coverage warns | A verifier that stopped looks exactly like a fleet whose backups are all fine |
 | D-312 | The control plane's S3 client has no `PUT` | Delete is the only write right it should hold; the sabotage test overwrites with `mc`, from outside the product |
+| D-313 | Project end-user passwords use scrypt, not D-111's argon2id | Extends D-211: a native module on the path that absorbs every project's logins; bcrypt import compatibility deferred, not dropped |
+| D-314 | The `auth` tables are created by the image at initdb | Fleet-wide and identical, and it makes the export promise true — end-user data never touches the control plane |
+| D-315 | `corebase_auth` alone holds table privileges in `auth`, with its own password | `service_role` has BYPASSRLS, so the absent grant is the only thing between it and every password hash |
+| D-316 | No default privileges in `auth`, and force-RLS stays scoped to `public` | Enabling RLS on `auth.users` would lock the auth module out of its own tables — every login failing at once |
 
 ## 7. Measurements
 
@@ -2292,6 +2349,14 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   is isolated by its own volume and a network-less container rather than by
   hardware. A verification restore competing with a customer's database for I/O is
   a real effect this substrate cannot rule out.
+- **bcrypt verify-only compatibility is not built** (D-313). D-111 promised it so
+  customers could migrate a user table from GoTrue without a mass password reset;
+  it needs a dependency of its own and nobody is migrating in yet. Recorded because
+  D-004's portability is supposed to cut both ways.
+- The auth module itself does not exist yet — P4a is the substrate. No project can
+  sign a user up, and the `corebase_auth` role is not yet in the pooler's
+  `auth_query` allowlist, so the module will have to choose between the pooler
+  (OQ-110's lean) and a direct connection when it arrives.
 - `pgbackrest verify` — the monthly repo-side checksum audit that catches bit-rot
   without a full restore (backups §7's last bullet) — is not scheduled. The
   restore-based verification is the stronger of the two and is the one the criterion
