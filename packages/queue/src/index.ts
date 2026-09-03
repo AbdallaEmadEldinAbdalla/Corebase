@@ -160,3 +160,106 @@ export function createWorker(
 }
 
 export type { Job, Queue, Worker, Redis };
+
+// ── auth email (P4d) ────────────────────────────────────────────────────────
+
+/**
+ * The auth-email queue. Its own queue, not a job type on `provisioning`.
+ *
+ * Separate because the two have nothing in common that matters operationally.
+ * Provisioning jobs take seconds to minutes, are few, and each holds a database
+ * container's worth of state; email jobs are many, take milliseconds, and their
+ * retry schedule is measured against a *provider's* availability rather than a
+ * node's. Sharing a queue means one Postmark outage's worth of retrying email
+ * sits in front of every project waiting to be created — a coupling with no
+ * upside.
+ */
+export const QUEUE_AUTH_EMAIL = 'auth-email';
+
+export interface AuthEmailJobData {
+  /** Also the BullMQ job id, so a duplicate enqueue is a no-op (D-067). */
+  delivery_id: string;
+  project_id: string;
+  project_ref: string;
+  template: string;
+  to: string;
+  variables: Record<string, string>;
+}
+
+export function createAuthEmailQueue(connection: Redis): Queue<AuthEmailJobData> {
+  return new Queue<AuthEmailJobData>(QUEUE_AUTH_EMAIL, {
+    connection,
+    prefix: QUEUE_PREFIX,
+    defaultJobOptions: {
+      // Three attempts at 30s / 5min / 30min, per the email doc's retry policy.
+      // BullMQ's `exponential` doubles, which would give 30s/1min/2min — far too
+      // short for a provider outage, which is the thing being waited out. The
+      // `custom` strategy on the worker produces the doc's schedule exactly.
+      attempts: 3,
+      backoff: { type: 'authEmail', delay: 30_000 },
+      // Kept longer than provisioning's, because "why did my user get no mail"
+      // is asked hours later and a completed job is the only place the provider's
+      // message id lives until the send row is updated.
+      removeOnComplete: { count: 1000 },
+      // Failures are the ones worth keeping: a job here has exhausted its
+      // retries and is the dead-letter record.
+      removeOnFail: { count: 5000 },
+    },
+  });
+}
+
+/** 30 s, 5 min, 30 min — the doc's schedule, not a doubling. */
+export const AUTH_EMAIL_BACKOFF_MS = [30_000, 300_000, 1_800_000] as const;
+
+export function authEmailBackoff(attemptsMade: number): number {
+  return AUTH_EMAIL_BACKOFF_MS[Math.min(attemptsMade, AUTH_EMAIL_BACKOFF_MS.length) - 1]
+    ?? AUTH_EMAIL_BACKOFF_MS[0];
+}
+
+export async function enqueueAuthEmail(
+  queue: Queue<AuthEmailJobData>, data: AuthEmailJobData, opts: JobsOptions = {},
+): Promise<{ enqueued: boolean }> {
+  assertValidDeliveryId(data.delivery_id);
+  const existing = await queue.getJob(data.delivery_id);
+  // Already queued or already sent. The delivery id is `<template>_<user id>`
+  // (D-330), so this is what stops five resend clicks becoming five mails while
+  // the first is still waiting to go out.
+  if (existing) return { enqueued: false };
+  await queue.add(data.template, data, { ...opts, jobId: data.delivery_id });
+  return { enqueued: true };
+}
+
+/**
+ * The auth-email worker.
+ *
+ * `settings.backoffStrategy` is what makes the doc's 30 s / 5 min / 30 min
+ * schedule real: BullMQ's built-in `exponential` doubles from the base delay,
+ * which would give 30 s / 1 min / 2 min and exhaust the whole budget inside three
+ * minutes. A provider outage lasts longer than that, and the point of retrying at
+ * all is to survive one.
+ */
+export function createAuthEmailWorker(
+  connection: Redis,
+  handler: (data: AuthEmailJobData, job: Job<AuthEmailJobData>) => Promise<void>,
+  opts: { concurrency?: number } = {},
+): Worker<AuthEmailJobData> {
+  return new Worker<AuthEmailJobData>(
+    QUEUE_AUTH_EMAIL,
+    async (job) => handler(job.data, job),
+    {
+      connection,
+      prefix: QUEUE_PREFIX,
+      // Higher than provisioning's, and safe to be: a send is one short-lived
+      // socket, not a container. Still bounded, because the thing on the other
+      // end is a rate-limited provider and hammering it is how a shared IP pool
+      // starts refusing us.
+      concurrency: opts.concurrency ?? 8,
+      // Well under the 30 s first retry, so a worker that dies mid-send releases
+      // the job before its own retry would have fired.
+      lockDuration: 20_000,
+      settings: {
+        backoffStrategy: (attemptsMade: number) => authEmailBackoff(attemptsMade),
+      },
+    },
+  );
+}

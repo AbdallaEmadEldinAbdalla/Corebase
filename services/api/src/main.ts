@@ -11,6 +11,8 @@ import { createTokenStore } from './kernel/tokens.ts';
 import { createSessionStore, createMemorySessionStore } from './kernel/sessions.ts';
 import { createRateLimiter, createMemoryRateLimiter } from './kernel/rate-limit.ts';
 import type { ProjectAuthDeps } from './modules/project-auth/routes.ts';
+import { createMailer } from './modules/project-auth/mailer.ts';
+import { createAuthEmailQueue } from '@corebase/queue';
 import type { AuthDeps } from './modules/auth/routes.ts';
 import { createOrgStore } from './modules/orgs/store.ts';
 
@@ -180,15 +182,37 @@ const projectAuth: ProjectAuthDeps | undefined = await (async () => {
     // Must match what the worker signed the project's keys with (CB_JWT_ISSUER
     // there), or every apikey fails its issuer check.
     ...(process.env.CB_JWT_ISSUER ? { keyIssuer: process.env.CB_JWT_ISSUER } : {}),
-    // No mailer: P4c writes the tokens and hands the mail over, and P4d builds
-    // the thing that sends it. Said out loud at boot, because "confirmation
-    // emails never arrive" and "there is no sender yet" look identical from the
-    // outside and only one of them is a bug.
+    /**
+     * The mail path (P4d): suppression and caps are checked here, at enqueue,
+     * and the worker does the sending.
+     *
+     * Redis is not optional for it. The caps are Redis counters and they are the
+     * blast radius of `/signup` and `/recover` being usable as a bulk mailer by
+     * any anonymous visitor (D-116) — so with no Redis the honest behaviour is to
+     * keep the null mailer, which records every owed mail and sends none, rather
+     * than to send uncapped. That fails the flows and protects the domain, which
+     * is the right way round.
+     */
+    ...(redisUrl
+      ? {
+          mailer: createMailer({
+            pool,
+            // Two connections, not one: BullMQ issues blocking commands on its
+            // own and sharing a connection with ordinary counter traffic is how
+            // an INCR ends up waiting behind a BRPOPLPUSH.
+            redis: createRedis(redisUrl),
+            queue: createAuthEmailQueue(createRedis(redisUrl)),
+            onError: (err, job) => console.error(JSON.stringify({
+              level: 'error', service: 'api', msg: 'could not queue an auth email',
+              template: job.email, project_ref: job.projectRef, error: err.message })),
+          }),
+        }
+      : {}),
   };
 })();
-if (projectAuth) {
+if (projectAuth && !projectAuth.mailer) {
   console.warn(JSON.stringify({ level: 'warn', service: 'api',
-    msg: 'auth emails are recorded and NOT sent — the sender is P4d. '
+    msg: 'auth emails are recorded and NOT queued — CB_REDIS_URL is unset. '
        + 'Signup with confirmation required will not deliver a link; set a '
        + 'project\'s autoconfirm for local development.' }));
 }

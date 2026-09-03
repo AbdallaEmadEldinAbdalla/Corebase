@@ -18,6 +18,7 @@
     "@corebase/queue": "workspace:*",
     "@corebase/secrets": "workspace:*",
     "@corebase/crypto": "workspace:*",
+    "@corebase/email": "workspace:*",
     "@corebase/metrics": "workspace:*",
     "@corebase/audit": "workspace:*",
     "@corebase/jwt": "workspace:*"

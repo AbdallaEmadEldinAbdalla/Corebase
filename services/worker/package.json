@@ -21,6 +21,7 @@
     "@corebase/queue": "workspace:*",
     "pg": "^8.13.1",
     "@corebase/crypto": "workspace:*",
+    "@corebase/email": "workspace:*",
     "@corebase/secrets": "workspace:*",
     "@corebase/metrics": "workspace:*",
     "@corebase/audit": "workspace:*",

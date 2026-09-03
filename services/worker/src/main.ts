@@ -1,5 +1,10 @@
 import { Pool } from 'pg';
-import { createRedis, createQueue, createWorker } from '@corebase/queue';
+import {
+  createRedis, createQueue, createWorker, createAuthEmailWorker,
+} from '@corebase/queue';
+import { createSmtpProvider } from '@corebase/email';
+import { createEmailSender } from './email-sender.ts';
+import { emailSendsTotal, emailFailuresTotal } from './metrics.ts';
 import { createJobRepo } from './jobs/repo.ts';
 import { createRunner } from './jobs/runner.ts';
 import { buildSagas, superuserCandidates } from './jobs/sagas.ts';
@@ -145,6 +150,67 @@ const sweeper = createSweeper({
 const worker = createWorker(redis, async (data) => { await runner.execute(data); });
 worker.on('failed', (job, err) => log('warn', 'delivery failed', { id: job?.id, error: err.message }));
 worker.on('completed', (job) => log('info', 'delivery completed', { id: job.id }));
+
+/**
+ * The auth-email sender (P4d).
+ *
+ * Its own BullMQ worker rather than a job type on the provisioning one, because
+ * the two have nothing in common operationally: provisioning jobs take minutes
+ * and hold a container's worth of state, sends take milliseconds and wait on a
+ * provider. Sharing a queue puts one provider outage's worth of retrying email in
+ * front of every project waiting to be created.
+ *
+ * Without `CB_SMTP_HOST` it does not run at all rather than running and failing
+ * every job: a queue draining into three failed attempts each is worse than a
+ * queue nobody is draining, because it burns the retry budget of mail that would
+ * have been sent once the sender was configured.
+ */
+const smtpHost = process.env.CB_SMTP_HOST;
+let emailWorker: ReturnType<typeof createAuthEmailWorker> | undefined;
+if (smtpHost) {
+  const tlsMode = (process.env.CB_SMTP_TLS ?? 'starttls') as 'require' | 'starttls' | 'off';
+  if (tlsMode === 'off' && process.env.NODE_ENV === 'production') {
+    // A local sink is the only legitimate reason to send mail in clear, and a
+    // production deployment that has it set is one where every verification link
+    // on the platform is readable on the wire.
+    throw new Error(
+      'CB_SMTP_TLS=off in production would send every auth email, and every '
+      + 'verification link in one, over an unencrypted connection.');
+  }
+  const sender = createEmailSender({
+    pool,
+    provider: createSmtpProvider({
+      host: smtpHost,
+      port: Number(process.env.CB_SMTP_PORT ?? 587),
+      tls: tlsMode,
+      ...(process.env.CB_SMTP_USER ? { user: process.env.CB_SMTP_USER } : {}),
+      ...(process.env.CB_SMTP_PASSWORD ? { password: process.env.CB_SMTP_PASSWORD } : {}),
+    }),
+    from: process.env.CB_MAIL_FROM ?? 'auth@mail.corebase.co',
+    onDeadLetter: (data, error) => log('error', 'auth email dead-lettered', {
+      // The person affected is a user who never got their verification mail and
+      // has no way to tell anyone, so this is the loudest line available.
+      project_ref: data.project_ref, template: data.template,
+      delivery_id: data.delivery_id, error,
+    }),
+    metrics: {
+      sent: (template) => emailSendsTotal.inc({ template, outcome: 'sent' }),
+      failed: (template, retryable) => {
+        emailSendsTotal.inc({ template, outcome: 'failed' });
+        emailFailuresTotal.inc({ template, retryable: String(retryable) });
+      },
+      deadLettered: (template) => emailSendsTotal.inc({ template, outcome: 'dead_lettered' }),
+    },
+  });
+  emailWorker = createAuthEmailWorker(redis, async (data, job) => {
+    await sender.handle(data, job.attemptsMade);
+  });
+  emailWorker.on('failed', (job, err) => log('warn', 'auth email attempt failed', {
+    id: job?.id, attempts: job?.attemptsMade, error: err.message }));
+  log('info', 'auth email sender started', { host: smtpHost, tls: tlsMode });
+} else {
+  log('warn', 'no CB_SMTP_HOST — auth emails will queue and nothing will send them');
+}
 
 // 10s locally; production runs the 5-minute reconciliation cadence of D-173
 const sweepMs = Number(process.env.CB_SWEEP_INTERVAL_MS ?? 10_000);
@@ -441,6 +507,7 @@ const shutdown = async (signal: string) => {
   if (reconcileTimer) clearTimeout(reconcileTimer);
   metricsServer.close();
   await worker.close();          // finishes in-flight work before exiting
+  if (emailWorker) await emailWorker.close();
   await redis.quit();
   await pool.end();
   process.exit(0);

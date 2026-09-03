@@ -257,3 +257,36 @@ export function startMetricsServer(port: number): Server {
   server.listen(port, '0.0.0.0');
   return server;
 }
+
+// ── auth email (P4d) ────────────────────────────────────────────────────────
+
+/**
+ * Sends, by template and outcome.
+ *
+ * `template` and not `project_ref`, deliberately. The email doc wants per-project
+ * deliverability metrics, and per-project labels on a fleet-wide counter is
+ * exactly the cardinality mistake D-146's budget exists to prevent — one series
+ * per project per template per outcome. Per-project numbers belong in
+ * `email_sends`, which is a table that can be queried and does not live in
+ * Prometheus's memory; what this answers is the platform question, which is the
+ * one that pages somebody: is our shared sending domain still working.
+ */
+export const emailSendsTotal = registry.register(new Counter({
+  name: 'corebase_email_sends_total',
+  help: 'Auth emails handled, by template and outcome (sent/failed/dead_lettered).',
+  labelNames: ['template', 'outcome'],
+}));
+
+/**
+ * Whether a failure was worth retrying.
+ *
+ * Separate from the counter above because the ratio is the signal: a rise in
+ * retryable failures is a provider or network problem, and a rise in
+ * non-retryable ones is a bug in us or bad data from a project. Same total, two
+ * completely different responses.
+ */
+export const emailFailuresTotal = registry.register(new Counter({
+  name: 'corebase_email_failures_total',
+  help: 'Auth email send failures, by template and whether they were retryable.',
+  labelNames: ['template', 'retryable'],
+}));
