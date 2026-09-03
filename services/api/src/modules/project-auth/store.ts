@@ -557,3 +557,122 @@ export async function revokeOwnSession(
     `UPDATE auth.refresh_tokens SET revoked = true WHERE session_id = $1`, [sessionId]);
   return true;
 }
+
+// ── /user (P4f, flows §7, §8, §9) ───────────────────────────────────────────
+
+/**
+ * Merge into `raw_user_meta_data`.
+ *
+ * `||` rather than a replacement, so a client that sends `{locale: 'fr'}` does not
+ * wipe the avatar URL it did not mention — which is what every client would
+ * accidentally do at some point otherwise, and the loss is silent.
+ *
+ * `raw_app_meta_data` is deliberately untouchable here. It is the
+ * service_role-writable half, and the entire reason the two columns exist
+ * separately is that this endpoint is user-writable: a user who can write
+ * `app_metadata` can grant themselves whatever a policy reads from it.
+ */
+export async function updateUserMetadata(
+  client: Client, userId: string, patch: Record<string, unknown>,
+): Promise<void> {
+  await client.query(
+    `UPDATE auth.users
+        SET raw_user_meta_data = raw_user_meta_data || $2::jsonb, updated_at = now()
+      WHERE id = $1`, [userId, JSON.stringify(patch)]);
+}
+
+/**
+ * Apply a completed email change.
+ *
+ * `email_confirmed_at = now()` because the new address has just proved itself by
+ * consuming a token sent to it. Leaving the old confirmation timestamp would
+ * assert that an address we have never mailed is confirmed.
+ *
+ * Returns false when the address was taken in the meantime, which is a real race:
+ * two users can request a change to the same address and both get their tokens.
+ * The partial unique index decides it, and the loser is told rather than 500ing.
+ */
+export async function applyEmailChange(
+  client: Client, userId: string, newEmail: string,
+): Promise<boolean> {
+  try {
+    const { rowCount } = await client.query(
+      `UPDATE auth.users
+          SET email = $2, email_confirmed_at = now(), updated_at = now()
+        WHERE id = $1 AND deleted_at IS NULL`, [userId, newEmail]);
+    return (rowCount ?? 0) > 0;
+  } catch (err) {
+    // 23505 is unique_violation. Distinguished from every other error, because
+    // "that address is already in use" is actionable and a 500 is not.
+    if ((err as { code?: string }).code === '23505') return false;
+    throw err;
+  }
+}
+
+/**
+ * The sibling token of an email change, and whether it has been spent.
+ *
+ * Flow 9's rule — the change applies only when *both* addresses have confirmed —
+ * is a question about a token other than the one just presented, so it needs its
+ * own lookup. `used_at IS NOT NULL` on the sibling is the whole condition.
+ */
+export async function siblingConsumed(
+  client: Client, userId: string, type: TokenType,
+): Promise<boolean> {
+  const { rows } = await client.query<{ used: boolean }>(
+    `SELECT (used_at IS NOT NULL) AS used FROM auth.one_time_tokens
+      WHERE user_id = $1 AND token_type = $2`, [userId, type]);
+  return rows[0]?.used ?? false;
+}
+
+/** The proposed address for a pending change, from either token's `relates_to`. */
+export async function pendingEmailChange(
+  client: Client, userId: string,
+): Promise<string | undefined> {
+  const { rows } = await client.query<{ relates_to: string | null }>(
+    `SELECT relates_to FROM auth.one_time_tokens
+      WHERE user_id = $1 AND token_type IN ('email_change_current','email_change_new')
+        AND relates_to IS NOT NULL
+      ORDER BY created_at DESC LIMIT 1`, [userId]);
+  return rows[0]?.relates_to ?? undefined;
+}
+
+/** Drop both email-change tokens, once the change is applied or abandoned. */
+export async function clearEmailChangeTokens(
+  client: Client, userId: string,
+): Promise<void> {
+  await client.query(
+    `DELETE FROM auth.one_time_tokens
+      WHERE user_id = $1 AND token_type IN ('email_change_current','email_change_new')`,
+    [userId]);
+}
+
+/**
+ * Look a one-time token up across several types.
+ *
+ * An email-change link says `type=email_change`, and which of the two token types
+ * it is depends on which address it was sent to — the link cannot say, because the
+ * token is opaque and the recipient must not be able to tell the two apart. So the
+ * lookup is by hash across both, and the type comes back with the row.
+ */
+export async function consumeEitherToken(
+  client: Client, types: readonly TokenType[], hash: Buffer,
+): Promise<(ConsumedToken & { type: TokenType }) | undefined> {
+  const { rows } = await client.query<{
+    id: string; user_id: string; relates_to: string | null; token_type: TokenType;
+  }>(
+    `UPDATE auth.one_time_tokens t
+        SET used_at = now()
+      WHERE t.token_type = ANY($1::text[])
+        AND t.token_hash = $2
+        AND t.used_at IS NULL
+        AND t.expires_at > now()
+        AND EXISTS (SELECT 1 FROM auth.users u
+                     WHERE u.id = t.user_id AND u.deleted_at IS NULL)
+      RETURNING t.id::text AS id, t.user_id, t.relates_to, t.token_type`,
+    [types, hash]);
+  return rows[0]
+    ? { id: rows[0].id, userId: rows[0].user_id, relatesTo: rows[0].relates_to,
+        type: rows[0].token_type }
+    : undefined;
+}

@@ -45,6 +45,19 @@ export interface AccessTokenArgs {
   sessionId: string;
   ttlSeconds?: number;
   now?: number;
+  /**
+   * How this token's holder proved who they are, in OIDC's `amr` sense (P4f).
+   *
+   * The claim table reserves `amr` for exactly this and notes that adding claims
+   * is non-breaking, so it is not an invention. Only one value is emitted today:
+   * `recovery`, on the token minted by a recovery link, which is what lets
+   * `PUT /user` accept a new password without the old one.
+   *
+   * Deliberately **not carried across a refresh** — see `PUT /user` for why the
+   * capability is meant to expire with the token that carried it rather than
+   * living for the session's whole 30 days.
+   */
+  amr?: readonly string[] | undefined;
 }
 
 export function mintAccessToken(a: AccessTokenArgs): { token: string; expiresIn: number } {
@@ -63,6 +76,7 @@ export function mintAccessToken(a: AccessTokenArgs): { token: string; expiresIn:
     // Constant across refreshes, which is what makes a session revocable at all:
     // it is the only thing tying a stateless JWT to a row somebody can revoke.
     session_id: a.sessionId,
+    ...(a.amr && a.amr.length ? { amr: [...a.amr] } : {}),
     iat,
     exp: iat + ttl,
   };

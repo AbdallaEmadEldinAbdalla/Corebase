@@ -36,6 +36,12 @@ export interface Bearer {
   userId: string;
   sessionId: string;
   email: string | null;
+  /**
+   * How the holder proved who they are (OIDC `amr`, P4f). Empty for an ordinary
+   * login; `['recovery']` on the token a recovery link minted, which is what lets
+   * `PUT /user` accept a new password without the old one.
+   */
+  amr: readonly string[];
 }
 
 const unauthenticated = (message: string) =>
@@ -76,9 +82,14 @@ export function verifyBearer(ctx: ProjectContext, header: string | undefined): B
   if (role !== 'authenticated' || !sub || !sessionId) {
     throw unauthenticated('That is not a user access token.');
   }
+  const amr = claims['amr'];
   return {
     userId: sub, sessionId,
     email: typeof claims['email'] === 'string' ? claims['email'] : null,
+    // Only strings, and only from a verified token. The array arrives inside a
+    // signature we just checked, so it cannot be forged — but a malformed value
+    // must not become a truthy capability, so it is filtered rather than cast.
+    amr: Array.isArray(amr) ? amr.filter((v): v is string => typeof v === 'string') : [],
   };
 }
 

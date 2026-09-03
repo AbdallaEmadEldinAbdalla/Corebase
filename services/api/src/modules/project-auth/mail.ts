@@ -35,7 +35,18 @@ export type AuthEmail =
    * whose owner already has an account, so it discloses nothing new to whoever
    * triggered it.
    */
-  | 'account_exists_notice';
+  | 'account_exists_notice'
+  /**
+   * The tripwire (flows §7 step 5, §8 step 3). It is what tells the real owner
+   * that somebody else completed a reset on their account, so it goes out on both
+   * the reset and the ordinary-change path and is the one notice a user cannot
+   * opt out of.
+   */
+  | 'password_changed_notice'
+  /** Sent to the address being *left*, which is the half that proves consent. */
+  | 'email_change_current'
+  /** Sent to the address being adopted, which proves it is real and theirs. */
+  | 'email_change_new';
 
 export interface AuthEmailJob {
   /** The delivery id, and the reason it is the token id — see above. */

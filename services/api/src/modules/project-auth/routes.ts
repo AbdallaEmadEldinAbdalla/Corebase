@@ -24,6 +24,8 @@ import {
   issueOneTimeToken, consumeOneTimeToken, markEmailConfirmed,
   findRefreshToken, rotateRefreshToken, findChildToken, graceRotate,
   revokeSessionFamily, revokeUserSessions, listSessions, revokeOwnSession,
+  updateUserMetadata, applyEmailChange, siblingConsumed, pendingEmailChange,
+  clearEmailChangeTokens, consumeEitherToken,
   type TokenType, type AuthUser,
 } from './store.ts';
 import { resolveRedirect, withTokenFragment } from './redirect.ts';
@@ -404,6 +406,71 @@ export function registerProjectAuth(app: FastifyInstance, deps: ProjectAuthDeps)
     recovery: 'recovery', magiclink: 'magic_link', magic_link: 'magic_link',
   };
 
+  /**
+   * Flow 9 steps 2–3 — consume one side of an email change.
+   *
+   * Its own path rather than a case in `doVerify`, because it differs in the two
+   * ways that matter. It issues **no session**: the click may come from a mail
+   * client on a device that was never logged in, and handing that device a
+   * session for an account whose address is still changing would be a login
+   * granted by a link the account owner did not necessarily intend as one. And
+   * the *first* of the two confirmations does not complete anything, so there is
+   * an outcome — "waiting for the other address" — that no other verify has.
+   */
+  async function verifyEmailChange(
+    req: FastifyRequest, token: string, redirectTo: string | undefined,
+  ): Promise<{ ctx: ProjectContext; redirect: string | null; state:
+      'applied' | 'pending' | 'conflict' | 'invalid' }> {
+    const ctx = await project(deps, req);
+    const hit = await deps.verifyIpLimiter.hit(projKey(ctx, 'verify-ip', req.ip ?? 'unknown'));
+    if (!hit.allowed) throw tooMany(hit.retryAfterSeconds);
+    const { url: redirect } = resolveRedirect(ctx.config, redirectTo);
+    const meta = clientMeta(req);
+
+    return withProjectDb(ctx, async (db) => {
+      // Across both types: the link says `email_change` and cannot say which
+      // side it is, because the token is opaque and the recipient must not be
+      // able to tell the two apart.
+      const consumed = await consumeEitherToken(
+        db, ['email_change_current', 'email_change_new'], oneTimeHash(token));
+      if (!consumed || !consumed.relatesTo) {
+        await writeAuthAudit(db, { action: 'verify_failed_email_change', ...meta });
+        return { ctx, redirect, state: 'invalid' as const };
+      }
+
+      const other: TokenType = consumed.type === 'email_change_new'
+        ? 'email_change_current' : 'email_change_new';
+      const needsBoth = ctx.config.emailChangeConfirm === 'double';
+      if (needsBoth && !(await siblingConsumed(db, consumed.userId, other))) {
+        await writeAuthAudit(db, {
+          action: 'email_change_half_confirmed', userId: consumed.userId, ...meta,
+          payload: { side: consumed.type } });
+        return { ctx, redirect, state: 'pending' as const };
+      }
+
+      const applied = await applyEmailChange(db, consumed.userId, consumed.relatesTo);
+      if (!applied) {
+        // Two users can request a change to the same address and both receive
+        // their tokens; the partial unique index decides it and the loser is told
+        // rather than 500'd. Tokens are cleared so they can start again.
+        await clearEmailChangeTokens(db, consumed.userId);
+        await writeAuthAudit(db, {
+          action: 'email_change_conflict', userId: consumed.userId, ...meta,
+          payload: { new_email: consumed.relatesTo } });
+        return { ctx, redirect, state: 'conflict' as const };
+      }
+      await clearEmailChangeTokens(db, consumed.userId);
+      // Every other session dies: the address a session was established under is
+      // no longer the account's, and if the change was made from a hijacked
+      // session the owner's own sessions going with it is the correct outcome.
+      await revokeUserSessions(db, consumed.userId, 'global', '00000000-0000-0000-0000-000000000000');
+      await writeAuthAudit(db, {
+        action: 'email_changed', userId: consumed.userId, ...meta,
+        payload: { new_email: consumed.relatesTo } });
+      return { ctx, redirect, state: 'applied' as const };
+    });
+  }
+
   async function doVerify(
     req: FastifyRequest, token: string, typeParam: string,
     redirectTo: string | undefined,
@@ -457,7 +524,12 @@ export function registerProjectAuth(app: FastifyInstance, deps: ProjectAuthDeps)
       // after they proved it means their password reset ends at a login that
       // refuses them for `email_not_confirmed`.
       await markEmailConfirmed(db, user.id);
-      const session = await issueSession(db, ctx, user.id, user.email, meta);
+      // `amr: ['recovery']` on this token and no other (P4f). It is what lets
+      // `PUT /user` take a new password with no `current_password`, and it lives
+      // only as long as this token — a refresh does not carry it forward, so the
+      // capability expires in an hour at most rather than lasting the session.
+      const session = await issueSession(db, ctx, user.id, user.email, meta,
+        type === 'recovery' ? ['recovery'] : undefined);
       await markSignedIn(db, user.id);
       await writeAuthAudit(db, {
         action: `verify_${type}`, userId: user.id, ...meta,
@@ -473,6 +545,22 @@ export function registerProjectAuth(app: FastifyInstance, deps: ProjectAuthDeps)
     if (!q['token'] || !q['type']) {
       throw new ApiError(400, AUTH_ERROR_CODES.VALIDATION_FAILED,
         'A verification link needs `token` and `type`.');
+    }
+    if (q['type'] === 'email_change') {
+      const out = await verifyEmailChange(req, q['token'], q['redirect_to']);
+      if (!out.redirect) {
+        return emailChangeBody(reply, out.state, req);
+      }
+      // No tokens in the fragment: this path issues no session, so there is
+      // nothing to hand over — only which of the four things happened.
+      return reply.status(302)
+        .header('location', withTokenFragment(out.redirect, {
+          type: 'email_change',
+          ...(out.state === 'applied' ? { email_change: 'complete' }
+            : out.state === 'pending' ? { email_change: 'pending' }
+            : { error: out.state === 'conflict' ? 'email_exists' : 'invalid_token' }),
+        }))
+        .send();
     }
     const out = await doVerify(req, q['token'], q['type'], q['redirect_to']);
     if (!out.redirect) {
@@ -511,6 +599,10 @@ export function registerProjectAuth(app: FastifyInstance, deps: ProjectAuthDeps)
     if (!token || !type) {
       throw new ApiError(400, AUTH_ERROR_CODES.VALIDATION_FAILED,
         'Provide `token` and `type`.');
+    }
+    if (type === 'email_change') {
+      const out = await verifyEmailChange(req, token, undefined);
+      return emailChangeBody(reply, out.state, req);
     }
     const out = await doVerify(req, token, type, undefined);
     if (!out.ok) {
@@ -891,6 +983,238 @@ export function registerProjectAuth(app: FastifyInstance, deps: ProjectAuthDeps)
       return reply.status(204).send();
     });
   });
+
+  /**
+   * `GET /auth/v1/user` — the bearer's own user object.
+   *
+   * The same allowlist every other endpoint returns (`publicUser`), read fresh
+   * from the database rather than reconstructed from the token's claims. The
+   * difference matters: a token issued an hour ago carries the email the user had
+   * an hour ago, and this endpoint exists precisely so a client can find out what
+   * changed.
+   */
+  app.get('/auth/v1/user', async (req, reply) => {
+    const ctx = await project(deps, req);
+    const bearer = bearerFrom(req, ctx);
+    return withProjectDb(ctx, async (db) => {
+      await requireLiveSession(db, bearer);
+      const user = await findUserById(db, bearer.userId);
+      // The session was live a statement ago, so a missing user means it was
+      // deleted between the two. 401 rather than 404: the caller's credential is
+      // what stopped being valid.
+      if (!user) throw new ApiError(401, AUTH_ERROR_CODES.UNAUTHORIZED,
+        'That access token is not valid.');
+      const pending = await pendingEmailChange(db, user.id);
+      return reply.status(200).send({
+        ...publicUser(user),
+        // Surfaced because a client otherwise cannot tell that a change is
+        // half-confirmed, and "I clicked the link and nothing happened" is the
+        // support ticket that follows.
+        new_email: pending ?? null,
+      });
+    });
+  });
+
+  /**
+   * `PUT /auth/v1/user` — password, email, or metadata (flows §7, §8, §9).
+   *
+   * ## The `current_password` rule is the security content
+   *
+   * Changing a password requires the current one (Flow 8 step 2), and the reason
+   * is narrow and important: **a stolen access token alone must not be
+   * convertible into permanent account ownership.** An attacker with a token
+   * lifted from `localStorage` has at most an hour; one who can set the password
+   * has forever.
+   *
+   * The single exception is a token minted by a recovery link, which carries
+   * `amr: ["recovery"]` — that holder has proved control of the mailbox, which is
+   * the same proof a password would give. It is checked on the **claim**, not on
+   * the session, and that is deliberate: the capability dies with the token that
+   * carried it (an hour at most, and not across a refresh) rather than lasting the
+   * session's thirty days. A recovery link should be spent in seconds.
+   *
+   * ## Why an email change is not applied here
+   *
+   * `PUT /user {email}` only *proposes* one. Flow 9's double confirmation is the
+   * whole mechanism, and applying the change on request would be the bug it exists
+   * to prevent.
+   */
+  app.put('/auth/v1/user', async (req, reply) => {
+    const ctx = await project(deps, req);
+    const bearer = bearerFrom(req, ctx);
+    const parsed = z.object({
+      password: z.string().optional(),
+      current_password: z.string().optional(),
+      email: emailSchema.optional(),
+      /** Merged into `raw_user_meta_data`. Never trusted for authorization. */
+      data: z.record(z.unknown()).optional(),
+      redirect_to: z.string().max(2048).optional(),
+    }).strict().safeParse(req.body ?? {});
+    if (!parsed.success) {
+      throw new ApiError(400, AUTH_ERROR_CODES.VALIDATION_FAILED,
+        'Send some of `password`, `email` or `data`.');
+    }
+    const body = parsed.data;
+    if (!body.password && !body.email && !body.data) {
+      throw new ApiError(400, AUTH_ERROR_CODES.VALIDATION_FAILED,
+        'Nothing to change: send `password`, `email` or `data`.');
+    }
+    const meta = clientMeta(req);
+
+    return withProjectDb(ctx, async (db) => {
+      await requireLiveSession(db, bearer);
+      const user = await findUserById(db, bearer.userId);
+      if (!user) throw new ApiError(401, AUTH_ERROR_CODES.UNAUTHORIZED,
+        'That access token is not valid.');
+
+      if (body.password) {
+        const viaRecovery = bearer.amr.includes('recovery');
+        if (!viaRecovery) {
+          if (!body.current_password) {
+            throw new ApiError(400, AUTH_ERROR_CODES.VALIDATION_FAILED,
+              'Send `current_password` to change your password.');
+          }
+          // Timing-safe, and against the decoy when the account somehow has no
+          // password at all — so an OAuth-only user (once those exist) cannot be
+          // distinguished from one whose password was simply wrong.
+          const ok = user.encrypted_password
+            ? (await verifyPassword(body.current_password, user.encrypted_password)).ok
+            : (await burnVerify(body.current_password), false);
+          if (!ok) {
+            await writeAuthAudit(db, {
+              action: 'password_change_failed', userId: user.id, ...meta });
+            throw badCredentials();
+          }
+        }
+
+        const min = Math.max(MIN_END_USER_PASSWORD_LENGTH, ctx.config.passwordMinLength);
+        let hash: string;
+        try {
+          hash = await hashPassword(body.password, min);
+        } catch (err) {
+          if (err instanceof PasswordFormatError) {
+            // Flows §7 notes the cost honestly: on the recovery path the token
+            // is already spent, so a rejected new password means starting the
+            // reset again. Acceptable and rare — and far better than accepting a
+            // password below the project's own floor.
+            throw new ApiError(422, AUTH_ERROR_CODES.WEAK_PASSWORD, (err as Error).message);
+          }
+          throw err;
+        }
+        await updatePasswordHash(db, user.id, hash);
+
+        // Every other session dies. A reset usually means "someone may have my
+        // password", and a change usually means the same suspicion — so every
+        // existing session is presumed hostile. The current one survives, or the
+        // user is logged out by their own security action, which is the fastest
+        // way to teach people not to change their password.
+        const revoked = await revokeUserSessions(db, user.id, 'others', bearer.sessionId);
+        await writeAuthAudit(db, {
+          action: viaRecovery ? 'password_reset' : 'password_changed',
+          userId: user.id, ...meta,
+          payload: { sessions_revoked: revoked, via_recovery: viaRecovery } });
+
+        // The tripwire. This is the mail that tells the real owner an attacker
+        // completed a reset, so it goes out on *both* paths and it is the one
+        // notice a user cannot opt out of.
+        if (user.email) {
+          await mailer.enqueue({
+            deliveryId: `pwchanged_${user.id}_${Date.now()}`,
+            projectId: ctx.projectId, projectRef: ctx.ref,
+            email: 'password_changed_notice', to: user.email, variables: {},
+          });
+        }
+      }
+
+      if (body.email) {
+        if (user.email && body.email.toLowerCase() === user.email.toLowerCase()) {
+          throw new ApiError(422, AUTH_ERROR_CODES.VALIDATION_FAILED,
+            'That is already your email address.');
+        }
+        // Deliberately *not* checked for availability here. Answering "that
+        // address is taken" to a logged-in user turns `PUT /user` into the
+        // enumeration oracle that signup and `/recover` were carefully built to
+        // avoid — with the same effort and one account. The collision is caught
+        // when the change is applied, by the unique index.
+        await proposeEmailChange(db, ctx, user, body.email, body.redirect_to, meta);
+      }
+
+      if (body.data) {
+        // `raw_app_meta_data` is untouchable from here by construction: the store
+        // function only writes the user half. A user who could write the app half
+        // could grant themselves whatever a policy reads from it.
+        await updateUserMetadata(db, user.id, body.data);
+        await writeAuthAudit(db, {
+          action: 'user_metadata_updated', userId: user.id, ...meta,
+          payload: { keys: Object.keys(body.data) } });
+      }
+
+      const fresh = (await findUserById(db, user.id)) ?? user;
+      const pending = await pendingEmailChange(db, user.id);
+      return reply.status(body.email && !body.password && !body.data ? 202 : 200).send({
+        ...publicUser(fresh), new_email: pending ?? null });
+    });
+  });
+
+  /**
+   * Propose an email change: two tokens, two mails, one pending state.
+   *
+   * The old address gets `email_change_current` and the new one
+   * `email_change_new`, both 24 h and single-use, and the *new* address is carried
+   * in `relates_to` rather than applied — so until both are spent the account's
+   * email is unchanged and a half-finished change leaves nothing broken.
+   *
+   * `new_only` skips the old-address token entirely rather than issuing one and
+   * ignoring it: an unspendable token in the table would make `siblingConsumed`
+   * permanently false and the change could never complete.
+   */
+  async function proposeEmailChange(
+    db: Client, ctx: ProjectContext, user: AuthUser, newEmail: string,
+    redirectTo: string | undefined,
+    meta: { userAgent?: string | undefined; ip?: string | undefined },
+  ): Promise<void> {
+    const { url } = resolveRedirect(ctx.config, redirectTo);
+    const double = ctx.config.emailChangeConfirm === 'double';
+
+    const toNew = newOneTimeToken();
+    await issueOneTimeToken(db, {
+      userId: user.id, type: 'email_change_new', hash: toNew.hash, relatesTo: newEmail });
+    await mailer.enqueue({
+      deliveryId: `emailchange_new_${user.id}`,
+      projectId: ctx.projectId, projectRef: ctx.ref,
+      email: 'email_change_new', to: newEmail,
+      variables: {
+        action_url: actionLink(ctx, toNew.token, 'email_change', url ?? undefined),
+        new_email: newEmail,
+      },
+    });
+
+    if (double && user.email) {
+      const toOld = newOneTimeToken();
+      await issueOneTimeToken(db, {
+        userId: user.id, type: 'email_change_current', hash: toOld.hash,
+        relatesTo: newEmail });
+      await mailer.enqueue({
+        deliveryId: `emailchange_current_${user.id}`,
+        projectId: ctx.projectId, projectRef: ctx.ref,
+        email: 'email_change_current', to: user.email,
+        variables: {
+          action_url: actionLink(ctx, toOld.token, 'email_change', url ?? undefined),
+          new_email: newEmail,
+        },
+      });
+    } else {
+      // A previous double-confirmation attempt may have left one; it must not
+      // block a change requested under the relaxed policy.
+      await db.query(
+        `DELETE FROM auth.one_time_tokens
+          WHERE user_id = $1 AND token_type = 'email_change_current'`, [user.id]);
+    }
+
+    await writeAuthAudit(db, {
+      action: 'email_change_requested', userId: user.id, ...meta,
+      payload: { new_email: newEmail, confirm: ctx.config.emailChangeConfirm } });
+  }
 }
 
 /**
@@ -906,11 +1230,13 @@ async function issueSession(
   db: Parameters<typeof openSession>[0], ctx: ProjectContext,
   userId: string, email: string | null,
   meta: { userAgent?: string | undefined; ip?: string | undefined },
+  amr?: readonly string[] | undefined,
 ) {
   const refresh = newRefreshToken();
   const { sessionId } = await openSession(db, { userId, refreshHash: refresh.hash, ...meta });
   const access = mintAccessToken({
     ctx, userId, email, sessionId, ttlSeconds: ctx.config.accessTtlSeconds,
+    ...(amr ? { amr } : {}),
   });
   return {
     access_token: access.token,
@@ -919,6 +1245,39 @@ async function issueSession(
     expires_at: Math.floor(Date.now() / 1000) + access.expiresIn,
     refresh_token: refresh.token,
   };
+}
+
+/**
+ * The four outcomes of an email-change confirmation, as one JSON shape.
+ *
+ * `pending` is a 200 and not an error: the user did exactly what the link asked
+ * and the change is genuinely half-done. Reporting it as a failure is how a
+ * correctly-working double confirmation gets mistaken for a broken one — which is
+ * the support ticket that makes a project switch to `new_only` and lose the
+ * protection.
+ */
+function emailChangeBody(
+  reply: FastifyReply, state: 'applied' | 'pending' | 'conflict' | 'invalid',
+  req: FastifyRequest,
+) {
+  if (state === 'applied') return reply.status(200).send({ email_change: 'complete' });
+  if (state === 'pending') {
+    return reply.status(200).send({
+      email_change: 'pending',
+      message: 'Confirmed. The change completes once the other address confirms too.',
+    });
+  }
+  const requestId = String(reply.getHeader('x-request-id') ?? req.id);
+  if (state === 'conflict') {
+    return reply.status(409).send({
+      error: { code: AUTH_ERROR_CODES.VALIDATION_FAILED,
+               message: 'That email address is already in use.', request_id: requestId },
+    });
+  }
+  return reply.status(401).send({
+    error: { code: AUTH_ERROR_CODES.INVALID_TOKEN,
+             message: 'This link is invalid or has already been used.', request_id: requestId },
+  });
 }
 
 /**
