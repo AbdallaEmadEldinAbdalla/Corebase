@@ -306,6 +306,9 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       const id = place.container_id;
       const deadline = Date.now() + (deps.healthTimeoutMs ?? 60_000);
       let attempts = 0;
+      // Kept so the timeout message can say why the probe never ran, rather than
+      // reporting a silent count of attempts that all failed identically.
+      let probeError: string | undefined;
       for (;;) {
         attempts++;
         // pg_isready inside the container, over the Engine exec API — the worker
@@ -318,8 +321,31 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
         // socket, which the entrypoint's init-phase server also answers on — so
         // the gate passed while the real server had not started listening, and
         // the next step got ECONNRESET on the published port.
-        const { exitCode } = await docker.exec(id,
-          ['pg_isready', '-h', '127.0.0.1', '-p', '5432', '-U', 'postgres', '-d', 'postgres', '-q']);
+        //
+        // The exec is wrapped because **`exec` against a container that has
+        // already exited throws** rather than returning a non-zero code: the
+        // Engine answers `POST /exec/<id>/start` with "container is not
+        // running". Unwrapped, that raw API error escaped this loop and became
+        // the step's failure — so a container whose entrypoint refused to
+        // initialise reported `POST /exec/673c33c5…` instead of "container
+        // exited while starting", and an operator learned nothing.
+        //
+        // It surfaced only in CI, because the timing decides it: on a slower
+        // machine the probe wins the race and returns non-zero, and on a faster
+        // one the container is gone first. A failure mode that depends on which
+        // of two things happens first is one that will eventually happen in
+        // production, so the fix belongs here and not in the test.
+        //
+        // A throw is treated exactly as a failed probe, which lets the inspect
+        // below do the job the comment above already assigned it: decide whether
+        // the container cannot exec *yet* or cannot exec *ever*.
+        let exitCode: number | null = null;
+        try {
+          ({ exitCode } = await docker.exec(id,
+            ['pg_isready', '-h', '127.0.0.1', '-p', '5432', '-U', 'postgres', '-d', 'postgres', '-q']));
+        } catch (err) {
+          probeError = (err as Error).message;
+        }
         if (exitCode === 0) {
           // Only now is a restart policy safe to attach (D-184).
           await docker.setRestartPolicy(id, 'unless-stopped');
@@ -342,7 +368,11 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
         if (Date.now() > deadline) {
           throw new Error(
             `database did not accept connections within ${deps.healthTimeoutMs ?? 60_000}ms ` +
-            `(container ${state.State.Status}, ${attempts} probes)`);
+            `(container ${state.State.Status}, ${attempts} probes)` +
+            // The last probe error, when there was one. A timeout whose probes
+            // never actually ran is a different problem from one whose probes ran
+            // and said no, and the message has to distinguish them.
+            (probeError ? `; last probe error: ${probeError}` : ''));
         }
         await new Promise((r) => setTimeout(r, 500));
       }
