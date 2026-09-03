@@ -48,13 +48,25 @@ const unb64 = (s: string) => Buffer.from(s, 'base64url');
 
 /** Minimum length only. Composition rules push users toward `Passw0rd!`. */
 export const MIN_PASSWORD_LENGTH = 12;
+/**
+ * The minimum for a *customer's* end users (P4b, auth architecture §password
+ * policy): eight, following NIST 800-63B, with no composition rules.
+ *
+ * Lower than the platform's twelve on purpose, and the asymmetry is the point. A
+ * platform account can create and destroy databases across an organisation; an end
+ * user of somebody's app can do whatever that app lets them. We may hold our own
+ * operators to a longer minimum, and imposing it on every customer's sign-up form
+ * would be us making a product decision inside their product — the doc allows a
+ * project to configure its own minimum up to 32 for exactly that reason.
+ */
+export const MIN_END_USER_PASSWORD_LENGTH = 8;
 /** scrypt hashes its input, so long passwords are cheap — but not unbounded. */
 export const MAX_PASSWORD_LENGTH = 1024;
 
-export function validatePassword(password: string): void {
-  if (password.length < MIN_PASSWORD_LENGTH) {
+export function validatePassword(password: string, min = MIN_PASSWORD_LENGTH): void {
+  if (password.length < min) {
     throw new PasswordFormatError(
-      `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+      `Password must be at least ${min} characters.`);
   }
   if (password.length > MAX_PASSWORD_LENGTH) {
     // A 10 MB "password" is a denial-of-service dressed as a credential.
@@ -63,8 +75,10 @@ export function validatePassword(password: string): void {
   }
 }
 
-export async function hashPassword(password: string): Promise<string> {
-  validatePassword(password);
+export async function hashPassword(
+  password: string, min = MIN_PASSWORD_LENGTH,
+): Promise<string> {
+  validatePassword(password, min);
   const salt = randomBytes(SALT_BYTES);
   const key = await scrypt(normalize(password), salt, KEY_BYTES, { ...SCRYPT_PARAMS, maxmem: MAXMEM });
   const { N, r, p } = SCRYPT_PARAMS;

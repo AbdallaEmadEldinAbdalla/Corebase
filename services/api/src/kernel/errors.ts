@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { ERROR_CODES, type ErrorCode } from '@corebase/types';
+import { ERROR_CODES, type ErrorCode, type AuthErrorCode } from '@corebase/types';
 
 /** Thrown by modules; the kernel renders it into the D-032 envelope. */
 export class ApiError extends Error {
@@ -8,9 +8,13 @@ export class ApiError extends Error {
   // properties need a real transform. Vitest transpiles and so hides this —
   // the running service would fail to boot.
   readonly statusCode: number;
-  readonly code: ErrorCode;
+  // Widened for the data-plane auth API, whose codes are lowercase and
+  // client-matched (AUTH_ERROR_CODES, D-317). One error class rather than two, so
+  // both surfaces render through the same D-032 envelope and the same handler —
+  // a second handler is a second place for an internal message to leak out of.
+  readonly code: ErrorCode | AuthErrorCode;
 
-  constructor(statusCode: number, code: ErrorCode, message: string) {
+  constructor(statusCode: number, code: ErrorCode | AuthErrorCode, message: string) {
     super(message);
     this.name = 'ApiError';
     this.statusCode = statusCode;

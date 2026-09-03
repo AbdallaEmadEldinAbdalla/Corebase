@@ -4,6 +4,7 @@ export {
 } from './envelope.ts';
 export {
   hashPassword, verifyPassword, validatePassword, burnVerify, decoyHash,
-  SCRYPT_PARAMS, MIN_PASSWORD_LENGTH, MAX_PASSWORD_LENGTH, PasswordFormatError,
+  SCRYPT_PARAMS, MIN_PASSWORD_LENGTH, MIN_END_USER_PASSWORD_LENGTH,
+  MAX_PASSWORD_LENGTH, PasswordFormatError,
   type VerifyResult,
 } from './password.ts';

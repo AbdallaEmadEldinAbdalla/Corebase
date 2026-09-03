@@ -87,6 +87,39 @@ export const ERROR_CODES = {
 } as const;
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
 
+/**
+ * Error codes for the **data-plane** auth API at `/auth/v1/*` (P4b).
+ *
+ * Lowercase, unlike every code above, and that is not an inconsistency to tidy
+ * up: the control plane's codes are ours to name, while these are matched by
+ * client code — a supabase-js app branches on `error.code === 'invalid_credentials'`
+ * to decide whether to show "wrong password" or "try again later". Renaming them
+ * to fit our house style would mean every ported app's error handling silently
+ * falls through to the generic branch, which is the one failure mode a
+ * compatibility surface exists to avoid. See D-317.
+ *
+ * The uniformity within the set matters more than the names: `INVALID_CREDENTIALS`
+ * is returned for a wrong password, an unknown email *and* a banned user, because
+ * distinguishing them is an enumeration oracle (flows §3).
+ */
+export const AUTH_ERROR_CODES = {
+  VALIDATION_FAILED: 'validation_failed',
+  /** Wrong password, no such user, or banned — deliberately indistinguishable. */
+  INVALID_CREDENTIALS: 'invalid_credentials',
+  /** Only ever returned when the password was *correct*, so it reveals nothing. */
+  EMAIL_NOT_CONFIRMED: 'email_not_confirmed',
+  WEAK_PASSWORD: 'weak_password',
+  OVER_RATE_LIMIT: 'over_rate_limit',
+  /** A one-time token that is unknown, spent or expired — one code for all three. */
+  INVALID_TOKEN: 'invalid_token',
+  /** Any refresh-token failure (D-112). */
+  INVALID_GRANT: 'invalid_grant',
+  UNAUTHORIZED: 'unauthorized',
+  UNAVAILABLE: 'unavailable',
+  INTERNAL: 'internal_error',
+} as const;
+export type AuthErrorCode = (typeof AUTH_ERROR_CODES)[keyof typeof AUTH_ERROR_CODES];
+
 /** Job payloads consumed by services/worker (two-phase enqueue, D-067). */
 export const ProvisionProjectJob = z.object({
   kind: z.literal('provision_project'),
