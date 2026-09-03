@@ -2855,6 +2855,18 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   without a full restore (backups §7's last bullet) — is not scheduled. The
   restore-based verification is the stronger of the two and is the one the criterion
   names; the cheap one is still worth having.
+- **Provisioning a project per test is now the integration lane's binding
+  constraint, and it stopped being merely slow.** `project-auth.e2e.test.ts` grew
+  to 63 tests across P4b–P4f, each standing up a real Postgres container at ~6 s of
+  `initdb` and health-gating — about seven minutes for one file. Vitest shards by
+  *file*, so the slowest file sets the floor for whichever shard holds it, and on
+  `b2bbcb1` that shard was **cancelled at 20m32s** having never failed a test. The
+  immediate fix was arithmetic — six shards instead of four, and a 35-minute job
+  timeout — and the durable one is not: most of these tests need a clean `auth`
+  schema, not a private database, so a project shared across a describe block with
+  `truncate auth.users cascade` between tests would remove almost all of the cost.
+  The P3d suite has the same shape (a source project per test, four provisions)
+  and the same fix.
 - The P3d suite provisions a source per test, which makes it slow and made it
   unfinishable on a loaded machine. Sharing one provisioned source across the file
   would cut four provisions.

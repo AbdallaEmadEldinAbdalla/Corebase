@@ -73,13 +73,24 @@ jobs:
     # this lane's last two failures were both caused by exactly that kind of drift.
     name: integration (${{ matrix.lane }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 35, raised from 20 after a shard was **cancelled** rather than failed: it was
+    # still making progress at 20m32s and got killed, which reads in the UI like a
+    # broken suite and is not one. 20 was right for the arithmetic above and stopped
+    # being right when Phase 4 added ~65 tests to a single file — and a *file* is
+    # the sharder's smallest unit, so the slowest file sets the floor for whichever
+    # shard holds it. The durable fix is to stop provisioning a project per test
+    # (STATUS §8); this is the number being right-sized, not the problem being
+    # papered over.
+    timeout-minutes: 35
     strategy:
-      # Every shard runs even when one fails: with four of them, stopping the
-      # others turns "one suite is broken" into "some unknown subset is broken".
+      # Every shard runs even when one fails: stopping the others turns "one suite
+      # is broken" into "some unknown subset is broken".
       fail-fast: false
       matrix:
-        lane: [worker-1, worker-2, worker-3, worker-4, api]
+        # Six, not four. More shards do not make the slowest *file* faster, but
+        # they stop it sharing a shard with three other slow ones — which is what
+        # actually blew the budget.
+        lane: [worker-1, worker-2, worker-3, worker-4, worker-5, worker-6, api]
     steps:
       - uses: actions/checkout@v7
       # No `version` here on purpose: package.json's `packageManager` field is
@@ -186,12 +197,23 @@ jobs:
       - name: run this lane
         run: |
           LANE='${{ matrix.lane }}'
+          # Declared once. The matrix above and the divisor here have to agree, and
+          # they are six lines apart in a file nobody reads top to bottom — a
+          # mismatch would silently never run a slice of the suite, which is the
+          # exact failure `--shard` was chosen to make impossible.
+          WORKER_SHARDS=6
+          matrix_workers=$(grep -o 'worker-[0-9]' .github/workflows/ci.yml | sort -u | wc -l | tr -d ' ')
+          if [ "$matrix_workers" != "$WORKER_SHARDS" ]; then
+            echo "The matrix has $matrix_workers worker lanes and the divisor says $WORKER_SHARDS."
+            echo "They must agree, or a slice of the suite runs in no lane at all."
+            exit 1
+          fi
           case "$LANE" in
             worker-*)
               # `--shard=i/n` over the worker's files. The pure packages are not
               # run here at all: their tests contain no `.e2e.` files, so the unit
               # lane already covers every one of them.
-              pnpm --filter @corebase/worker exec vitest run --shard="${LANE#worker-}/4"
+              pnpm --filter @corebase/worker exec vitest run --shard="${LANE#worker-}/${WORKER_SHARDS}"
               ;;
             api)
               pnpm --filter @corebase/api test
