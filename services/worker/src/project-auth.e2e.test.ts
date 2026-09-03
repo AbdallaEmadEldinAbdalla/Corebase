@@ -1687,3 +1687,476 @@ describe('P4e — logout and sessions', () => {
       await app.close();
     });
 });
+
+/**
+ * P4f — `/user`: what a logged-in person can change about themselves.
+ *
+ * The load-bearing tests here are the two refusals. A stolen access token must
+ * not be convertible into permanent account ownership, which is what
+ * `current_password` is for; and an email change must not complete on one
+ * address's word, which is what Flow 9's double confirmation is for. Both are
+ * failures that leave no trace when they are wrong.
+ */
+describe('P4f — /user', () => {
+  const password = 'correct horse battery';
+
+  async function loggedIn(p: Fixture, email = 'me@example.com') {
+    await autoconfirm(p.id);
+    const app = api();
+    const res = await app.inject({
+      method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+      payload: { email, password } });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { access_token: string; refresh_token: string };
+    return { app, email, access_token: body.access_token,
+             refresh_token: body.refresh_token };
+  }
+
+  const auth = (p: Fixture, token: string) =>
+    ({ apikey: p.anonKey, authorization: `Bearer ${token}` });
+
+  t('GET /user reads the database, not the token\'s claims', async () => {
+    const p = await provision();
+    const { app, access_token } = await loggedIn(p);
+    const db = await asAuthRole(p);
+    try {
+      await db.query(`update auth.users set raw_user_meta_data = '{"locale":"fr"}'::jsonb`);
+    } finally { await db.end(); }
+
+    const res = await app.inject({
+      method: 'GET', url: '/auth/v1/user', headers: auth(p, access_token) });
+    expect(res.statusCode).toBe(200);
+    // The token was minted before that update. This endpoint exists precisely so
+    // a client can find out what changed, so reconstructing from claims would
+    // make it useless.
+    expect(res.json().user_metadata).toEqual({ locale: 'fr' });
+    expect(res.json().email).toBe('me@example.com');
+    // Never the hash, on any path.
+    expect(JSON.stringify(res.json())).not.toContain('scrypt$');
+    await app.close();
+  });
+
+  t('EXIT CRITERION: changing a password needs the current one', async () => {
+    const p = await provision();
+    const { app, access_token } = await loggedIn(p);
+
+    const noCurrent = await app.inject({
+      method: 'PUT', url: '/auth/v1/user', headers: auth(p, access_token),
+      payload: { password: 'a whole new password' } });
+    expect(noCurrent.statusCode).toBe(400);
+    expect(noCurrent.json().error.code).toBe('validation_failed');
+
+    const wrongCurrent = await app.inject({
+      method: 'PUT', url: '/auth/v1/user', headers: auth(p, access_token),
+      payload: { password: 'a whole new password', current_password: 'not it' } });
+    expect(wrongCurrent.statusCode).toBe(400);
+    expect(wrongCurrent.json().error.code).toBe('invalid_credentials');
+
+    // The point of the rule: a token lifted from localStorage buys an hour. A
+    // token that can set the password buys the account forever.
+    const login = await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=password',
+      headers: { apikey: p.anonKey },
+      payload: { email: 'me@example.com', password } });
+    expect(login.statusCode).toBe(200);
+    await app.close();
+  });
+
+  t('a correct current password changes it, and kills every other session', async () => {
+    const p = await provision();
+    const { app, access_token, email } = await loggedIn(p);
+    // A second device, which must not survive.
+    const other = await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=password',
+      headers: { apikey: p.anonKey }, payload: { email, password } });
+    expect(other.statusCode).toBe(200);
+
+    const res = await app.inject({
+      method: 'PUT', url: '/auth/v1/user', headers: auth(p, access_token),
+      payload: { password: 'a whole new password', current_password: password } });
+    expect(res.statusCode).toBe(200);
+
+    // The old password is gone and the new one works.
+    expect((await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=password',
+      headers: { apikey: p.anonKey }, payload: { email, password } })).statusCode).toBe(400);
+    expect((await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=password',
+      headers: { apikey: p.anonKey },
+      payload: { email, password: 'a whole new password' } })).statusCode).toBe(200);
+
+    // Every other session is presumed hostile — a password change usually means
+    // suspicion — but the one that made the change survives, or the user is
+    // logged out by their own security action.
+    expect((await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=refresh_token',
+      headers: { apikey: p.anonKey },
+      payload: { refresh_token: other.json().refresh_token } })).statusCode).toBe(401);
+    expect((await app.inject({
+      method: 'GET', url: '/auth/v1/sessions', headers: auth(p, access_token) })).statusCode)
+      .toBe(200);
+
+    // And the tripwire mail went out on the ordinary-change path too, not just
+    // on a reset: it is what tells the real owner somebody else did this.
+    expect(app.mailer.jobs.map((j) => j.email)).toContain('password_changed_notice');
+    await app.close();
+  });
+
+  t('EXIT CRITERION: a recovery link completes a password reset without the old password',
+    async () => {
+      const p = await provision();
+      await setSite(p.id, 'https://app.example.com');
+      const { app, email } = await loggedIn(p, 'forgot@example.com');
+      app.mailer.jobs.length = 0;
+
+      await app.inject({
+        method: 'POST', url: '/auth/v1/recover', headers: { apikey: p.anonKey },
+        payload: { email } });
+      const verified = await app.inject({
+        method: 'POST', url: '/auth/v1/verify', headers: { apikey: p.anonKey },
+        payload: { token: tokenFromJob(app.mailer.jobs[0]!), type: 'recovery' } });
+      expect(verified.statusCode).toBe(200);
+
+      // The whole point of P4f: before it, this flow logged you in and could not
+      // change your credential.
+      const reset = await app.inject({
+        method: 'PUT', url: '/auth/v1/user',
+        headers: auth(p, verified.json().access_token),
+        payload: { password: 'chosen after the reset' } });
+      expect(reset.statusCode).toBe(200);
+      expect((await app.inject({
+        method: 'POST', url: '/auth/v1/token?grant_type=password',
+        headers: { apikey: p.anonKey },
+        payload: { email, password: 'chosen after the reset' } })).statusCode).toBe(200);
+
+      const db = await asAuthRole(p);
+      try {
+        const { rows } = await db.query<{ action: string }>(
+          `select action from auth.audit_log_entries where action = 'password_reset'`);
+        expect(rows).toHaveLength(1);
+      } finally { await db.end(); }
+      await app.close();
+    });
+
+  t('the recovery capability does not survive a refresh', async () => {
+    const p = await provision();
+    await setSite(p.id, 'https://app.example.com');
+    const { app, email } = await loggedIn(p, 'expiry@example.com');
+    app.mailer.jobs.length = 0;
+    await app.inject({
+      method: 'POST', url: '/auth/v1/recover', headers: { apikey: p.anonKey },
+      payload: { email } });
+    const verified = await app.inject({
+      method: 'POST', url: '/auth/v1/verify', headers: { apikey: p.anonKey },
+      payload: { token: tokenFromJob(app.mailer.jobs[0]!), type: 'recovery' } });
+
+    // Deliberately narrower than the session: the capability to set a password
+    // with no proof of the old one lives on the token the link minted, not on the
+    // session's thirty days. A recovery link is spent in seconds.
+    const refreshed = await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=refresh_token',
+      headers: { apikey: p.anonKey },
+      payload: { refresh_token: verified.json().refresh_token } });
+    expect(refreshed.statusCode).toBe(200);
+
+    const res = await app.inject({
+      method: 'PUT', url: '/auth/v1/user',
+      headers: auth(p, refreshed.json().access_token),
+      payload: { password: 'should not work' } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('validation_failed');
+    await app.close();
+  });
+
+  t('a new password below the project floor is refused, specifically', async () => {
+    const p = await provision();
+    const { app, access_token } = await loggedIn(p);
+    const res = await app.inject({
+      method: 'PUT', url: '/auth/v1/user', headers: auth(p, access_token),
+      payload: { password: 'short', current_password: password } });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error.code).toBe('weak_password');
+    await app.close();
+  });
+
+  t('metadata merges rather than replaces, and cannot reach app_metadata', async () => {
+    const p = await provision();
+    const { app, access_token } = await loggedIn(p);
+    await app.inject({
+      method: 'PUT', url: '/auth/v1/user', headers: auth(p, access_token),
+      payload: { data: { locale: 'fr', avatar: 'a.png' } } });
+    const res = await app.inject({
+      method: 'PUT', url: '/auth/v1/user', headers: auth(p, access_token),
+      payload: { data: { locale: 'de' } } });
+    // A client that sends one field must not wipe the others — the loss would be
+    // silent and every client would do it eventually.
+    expect(res.json().user_metadata).toEqual({ locale: 'de', avatar: 'a.png' });
+
+    // `raw_app_meta_data` is the service_role-writable half, and the entire
+    // reason the two columns exist separately is that this endpoint is
+    // user-writable. A user who could write it could grant themselves whatever a
+    // policy reads from it.
+    const db = await asAuthRole(p);
+    try {
+      await db.query(`update auth.users set raw_app_meta_data = '{"plan":"free"}'::jsonb`);
+    } finally { await db.end(); }
+    await app.inject({
+      method: 'PUT', url: '/auth/v1/user', headers: auth(p, access_token),
+      payload: { data: { plan: 'enterprise' } } });
+    const db2 = await asAuthRole(p);
+    try {
+      const { rows } = await db2.query<{ app: Record<string, unknown> }>(
+        `select raw_app_meta_data as app from auth.users`);
+      expect(rows[0]!.app).toEqual({ plan: 'free' });
+    } finally { await db2.end(); }
+    await app.close();
+  });
+
+  t('an unknown field is refused rather than silently ignored', async () => {
+    const p = await provision();
+    const { app, access_token } = await loggedIn(p);
+    // `.strict()`: a client sending `{email_confirm: true}` or `{role: 'admin'}`
+    // should be told it did nothing, not left believing it worked.
+    const res = await app.inject({
+      method: 'PUT', url: '/auth/v1/user', headers: auth(p, access_token),
+      payload: { role: 'service_role' } });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  t('an empty body is refused rather than answering 200 for nothing', async () => {
+    const p = await provision();
+    const { app, access_token } = await loggedIn(p);
+    const res = await app.inject({
+      method: 'PUT', url: '/auth/v1/user', headers: auth(p, access_token), payload: {} });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.message).toMatch(/Nothing to change/);
+    await app.close();
+  });
+});
+
+describe('P4f — email change', () => {
+  const password = 'correct horse battery';
+
+  async function proposing(p: Fixture, from = 'old@example.com', to = 'new@example.com') {
+    await autoconfirm(p.id);
+    await setSite(p.id, 'https://app.example.com');
+    const app = api();
+    const signup = await app.inject({
+      method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+      payload: { email: from, password } });
+    app.mailer.jobs.length = 0;
+    const res = await app.inject({
+      method: 'PUT', url: '/auth/v1/user',
+      headers: { apikey: p.anonKey, authorization: `Bearer ${signup.json().access_token}` },
+      payload: { email: to } });
+    return { app, res, from, to, session: signup.json() as Record<string, string> };
+  }
+
+  t('EXIT CRITERION: both addresses must confirm before the change applies', async () => {
+    const p = await provision();
+    const { app, res, from, to } = await proposing(p);
+    // 202: proposed, not applied. Applying it on request would be the bug the
+    // double confirmation exists to prevent.
+    expect(res.statusCode).toBe(202);
+    expect(res.json().email).toBe(from);
+    expect(res.json().new_email).toBe(to);
+
+    const jobs = app.mailer.jobs;
+    expect(jobs.map((j) => j.email).sort())
+      .toEqual(['email_change_current', 'email_change_new']);
+    const toOld = jobs.find((j) => j.to === from)!;
+    const toNew = jobs.find((j) => j.to === to)!;
+
+    // One side confirms: still not applied.
+    const first = await app.inject({
+      method: 'POST', url: '/auth/v1/verify', headers: { apikey: p.anonKey },
+      payload: { token: tokenFromJob(toNew), type: 'email_change' } });
+    expect(first.statusCode).toBe(200);
+    expect(first.json().email_change).toBe('pending');
+
+    const db = await asAuthRole(p);
+    try {
+      const { rows } = await db.query<{ email: string }>(`select email from auth.users`);
+      expect(rows[0]!.email).toBe(from);
+    } finally { await db.end(); }
+
+    // The other side confirms: now it applies.
+    const second = await app.inject({
+      method: 'POST', url: '/auth/v1/verify', headers: { apikey: p.anonKey },
+      payload: { token: tokenFromJob(toOld), type: 'email_change' } });
+    expect(second.statusCode).toBe(200);
+    expect(second.json().email_change).toBe('complete');
+
+    const db2 = await asAuthRole(p);
+    try {
+      const { rows } = await db2.query<{ email: string; confirmed: Date | null }>(
+        `select email, email_confirmed_at as confirmed from auth.users`);
+      expect(rows[0]!.email).toBe(to);
+      // The new address just proved itself; keeping the old timestamp would
+      // assert that an address we have never mailed is confirmed.
+      expect(rows[0]!.confirmed).toBeTruthy();
+      const { rows: left } = await db2.query<{ n: number }>(
+        `select count(*)::int as n from auth.one_time_tokens`);
+      expect(left[0]!.n).toBe(0);
+    } finally { await db2.end(); }
+
+    // Login works on the new address and not the old one.
+    expect((await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=password',
+      headers: { apikey: p.anonKey }, payload: { email: to, password } })).statusCode).toBe(200);
+    expect((await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=password',
+      headers: { apikey: p.anonKey }, payload: { email: from, password } })).statusCode)
+      .toBe(400);
+    await app.close();
+  });
+
+  t('the old address alone cannot complete the change', async () => {
+    const p = await provision();
+    const { app, from, to } = await proposing(p, 'solo@example.com', 'target@example.com');
+    const toOld = app.mailer.jobs.find((j) => j.to === from)!;
+    const res = await app.inject({
+      method: 'POST', url: '/auth/v1/verify', headers: { apikey: p.anonKey },
+      payload: { token: tokenFromJob(toOld), type: 'email_change' } });
+    // Confirming only the old address would let a user lock themselves onto a
+    // typo'd, unreachable new address — unrecoverable without support.
+    expect(res.json().email_change).toBe('pending');
+    const db = await asAuthRole(p);
+    try {
+      const { rows } = await db.query<{ email: string }>(`select email from auth.users`);
+      expect(rows[0]!.email).toBe(from);
+    } finally { await db.end(); }
+    void to;
+    await app.close();
+  });
+
+  t('a session revoked at the change cannot be refreshed afterwards', async () => {
+    const p = await provision();
+    const { app, from, to, session } = await proposing(p, 'sess@example.com', 'moved@example.com');
+    for (const addr of [from, to]) {
+      const job = app.mailer.jobs.find((j) => j.to === addr)!;
+      await app.inject({
+        method: 'POST', url: '/auth/v1/verify', headers: { apikey: p.anonKey },
+        payload: { token: tokenFromJob(job), type: 'email_change' } });
+    }
+    // Every session dies, including the one that requested it: if the change was
+    // made from a hijacked session, the owner's own sessions going with it is the
+    // correct outcome, and there is no way to tell the two cases apart.
+    expect((await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=refresh_token',
+      headers: { apikey: p.anonKey },
+      payload: { refresh_token: session['refresh_token'] } })).statusCode).toBe(401);
+    await app.close();
+  });
+
+  t('new_only skips the old address entirely', async () => {
+    const p = await provision();
+    await pool.query(
+      `insert into project_auth_config (project_id, autoconfirm, site_url, email_change_confirm)
+       values ($1, true, 'https://app.example.com', 'new_only')
+       on conflict (project_id) do update
+          set autoconfirm = true, site_url = 'https://app.example.com',
+              email_change_confirm = 'new_only'`, [p.id]);
+    const app = api();
+    const signup = await app.inject({
+      method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+      payload: { email: 'relaxed@example.com', password } });
+    app.mailer.jobs.length = 0;
+    await app.inject({
+      method: 'PUT', url: '/auth/v1/user',
+      headers: { apikey: p.anonKey, authorization: `Bearer ${signup.json().access_token}` },
+      payload: { email: 'quick@example.com' } });
+
+    // One mail, and no unspendable old-address token: issuing one and ignoring it
+    // would make the sibling check permanently false and the change could never
+    // complete.
+    expect(app.mailer.jobs.map((j) => j.email)).toEqual(['email_change_new']);
+    const res = await app.inject({
+      method: 'POST', url: '/auth/v1/verify', headers: { apikey: p.anonKey },
+      payload: { token: tokenFromJob(app.mailer.jobs[0]!), type: 'email_change' } });
+    expect(res.json().email_change).toBe('complete');
+    await app.close();
+  });
+
+  t('a taken address is not disclosed on request, and is caught on confirmation',
+    async () => {
+      const p = await provision();
+      await autoconfirm(p.id);
+      await setSite(p.id, 'https://app.example.com');
+      const app = api();
+      await app.inject({
+        method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+        payload: { email: 'taken@example.com', password } });
+      const mine = await app.inject({
+        method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+        payload: { email: 'mover@example.com', password } });
+      app.mailer.jobs.length = 0;
+
+      const req = await app.inject({
+        method: 'PUT', url: '/auth/v1/user',
+        headers: { apikey: p.anonKey, authorization: `Bearer ${mine.json().access_token}` },
+        payload: { email: 'taken@example.com' } });
+      // Not 409 here: answering "that address is taken" to a logged-in user turns
+      // this endpoint into the enumeration oracle signup and /recover were
+      // carefully built to avoid, with one account and no effort.
+      expect(req.statusCode).toBe(202);
+
+      for (const addr of ['mover@example.com', 'taken@example.com']) {
+        const job = app.mailer.jobs.find((j) => j.to === addr);
+        if (job) {
+          const res = await app.inject({
+            method: 'POST', url: '/auth/v1/verify', headers: { apikey: p.anonKey },
+            payload: { token: tokenFromJob(job), type: 'email_change' } });
+          // The last one lands on the conflict, which is where the unique index
+          // decides it rather than a 500.
+          if (res.statusCode === 409) {
+            expect(res.json().error.message).toMatch(/already in use/);
+          }
+        }
+      }
+      const db = await asAuthRole(p);
+      try {
+        const { rows } = await db.query<{ n: number }>(
+          `select count(*)::int as n from auth.users where lower(email) = 'taken@example.com'`);
+        expect(rows[0]!.n).toBe(1);
+      } finally { await db.end(); }
+      await app.close();
+    });
+
+  t('changing to your own address is refused', async () => {
+    const p = await provision();
+    await autoconfirm(p.id);
+    const app = api();
+    const signup = await app.inject({
+      method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+      payload: { email: 'same@example.com', password } });
+    const res = await app.inject({
+      method: 'PUT', url: '/auth/v1/user',
+      headers: { apikey: p.anonKey, authorization: `Bearer ${signup.json().access_token}` },
+      payload: { email: 'Same@Example.com' } });
+    // Case-insensitively: otherwise this issues two mails and revokes every
+    // session to change nothing.
+    expect(res.statusCode).toBe(422);
+    await app.close();
+  });
+
+  t('the GET form redirects with the outcome and no tokens', async () => {
+    const p = await provision();
+    const { app, from } = await proposing(p, 'getform@example.com', 'getnew@example.com');
+    const job = app.mailer.jobs.find((j) => j.to === from)!;
+    const res = await app.inject({
+      method: 'GET',
+      url: `/auth/v1/verify?token=${tokenFromJob(job)}&type=email_change`
+         + `&redirect_to=${encodeURIComponent('https://app.example.com')}`,
+      headers: { apikey: p.anonKey } });
+    expect(res.statusCode).toBe(302);
+    const frag = new URLSearchParams((res.headers['location'] as string).split('#')[1]);
+    expect(frag.get('email_change')).toBe('pending');
+    // This path issues no session, so there is nothing to hand over — a mail
+    // client on a device that was never logged in must not be given one.
+    expect(frag.get('access_token')).toBeNull();
+    expect(frag.get('refresh_token')).toBeNull();
+    await app.close();
+  });
+});
