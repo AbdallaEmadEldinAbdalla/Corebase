@@ -83,8 +83,17 @@ docker build -t corebase/postgres:17.5 infra/docker/postgres
 docker build -t corebase/pgbouncer:1.23 infra/docker/pgbouncer
 ./scripts/staging.sh seed-images   # push both project images onto the data node
 ./scripts/staging.sh backup-store  # bucket + TLS for the object store, and prove egress
+./scripts/staging.sh mail-sink     # the SMTP sink that stands in for the provider
 ./scripts/staging.sh verify        # 10 checks; all must pass
 ```
+
+**After Docker restarts, re-run `backup-store`.** It writes the object store's
+**container IP** into `backup-store.env`, and a restart reassigns that IP — after
+which every pgBackRest exec hangs for its full timeout trying to reach an address
+nothing answers on. The symptom is `POST /exec/… timed out` after 65 s in the
+backup and interlock suites, which looks nothing like "the object store moved".
+`./scripts/staging.sh all` does the whole sequence and is the safe thing to run
+when in doubt.
 
 Start the services, then see the whole thing work in about five seconds:
 
@@ -2391,6 +2400,59 @@ the GET form redirecting with an outcome and no tokens. Two mutations were run:
 trusting the session instead of the claim let any bearer set a password with no
 current one, and applying on first confirmation completed a change from one
 address's word.
+### CI repair — two environment-dependent tests, and a real bug behind one of them · 2 fixes + 1 new test
+
+CI had been red since P4b. Not from the auth work — all three auth suites pass on
+the runner (`project-auth.e2e` 47, `email.e2e` 10, `email-loop.e2e` 12) — but from
+two **Phase 2** tests that were green on this machine and failed on the runner.
+Both had the same shape: a branch that never executed where it was written.
+
+**`wait_healthy` was masking its own diagnosis** (**D-349**). `exec` against a
+container that has already exited *throws* rather than returning a non-zero code —
+the Engine answers `POST /exec/<id>/start` with an error — and unwrapped that
+escaped the health loop and became the step's failure. So a container whose
+entrypoint refused to initialise reported `POST /exec/673c33c5…` instead of
+"container exited while starting". The loop's own comment already gave `inspect`
+the job of deciding whether a container cannot exec *yet* or cannot exec *ever*;
+catching the throw is what lets it. This is the same failure shape as three earlier
+bugs in this repository — a diagnostic that discards what it knows — and it would
+have surfaced in production eventually, because which of the two things happens
+first is a race.
+
+**The `io.weight` assertion encoded runc's arithmetic** (**D-350**). It checked that
+the cgroup read back the literal `200` we asked for. `HostConfig.BlkioWeight` is
+cgroup v1's range (10–1000) and runc rescales it into cgroup v2's (1–10000), so
+200 reads as `default 1920`. That conversion is runc's implementation detail, not a
+contract. It now asserts the property that can actually be wrong: the applied
+weight is not cgroup's own default of 100 (what an *ignored* weight looks like) and
+sits below the middle of the range (so an inverted rescaling fails too). This is
+the second time this test has been wrong in the same way — its `if` branch only
+runs on a kernel that *has* the feature, and this one does not.
+
+**The fix that mattered could not be proven by fixing the race.** Making the test
+wait for the container to exit removes the race but not the divergence: Docker
+Desktop returns an exit code where the runner throws, so the test still passed with
+the fix reverted. So there is a second test that **injects** a `docker.exec`
+throwing exactly what the Engine throws (**D-351**), and it fails with CI's precise
+message — `POST /exec/deadbeef/start failed: 409` — when the fix is removed. A
+guard whose branch never executes on the machine where it was written is a guard
+nobody has tested.
+
+**One staging trap found while verifying, worth knowing before it costs an hour.**
+`backup-store.env` pins the object store's **container IP**, and a Docker restart
+reassigns it. Every pgBackRest exec then hangs for its full timeout trying to
+reach an address nothing answers on — six interlock tests failed with
+`POST /exec/… timed out` after 65 s each, which looks nothing like "the object
+store moved". `./scripts/staging.sh backup-store` rewrites the file and fixes it;
+it is now part of the after-a-restart sequence in §3. The production analogue does
+not exist — R2 is a stable hostname — so this is a property of the substitute
+rather than of the design.
+
+**Verification:** `docker.e2e.test.ts` and `cgroups.e2e.test.ts` 26/26 locally,
+against a stack rebuilt from scratch after Docker Desktop died again. The
+`io.weight` branch still cannot run on this kernel — CI is its only runner — so the
+new assertion was checked by hand against the exact strings the runner produced
+(`default 1920` passes, `default 100` fails).
 
 ## 5. Rules the code follows
 
@@ -2409,6 +2471,14 @@ leaves a database whose password does not exist anywhere.
 reach staging used to skip silently, and a skip looks like a pass — which is exactly
 how a BullMQ queue-name bug survived a green suite. They now throw, with the reason
 and the command that fixes it.
+
+**A branch that never runs where it was written is untested.** Both CI failures of
+Phase 4 were tests whose conditional half only executes on the *other* machine —
+one needs a kernel with `io.weight`, one needs an Engine that refuses `exec` on a
+dead container. Where the two environments genuinely differ, the test injects the
+harder case rather than waiting for it (**D-351**); where an assertion depends on
+a number some implementation produced rather than a property the mechanism
+guarantees, it asserts the property (**D-350**).
 
 **Liveness thresholds are derived, never chosen.** The orphan threshold is three
 heartbeat intervals, computed from the interval. Two independently-chosen numbers

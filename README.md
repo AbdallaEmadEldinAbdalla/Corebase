@@ -124,6 +124,14 @@ Email change needs **both** addresses to confirm, because both single-sided poli
 
 Two asymmetries that look like bugs and are not: a completed password change revokes every session *except* the one that made it, while a completed email change revokes *every* session including that one. A password change is an act of suspicion, so the session performing it is the one known to be in the right hands. An email change re-points the account's identity, and if it came from a hijacked session then the owner's sessions going too is the correct outcome — there is no way to tell the two cases apart.
 
+**On CI being red for six steps, and what it caught.** The auth work was green on the runner throughout; two *Phase 2* tests were not, and both had failed in the same way — a conditional branch that only executes on the machine you are not developing on.
+
+One was a genuine bug. `exec` against a container that has already exited *throws* rather than returning a non-zero code, and that raw Engine error escaped the health loop and became the step's failure — so a database whose entrypoint refused to initialise reported `POST /exec/673c33c5…` instead of "container exited while starting". The loop's own comment had already given `inspect` the job of deciding whether a container cannot start *yet* or cannot start *ever*; catching the throw is what lets it do that. Which of the two things happens first is a race, so this would have reached production eventually.
+
+The other was an assertion that encoded someone else's arithmetic: it checked that a cgroup read back the literal weight we asked for, but Docker's `BlkioWeight` uses cgroup v1's range and runc rescales it into cgroup v2's, so 200 legitimately reads back as 1920. It now asserts what the mechanism guarantees — the weight is not the kernel's default, which is what an ignored weight looks like — rather than what runc's rounding happens to produce.
+
+The part worth keeping: fixing the race did **not** prove the fix. This machine's Engine returns an exit code where the runner's throws, so the test still passed with the fix reverted. There is now a second test that injects an `exec` throwing exactly what the Engine throws, and it fails with CI's precise message when the fix is removed. A guard whose branch never executes where it was written is a guard nobody has tested.
+
 ## Run it
 
 ```bash
