@@ -132,6 +132,12 @@ The other was an assertion that encoded someone else's arithmetic: it checked th
 
 The part worth keeping: fixing the race did **not** prove the fix. This machine's Engine returns an exit code where the runner's throws, so the test still passed with the fix reverted. There is now a second test that injects an `exec` throwing exactly what the Engine throws, and it fails with CI's precise message when the fix is removed. A guard whose branch never executes where it was written is a guard nobody has tested.
 
+**The auth API is complete (P4g).** `/admin/users` is the thirteenth and last endpoint, and it's what makes a customer able to honour a user's deletion request at all — developer-initiated deletion is the only deletion in V1, so until now the answer was "write SQL".
+
+This surface deliberately breaks the rule every other one follows. It's authorised by the **service_role** key — the customer's own server-side credential, which can already read every row in the schema — so hiding whether a user id exists would protect nothing and would break a retrying import script that needs to tell "already gone" from "done". The corollary is that the key check is the *only* thing between the published anon key and every account on the project, so it runs first on all five routes and a test exercises all five. Disabling it, the anon key gets a 200.
+
+Deletion keeps the id and nothing else. The customer's own tables reference `auth.users(id)` under their foreign-key semantics and Corebase doesn't cascade into app schemas, so a hard delete would either break those references or force a decision about someone else's data. The address becomes `deleted+<id>@invalid` — valid syntax, reserved TLD, can never receive mail — which frees the real address for re-registration. Password, both metadata halves and the confirmation timestamp are scrubbed, and every session, refresh lineage and outstanding one-time token goes with them: **a deleted user whose recovery link still works is a deleted user who can be signed back in from an inbox.**
+
 ## Run it
 
 ```bash

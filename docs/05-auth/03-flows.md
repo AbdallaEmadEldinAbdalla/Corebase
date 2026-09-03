@@ -266,6 +266,33 @@ Self-serve deletion (`DELETE /auth/v1/user`, the end-user deleting their own acc
 | Caller not service_role | `403 forbidden` |
 | Unknown user id | `404 user_not_found` (admin surface is not enumeration-sensitive — service_role already has full read) |
 
+**Built in P4g**, along with the rest of the admin surface: `GET`/`POST
+/admin/users` and `GET`/`PUT`/`DELETE /admin/users/:id`. Three notes on what the
+steps do not say.
+
+The tombstone in step 2 keeps the **id and nothing else** (**D-355**). The address
+becomes `deleted+<id>@invalid` — syntactically valid, in a reserved TLD that can
+never receive mail — which frees the real address for re-registration through the
+partial unique index while leaving the developer's foreign keys intact. Password,
+both metadata halves and `email_confirmed_at` are scrubbed, and the outstanding
+one-time tokens are deleted, because a deleted user whose recovery link still
+works is one who can be signed back in from an inbox. The audit row keeps the
+destroyed address, since the user row can no longer answer "which account was
+this".
+
+The 403/404 pair is the opposite of the rest of the module and deliberately so
+(**D-352**, **D-353**). A caller holding service_role can already read every row,
+so hiding whether an id exists protects nothing and breaks an import script that
+must tell "already gone" from "done"; and 403 rather than 401 because the
+credential is valid and simply not this one — the anon key is the one their
+frontend already has, so it is the mistake they will actually make.
+
+`PUT /admin/users/:id` also carries ban/unban, `email_confirm`, an admin password
+set, `app_metadata` (the only writer of it), and `sign_out`. A ban, a password set
+and `sign_out` all revoke every session (**D-354**) — a ban that leaves refresh
+working is not a ban — while `sign_out` stays separate because "log out of that
+stolen laptop" and "get off my service" are different requests.
+
 ## Decisions
 
 - **D-114 — Account deletion in V1 is developer-initiated only (service_role admin API / dashboard): soft delete with tombstoned email, session revocation, and no cascade into app schemas. End-user self-serve deletion is deferred to V1.x.** *(Rationale: self-serve deletion is a product flow — re-auth, grace period, export — not an auth-security primitive; the admin path satisfies the operator's legal-request needs (GDPR erasure executed by the controller, i.e. the developer) without expanding the frozen V1 scope (D-013).)*

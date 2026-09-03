@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-09-03 · **Phase:** Phase 4 (auth) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 complete** (P3a–P3h; **all four exit criteria met**) · **Phase 4 in progress** (P4a–P4f done)
+**Last updated:** 2026-09-03 · **Phase:** Phase 4 (auth) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 complete** (P3a–P3h; **all four exit criteria met**) · **Phase 4 in progress** (P4a–P4g done; the API surface is complete)
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -2453,6 +2453,71 @@ against a stack rebuilt from scratch after Docker Desktop died again. The
 `io.weight` branch still cannot run on this kernel — CI is its only runner — so the
 new assertion was checked by hand against the exact strings the runner produced
 (`default 1920` passes, `default 100` fails).
+### P4g — `/admin/users`: the thirteenth endpoint · done · 13 tests
+
+**Phase 4's API surface is complete.** `GET`/`POST /admin/users` and
+`GET`/`PUT`/`DELETE /admin/users/:id` close it, and with them the only supported
+way for a customer to honour a user's deletion request — D-114 makes
+developer-initiated deletion the *only* deletion in V1, so until now the answer
+was "connect to the database and write SQL".
+
+**This surface breaks the rule every other one follows, deliberately** (**D-352**).
+It is authorised by the **service_role** key — the customer's own server-side
+credential, which can already read every row in the schema — so the enumeration
+resistance that shapes signup, `/recover` and `PUT /user` would protect nothing
+here and would break a retrying import script that has to tell "already gone" from
+"done". Flow 10 says so outright. The corollary is that **the key check is the only
+thing between an anon key and every account on the project**, so it runs first on
+all five routes and the test exercises all five rather than one. Disabling it was
+run: the anon key got a 200.
+
+A refusal is **403, not 401** (**D-353**). The credential is valid and simply not
+this one — and the anon key is the one their frontend already holds, so it is the
+mistake a developer will actually make; a 401 would send them hunting for an
+expired key.
+
+**Deletion keeps the id and nothing else** (**D-355**). The customer's tables
+reference `auth.users(id)` under their own FK semantics and Corebase does not
+cascade into app schemas, so a hard delete would either break those references or
+force a decision about a customer's data that is not ours to make. The address
+becomes `deleted+<id>@invalid` — syntactically valid, in a reserved TLD that can
+never receive mail — which frees the real address for re-registration through the
+partial unique index. Password, both metadata halves and `email_confirmed_at` are
+scrubbed, and every session, refresh lineage and outstanding one-time token dies
+with it: **a deleted user whose recovery link still works is a deleted user who
+can be signed back in from an inbox.** The audit row keeps the destroyed address,
+because the user row can no longer answer "which account was this". Reducing the
+delete to just `deleted_at = now()` was run, and the test caught the un-scrubbed
+address.
+
+`PUT /admin/users/:id` also carries ban/unban, `email_confirm`, an admin password
+set, `app_metadata` — it is the only writer of it — and `sign_out`. A ban, a
+password set and `sign_out` all revoke every session (**D-354**), because a ban
+that leaves refresh working is not a ban; `sign_out` stays a separate flag because
+"log out of that stolen laptop" and "get off my service" are different requests
+and conflating them makes the milder one unavailable.
+
+Two smaller decisions worth stating. A **NULL** password hash is a legitimate
+state creatable only from here (**D-356**) — an imported account awaiting a reset,
+or a provider-only one — and `''` was rejected as a value meaning "absent" that
+the login path's own NULL check would miss; the decoy verify keeps such an account
+indistinguishable from a wrong password. And a malformed id is rejected before it
+reaches a query (**D-357**): not an injection guard, since `pg` parameterises, but
+a diagnosis one — `invalid input syntax for type uuid` renders as a 500 and points
+a developer at the server instead of at their own request.
+
+**Verification:** 13 integration tests — all five routes refusing the anon key
+with 403 and changing nothing, keyset pagination with no overlap and no gap across
+three pages, the admin view exposing the ban and `app_metadata` while still never
+carrying the hash, a created user confirmed without an email round trip and a
+duplicate answered 422 (unlike signup's decoy 200), a passwordless user
+indistinguishable from a wrong password, a ban stopping login *and* refresh and
+then being lifted, `sign_out` revoking without banning, an admin password set
+ending every session, `app_metadata` merging and unreachable from `PUT /user`, the
+full tombstone with the address freed and a new id on re-registration, a second
+delete answering 404, a malformed id answering 400, and one project's service_role
+key seeing none of another's users. Both mutations above were run and both failed
+as they should.
 
 ## 5. Rules the code follows
 
@@ -2769,12 +2834,17 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   customers could migrate a user table from GoTrue without a mass password reset;
   it needs a dependency of its own and nobody is migrating in yet. Recorded because
   D-004's portability is supposed to cut both ways.
-- The auth module serves **twelve of its thirteen endpoints** (P4b–P4f). What is
-  left is **`/admin/users`** and `/admin/users/:id`: without them a developer has
-  no way to list, create, ban, unban, delete or force-sign-out one of their own
-  users except by connecting to the database and writing SQL — and D-114's V1
-  stance makes developer-initiated deletion the *only* deletion, so today there
-  is no supported way for a customer to honour a user's deletion request.
+- **The auth API surface is complete** (P4b–P4g, all thirteen endpoints). What
+  remains in Phase 4 is not endpoints: the **JWKS rotation runbook** (exit
+  criterion 2) is entirely unbuilt — no `next`/`retired` key status in the control
+  plane, no dual-publish JWKS, and no re-derivation of the anon/service_role keys,
+  which matters because the same keypair signs both, so a signing-key rotation
+  *is* an API-key rotation. And the phase's demo — a plain HTML page that signs a
+  user up, verifies, logs in and shows the JWT claims — is not written.
+- **Self-serve deletion does not exist** (`DELETE /user`), which is V1.x by D-114:
+  it needs a grace window and a data-export story that do not gate V1. So a user
+  asking to be deleted is deleted *by the developer*, through `/admin/users/:id`,
+  and the platform has no opinion about how they were asked.
 - **The project-database `auth` schema has no migration path** — surfaced by P4f
   and not closed by it. The tables are created at `initdb` (D-314), which is right
   for a fleet-wide identical schema and means **an existing project's schema is
