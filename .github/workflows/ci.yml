@@ -58,9 +58,28 @@ jobs:
         run: pnpm test:unit
 
   integration:
-    name: integration (staging substitute)
+    # Sharded because the lane was sixteen minutes of almost entirely one thing:
+    # ~130 tests that each provision a real Postgres container, at ~6s of `initdb`
+    # and health-gating apiece. Nothing was hanging — that is just the arithmetic.
+    #
+    # Sharded with vitest's own `--shard` rather than hand-written file lists. A
+    # list would drift, and the failure mode of a drifting list here is the worst
+    # available one: a file that silently stops running is indistinguishable from a
+    # file that passes. `--shard` puts every file in exactly one shard by
+    # construction, so it cannot.
+    #
+    # `api` rides the same matrix rather than a second job, so the stack setup
+    # below exists once. Two copies of it would be two things to keep in step, and
+    # this lane's last two failures were both caused by exactly that kind of drift.
+    name: integration (${{ matrix.lane }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
+    strategy:
+      # Every shard runs even when one fails: with four of them, stopping the
+      # others turns "one suite is broken" into "some unknown subset is broken".
+      fail-fast: false
+      matrix:
+        lane: [worker-1, worker-2, worker-3, worker-4, api]
     steps:
       - uses: actions/checkout@v7
       # No `version` here on purpose: package.json's `packageManager` field is
@@ -135,8 +154,39 @@ jobs:
         # project container". A green suite on a half-up stack is worth nothing.
         run: ./scripts/staging.sh verify
 
-      - name: full suite
-        run: pnpm test
+      # The guard on the sharding itself. Only `worker` and `api` have `.e2e.` files,
+      # which is why those are the only lanes — and if a third package ever grows
+      # one, this lane would silently never run it while the unit lane excludes it
+      # by pattern. That is a test nobody runs and nobody misses, so it fails here
+      # instead.
+      - name: no package outside worker/api has infrastructure tests
+        run: |
+          stray="$(git ls-files '*.e2e.test.ts' \
+                   | grep -v '^services/worker/' | grep -v '^services/api/' || true)"
+          if [ -n "$stray" ]; then
+            echo "These e2e tests are in no integration lane, so nothing runs them:"
+            echo "$stray"
+            echo "Add a lane to .github/workflows/ci.yml's matrix, or move them."
+            exit 1
+          fi
+          echo "✓ every .e2e.test.ts lives in a package this matrix covers"
+
+      - name: run this lane
+        run: |
+          LANE='${{ matrix.lane }}'
+          case "$LANE" in
+            worker-*)
+              # `--shard=i/n` over the worker's files. The pure packages are not
+              # run here at all: their tests contain no `.e2e.` files, so the unit
+              # lane already covers every one of them.
+              pnpm --filter @corebase/worker exec vitest run --shard="${LANE#worker-}/4"
+              ;;
+            api)
+              pnpm --filter @corebase/api test
+              ;;
+            *)
+              echo "unknown lane $LANE"; exit 1 ;;
+          esac
 
       - name: what the stack looked like, if anything failed
         if: failure()
