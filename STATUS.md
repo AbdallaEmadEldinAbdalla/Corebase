@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-09-03 · **Phase:** Phase 4 (auth) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 complete** (P3a–P3h; **all four exit criteria met**) · **Phase 4 in progress** (P4a–P4c done)
+**Last updated:** 2026-09-03 · **Phase:** Phase 4 (auth) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 complete** (P3a–P3h; **all four exit criteria met**) · **Phase 4 in progress** (P4a–P4d done)
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -2176,6 +2176,79 @@ exactly one session, a resend killing the previous link, an unlisted `redirect_t
 substituted in both the mail and the redirect with an audit row to show it, and the
 token's plaintext appearing nowhere in `auth.one_time_tokens`. Both mutations above
 were run and failed as they should.
+### P4d — the email pipeline · done · 29 unit + 22 integration
+
+Auth mail now leaves the process. A flow owes an email, the API's mailer checks
+suppression then caps then writes a row then queues a job, and the worker renders
+both MIME parts and speaks SMTP to a provider. `signup → queue → SMTP → click the
+link out of the delivered message → confirmed user → working login` is one test.
+
+**Postmark is not built, and the interface is** (**D-331**). D-115's load-bearing
+half is the seam — "so cutting over is a config-and-warm-up project, not a
+rewrite" — and a Postmark client with no account and no verified domain behind it
+would be untested code on the one path where failure is silent and reaches users.
+The SMTP implementation is not a lesser substitute: it is the shape D-117's
+per-project custom SMTP needs, and **Mailpit** stands in for the provider exactly
+as MinIO stands in for R2. What the substitute cannot exercise is deliverability,
+so **Phase 4's third exit criterion — mail landing at major providers with
+SPF/DKIM/DMARC green — stays unmet** rather than being declared met against a
+sink.
+
+The SMTP client is hand-written (**D-332**), same reasoning as the S3 SigV4 client
+and the JWT signer. Testing it against a real listener rather than a mock earned
+its keep immediately: **`Acme (via Corebase) <auth@…>` unquoted is not the name it
+looks like.** Parentheses delimit a comment in RFC 5322, so the sink reported the
+display name as "Acme" alone — and the "via Corebase" half is the part that keeps
+us from claiming to *be* the customer while sending from our own domain, which is
+what DMARC alignment exists to catch (**D-333**). A mock would have agreed with
+whatever we sent it.
+
+**Caps and suppression are checked at enqueue, suppression first** (**D-334**).
+Enqueue-time refuses a burst while it is one Redis round trip instead of filling
+the queue whose drain rate the caps protect; suppression first because the reverse
+lets a mail-bomb at a suppressed address consume the project's whole hourly budget
+without a single message being sent — the attacker denies the project its real
+mail for free. Counters are `INCR`-then-compare with a rollback, because
+`GET`-then-`INCR` lets two concurrent enqueues both read 29 against a cap of 30.
+Per-recipient keys are hashed (**D-337**): Redis keys show up in `MONITOR`,
+slowlogs, dumps and any operator's `--scan`, and a plaintext key would put every
+end-user address on the platform into all of them.
+
+**Idempotency lives in `email_sends`, not in the queue** (**D-335**). BullMQ
+deduplicates a duplicate *enqueue*; what produces duplicate mail is a worker that
+sends and dies before recording, after which the queue re-delivers and the
+provider has already accepted. Removing that check was run: the same job sent a
+second message. The remaining window between provider-accept and row-update is
+irreducible without provider-side idempotency keys, and it is not silent —
+`attempts` shows the retry. The table's other job is answering "why did my user
+get no mail", which a queue structurally cannot: its job is gone once it succeeds,
+and `suppressed` and `rate_limited` mean opposite things to a developer.
+
+Retries are the doc's 30 s / 5 min / 30 min via a custom backoff strategy
+(**D-336**) — BullMQ's built-in `exponential` doubles and would spend the whole
+budget in three minutes, shorter than the outage it exists to survive. A
+non-retryable failure (an unrenderable template, credentials refused over an
+unencrypted link) is dead-lettered on the first attempt instead of delaying real
+mail for 35 minutes.
+
+**One local-environment trap worth recording**, because it looked exactly like our
+bug and was not: the sink paused **8 seconds before its SMTP greeting**, making
+every send 8 s and the suite 80 s of waiting. Mailpit reverse-resolves the
+connecting address first, and from inside a container that PTR lookup finds no
+resolver and times out. `MP_SMTP_DISABLE_RDNS` took a send from 8038 ms to 20 ms.
+The client was patiently waiting for a banner, correctly.
+
+**Verification:** 29 unit tests (`templates.test.ts` — escaping an address and a
+project name that carry markup, an override escaped like any other input, no
+remote content in any of the six templates; `gate.test.ts` — the check ordering,
+the rollback, the hashed keys, the TTLs, case-insensitive recipients) and 22
+integration tests against Mailpit and the control plane: a message arriving with
+text before HTML, a non-ASCII subject surviving RFC 2047, header injection through
+a project name being impossible, a re-delivered job sending nothing, dead-lettering
+at the third attempt, a suppressed address never queued, one project's suppression
+not touching another's, the per-recipient cap stopping a mail-bomb with each
+refusal recorded and named, a new Free project on half caps, and a broken pool
+proving the mailer cannot fail a flow. Two guards were proven by breaking them.
 
 ## 5. Rules the code follows
 
@@ -2491,13 +2564,37 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   session can therefore be created and **cannot yet be ended or renewed** — an
   access token lives out its hour and the refresh token in the client's hands has
   nothing to redeem it against. That is the largest remaining hole in the module.
-- **Nothing sends email.** P4c writes every token and hands every owed mail to an
-  `AuthMailer`; the default records the job and sends nothing, and the API logs a
-  warning at boot saying so. So a signup with confirmation required is complete on
-  our side and dead from the user's, and the only usable signup path in a
-  deployment without a sender is `autoconfirm` — off by default for good reason
-  (D-321). Templates, per-project caps, suppression lists and bounce handling are
-  all P4d (D-116).
+- **Email sends, but only to a sink.** P4d built the interface, the SMTP client,
+  the templates, the caps and the suppression check; the **Postmark client does
+  not exist** (D-331), so a deployment's only working provider is an SMTP host.
+  That makes **Phase 4's third exit criterion unmet**: mail delivering to Gmail,
+  Outlook and Yahoo with SPF, DKIM and DMARC green is a property of a real domain
+  at a real provider, and no amount of local testing substitutes. Nor do the DNS
+  records exist — `mail.corebase.co`, its SPF `-all`, its DKIM selector, its DMARC
+  policy and its aligned return path are all Terraform that has not been written.
+- **Nothing populates the suppression lists.** Both lists and the enqueue-time
+  check are built and tested; the webhook endpoint that would feed them is not,
+  because there is no provider sending webhooks. So a suppression arrives today
+  only by an operator inserting a `manual` row, and the complaint score, the
+  ≥3-project promotion to the global list, and the >10% bounce / >0.1% complaint
+  auto-pause are all part of that same unbuilt half (D-116).
+- **No deliverability monitoring and no canary.** `corebase_email_sends_total` and
+  `corebase_email_failures_total` exist and are labelled by template, not by
+  project — per-project labels on a fleet-wide counter is the cardinality mistake
+  D-146's budget exists to prevent, so per-project numbers live in `email_sends`
+  instead. What that leaves missing is the doc's whole monitoring table: bounce and
+  complaint *rates* need webhook data, and the daily synthetic mail to a canary
+  account at each major provider needs accounts at each major provider.
+- **Three of the six templates are unreachable.** `email_change_current`,
+  `email_change_new` and `password_changed_notice` render correctly and nothing
+  emits them, because their flows are not built. They are covered by a rendering
+  test so a variable named in a template but absent from the type fails
+  immediately rather than at send time.
+- Per-project template overrides are supported by the renderer and there is no
+  way to set one: the column, the API and the dashboard editor are all unbuilt,
+  and the doc's "unknown variables fail validation at save time" is therefore
+  enforced at render time instead (which throws, dead-letters that one mail, and
+  is strictly worse than catching it in a form).
 - **Password reset stops one step short of resetting a password.** Flow 7 step 1 is
   built: a recovery link yields a working session. Steps 2–6 need `PUT /user`,
   which does not exist — so the flow logs you in and cannot change your

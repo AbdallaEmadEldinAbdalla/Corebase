@@ -98,6 +98,16 @@ And **the redirect allowlist caught a bug in my own code.** `/recover` originall
 
 Nothing sends the mail yet — that is the next step. The boundary is a handover that cannot throw, because an enumeration-safe flow has already committed to returning 200, and the token in the project's own database is the record that mail is owed.
 
+**Mail actually leaves the process (P4d).** A flow decides an email is owed, the API checks the suppression lists then the per-project caps then writes a row then queues a job, and the worker renders both MIME parts and speaks SMTP. One test covers the whole arc: sign up, drain the queue, pull the link *out of the delivered message*, click it, and log in with an account that was refused a minute earlier.
+
+Postmark is not built and the interface is. A client for a paid API with no account and no verified domain behind it would be untested code on the one path where failure is silent and reaches a user, so sending goes over SMTP to a Mailpit container — the same substitution MinIO makes for R2, and the shape per-project custom SMTP needs anyway. What a sink cannot test is deliverability, so the phase's SPF/DKIM/DMARC criterion is recorded as **unmet** rather than declared met against a container.
+
+Testing the hand-written SMTP client against a real listener earned its keep on the first run: **`Acme (via Corebase) <auth@…>` unquoted is not the name it looks like.** Parentheses delimit a comment in RFC 5322, so the sink reported the display name as "Acme" alone — and "via Corebase" is exactly the half that keeps us from claiming to *be* the customer while sending from our own domain. A mock would have agreed with whatever we sent it.
+
+Caps are checked at enqueue rather than at send, and suppression before caps — otherwise a mail-bomb aimed at an address we already refuse to write to consumes the project's whole hourly budget without one message going out, and the attacker denies the project its real mail for free. And idempotency lives in a database row rather than in the queue, because the thing that actually produces duplicate mail is a worker that sends successfully and dies before recording it.
+
+One local trap worth passing on: the sink paused **eight seconds before its SMTP greeting**, which made every send 8s and looked precisely like a bug in our client. It reverse-resolves the connecting address first, and inside a container that lookup finds no resolver and times out. One environment variable took a send from 8038ms to 20ms; the client had been patiently waiting for a banner, correctly.
+
 ## Run it
 
 ```bash
@@ -183,7 +193,8 @@ Staging is Docker Compose plus Docker-in-Docker standing in for a control node a
 | `packages/secrets` | Credential persistence; enforces store-then-apply so a crash cannot lose a password |
 | `packages/audit` | The audit writer: joins the caller's transaction, redacts secrets on the way in, truncates rather than rejects |
 | `packages/jwt` | ES256 sign/verify, hand-written to support exactly one algorithm — a wrong `alg` is rejected before a signature is computed |
-| `packages/queue` `packages/migrate` `packages/types` | BullMQ wiring, the SQL migration runner, shared types and prefixed transport ids |
+| `packages/queue` `packages/migrate` `packages/types` | BullMQ wiring (provisioning and auth-email queues), the SQL migration runner, shared types and prefixed transport ids |
+| `packages/email` | The `EmailProvider` seam, a hand-written SMTP client, six auth templates rendering both MIME parts, and the per-project send caps |
 | `infra/docker/postgres` | The per-project database image: extension allowlist enforced by absence, no `trust` auth anywhere, RLS on at table creation |
 | `infra/docker/pgbouncer` | The per-project pooler image: transaction mode, `auth_query` against a lookup that allowlists one role, every rule baked in |
 | `infra/docker/staging` | The local stand-in for staging, including Prometheus, Loki, Alloy and Grafana with the dashboard provisioned as code |
