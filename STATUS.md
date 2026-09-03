@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-09-02 · **Phase:** Phase 4 (auth) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 complete** (P3a–P3h; **all four exit criteria met**) · **Phase 4 started** (P4a done)
+**Last updated:** 2026-09-03 · **Phase:** Phase 4 (auth) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 complete** (P3a–P3h; **all four exit criteria met**) · **Phase 4 in progress** (P4a, P4b done)
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -2045,6 +2045,73 @@ session delete taking the whole family with it, one one-time token per type
 replacing the previous, and five privilege tests including `service_role` being
 refused `auth.users` while still able to call `auth.uid()`.
 
+### P4b — signup and password login · done · 14 tests
+
+`/auth/v1/*` serves its first two flows. A client with a project's anon key can
+sign a user up and log them in, and what comes back is an ES256 access token that
+verifies against the project's published JWKS with the claim set the token spec
+names — `sub` (what every RLS policy's `auth.uid()` reads), `aud: authenticated`,
+`role: authenticated`, `ref`, and a `session_id` that ties a stateless token to a
+row somebody can revoke.
+
+Built: `POST /signup`, `POST /token?grant_type=password`, `GET
+/.well-known/jwks.json`, `GET /health`, and `project_auth_config` in the control
+plane (**D-321**, settling OQ-111) carrying `autoconfirm`, `disable_signup`,
+`access_token_ttl_seconds` and `password_min_length` — a project with no row gets
+the column defaults, so nothing needed a backfill.
+
+**The project is resolved from the signed `apikey`, not the Host header**
+(**D-318**). There is no gateway until Phase 5, and this is not the lesser
+substitute it looks like: a Host header is an assertion the caller wrote, while the
+anon key arrives *signed by the project's own key*. What the gateway adds later is
+routing and rate-limit placement, not identity. Two things about that boundary are
+pinned by tests and both were nearly wrong:
+
+- **The two issuers are different strings** (**D-319**). The provisioning saga
+  signs API keys with `https://<ref>.corebase.co`; an access token's `iss` is
+  `…/auth/v1`. The first wiring pinned one for both and 401'd every request with a
+  perfectly valid signature.
+- **A user's own access token is refused in the `apikey` slot** (**D-320**). It is
+  signed by the same key and names the same ref, so a naive implementation takes
+  it. The first run of the test that claims this passed *with the role check
+  disabled* — the issuer pin was doing all the work — so the test now mints a
+  token that passes the issuer pin and carries a user's role, and fails with a 200
+  when the role check is removed. A check no test can fail is a check nobody
+  should trust.
+
+**Enumeration resistance is the security content of both endpoints, and it costs
+real work** (**D-322**). Signup returns 200 with an identical body *shape* whether
+or not the address exists — a decoy uuid for the taken case — and spends a full
+64 MiB scrypt hash it does not need, because skipping it would make a taken address
+answer in 2 ms and a fresh one in 100 ms. Login verifies against a decoy hash when
+the email is unknown for the same reason. Both are affordable only because the
+rate limit is checked **before** the hash (D-241), which the test proves by timing
+the request after the limit trips (<50 ms, versus ~270 ms for one that hashes).
+Removing the decoy verify makes the unknown-email path 12.6 ms against 269 ms for a
+wrong password — a 21× oracle, which is what the timing assertion catches.
+
+**One connection per request, no pool** (**D-323**, OQ-110 still open). A pooled
+connection holds a password; a P2d rotation replaces it; every request after that
+fails authentication until something notices. The failure mode is *every login on a
+project breaking after a routine credential rotation*, in a subsystem the operator
+was not touching. A connect is milliseconds against a verify that is deliberately
+tens of them.
+
+Auth error codes are lowercase and GoTrue-compatible (**D-317**) — `invalid_credentials`,
+`email_not_confirmed`, `weak_password`, `over_rate_limit` — because client code
+branches on them. One code covers a wrong password, an unknown email *and* a
+banned user; the audit log in the project's own database records which it actually
+was.
+
+**Verification:** `project-auth.e2e.test.ts` 14/14 against live provisioned
+projects — the user row landing in the project's database and nowhere in the
+control plane, a scrypt hash that never contains the plaintext, the duplicate
+address returning the same keys and a *different* uuid, the JWKS publishing no
+private material and matching the `kid` the tokens are signed with, a banned user
+getting the generic error while the audit log says `login_failed_banned`, a
+soft-deleted user unable to log in with the address free to re-register, and a
+spliced apikey writing nothing to either of two projects. Both mutation checks
+above were run and both failed as they should.
 
 ## 5. Rules the code follows
 
@@ -2353,10 +2420,30 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   customers could migrate a user table from GoTrue without a mass password reset;
   it needs a dependency of its own and nobody is migrating in yet. Recorded because
   D-004's portability is supposed to cut both ways.
-- The auth module itself does not exist yet — P4a is the substrate. No project can
-  sign a user up, and the `corebase_auth` role is not yet in the pooler's
-  `auth_query` allowlist, so the module will have to choose between the pooler
-  (OQ-110's lean) and a direct connection when it arrives.
+- The auth module serves **two of its thirteen endpoints** (P4b). Signup and the
+  password grant work; `/token?grant_type=refresh_token` returns a 501 that says
+  so, and `/logout`, `/verify`, `/recover`, `/resend`, `/user`, `/sessions` and
+  `/admin/users` are not registered at all. A session can therefore be created and
+  cannot yet be ended or renewed — an access token lives out its hour and the
+  refresh token in the client's hands has nothing to redeem it against.
+- **A signup with confirmation required returns `confirmation_sent_at` and sends no
+  email.** No confirmation token is written either (P4c) and there is no sender
+  (P4d). The field is in the response because removing it would break the
+  same-shape contract Flow 1's enumeration resistance depends on; it is a claim we
+  are not yet entitled to make, and the honest summary is that the only usable
+  signup path today is `autoconfirm`, which is off by default for good reason
+  (D-321).
+- `corebase_auth` is still not in the pooler's `auth_query` allowlist, and OQ-110
+  is still open. P4b took the third option — a fresh connection per request
+  (D-323) — because a cached pool breaks on credential rotation. Putting auth
+  behind the pooler is a change to the pooler's security posture (D-074) and needs
+  load numbers; both make it its own step.
+- **Rate limits are per API process, not per project cluster, unless Redis is
+  configured.** `main.ts` falls back to an in-memory limiter with a warning, and
+  two API replicas then grant two independent budgets. The doc puts these buckets
+  at the gateway (D-033); until the gateway exists, Redis is what makes them real.
+- No `POST /signup?anonymous=true`, no MFA, no OAuth — all deliberately V1.1+ per
+  the scope freeze (D-013).
 - `pgbackrest verify` — the monthly repo-side checksum audit that catches bit-rot
   without a full restore (backups §7's last bullet) — is not scheduled. The
   restore-based verification is the stronger of the two and is the one the criterion

@@ -58,6 +58,16 @@ Exceeding any bucket → `429 over_rate_limit` + `Retry-After`. Limits are per p
 | Email send fails | 200 anyway; send retried via job queue (D-018) | User can `POST /resend` |
 | Email exists | **200, same shape** | Never 409 |
 
+**Built in P4b, with two deviations worth stating.** The confirmation token and the
+verification email in steps 3b/4 are **not built** — they are P4c and P4d — so a
+signup with confirmation required returns the doc's shape with a
+`confirmation_sent_at` that no email corresponds to. That one field is a claim we
+are not yet entitled to make; it is recorded as a gap in STATUS §8 rather than
+papered over, and omitting it instead would break the response-shape contract this
+flow's security depends on. The hash on the duplicate-address path is spent
+deliberately (**D-322**): skipping it makes a taken address answer in 2 ms and a
+fresh one in 100 ms, which is the same oracle moved into the clock.
+
 ### Flow 2 — Email verification
 
 `GET /verify?token=…&type=signup&redirect_to=…` (link click) or `POST /verify` `{token, type}` (SDK)
@@ -93,6 +103,16 @@ Exceeding any bucket → `429 over_rate_limit` + `Retry-After`. Limits are per p
 | Email not confirmed (password correct) | `400 email_not_confirmed` | Actionable for the real owner; useless to an attacker without the password |
 | Banned (`banned_until` future) | `400 invalid_credentials` externally; audit says `login_failed_banned` | |
 | Rate limited | `429 over_rate_limit` | |
+
+**Built in P4b.** Hashing is scrypt (**D-313**), not argon2id, and bcrypt
+verify-only is still unbuilt — so step 3's migration path does not exist yet. Both
+rate-limit buckets are checked **before** any hashing (**D-241**), which is what
+makes the decoy verify in step 3 affordable: without the limit, a decoy hash per
+unknown email is a 64 MiB allocation any anonymous caller can trigger in a loop.
+The `email_not_confirmed` code in step 4 is deliberately the one gate with its own
+name, and the test that pins it asserts the *wrong* password on an unconfirmed user
+still returns the generic error — which is the property that makes it not an
+oracle.
 
 ### Flow 4 — Token refresh
 

@@ -8,7 +8,7 @@ Corebase is a developer-focused Backend-as-a-Service: a developer creates a proj
 
 ## Status
 
-**Milestone 0 complete; Phase 1 complete; Phase 2 started.**
+**Milestone 0, Phase 1, Phase 2 and Phase 3 complete; Phase 4 (auth) in progress.**
 
 **The provisioning spine (Milestone 0).** `POST /v1/projects` returns a real, isolated PostgreSQL 17.5 database on a data node about **2.5 seconds** later, with its own volume, cgroup limits, the full role model, envelope-encrypted credentials, and a connection string you can `psql` into immediately. Twenty consecutive creates are measured end to end.
 
@@ -83,6 +83,12 @@ Chasing a test failure along the way turned up something older: the worker was o
 All three Phase-1 exit criteria are met. Above the database, the data plane is still Phase 2+: no data API (PostgREST), no end-user auth service, no storage, no realtime — and the dashboard is a shell, so there is no table editor, SQL editor, members page or billing yet.
 
 > **[STATUS.md](STATUS.md) is the handover document**: what works, how to run it locally, what every rule in the code is defending against, and what is not built yet. Read it before the corpus if you are here to contribute.
+
+**A customer's users can sign up and log in (P4b).** With a project's anon key, `POST /auth/v1/signup` and `POST /auth/v1/token?grant_type=password` create a user and hand back an ES256 access token that verifies against that project's published JWKS — carrying `sub`, `aud`, `role` and a `session_id`, which is what every RLS policy a customer writes will read. The users live in the customer's own database, so `pg_dump` carries them out and nothing about them is ever stored in the control plane.
+
+The interesting part is what the endpoints refuse to tell you. A signup against an address that already exists returns **200 with the same body shape and a decoy uuid**, and pays for a full 64 MiB password hash it does not need — because skipping it would make a taken address answer in 2 ms and a fresh one in 100 ms, which is the same disclosure moved from the body into the clock. Login verifies against a decoy hash when the email is unknown, for the same reason: removing it makes that path 12.6 ms against 269 ms for a wrong password, a 21× oracle that a test measures. All of it is affordable only because the rate limit is checked *before* the hash.
+
+Two of the boundary checks here nearly shipped broken, and both were caught by insisting a guard must be able to fail. A project's API key and a user's access token carry different issuers; pinning one string for both returned 401 for every request with a perfectly valid signature. And the test asserting that a user's own token is rejected as an API key **passed with that check disabled** — the issuer pin was doing all the work — so it now mints a token that gets past the issuer pin and fails with a 200 when the role check is removed.
 
 ## Run it
 
@@ -163,7 +169,7 @@ Staging is Docker Compose plus Docker-in-Docker standing in for a control node a
 
 | | |
 |---|---|
-| `services/api` | Fastify control-plane API: auth, organizations, invites, project CRUD, project keys and JWKS; the documented `/v1` envelope with `request_id`, keyset pagination, idempotency keys, two-phase enqueue |
+| `services/api` | Fastify control-plane API: auth, organizations, invites, project CRUD, project keys and JWKS; the documented `/v1` envelope with `request_id`, keyset pagination, idempotency keys, two-phase enqueue. Also the data-plane auth module at `/auth/v1/*` — signup, password grant, per-project JWKS — which is a different surface for different people |
 | `services/worker` | Provisioning worker: job runner with checkpoints, transactional placement, Docker Engine API client over mTLS, the eight-step provisioning saga |
 | `packages/crypto` | Envelope encryption — per-secret data key wrapped by a master key that never enters the database |
 | `packages/secrets` | Credential persistence; enforces store-then-apply so a crash cannot lose a password |
