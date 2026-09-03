@@ -8,6 +8,7 @@ import {
   PasswordFormatError, MIN_END_USER_PASSWORD_LENGTH,
 } from '@corebase/crypto';
 import { SECRET_NAMES } from '@corebase/secrets';
+import { parsePageRequest, toPage } from '../../kernel/pagination.ts';
 import { ApiError } from '../../kernel/errors.ts';
 import { rateLimitKey, type RateLimiter } from '../../kernel/rate-limit.ts';
 import {
@@ -26,6 +27,7 @@ import {
   revokeSessionFamily, revokeUserSessions, listSessions, revokeOwnSession,
   updateUserMetadata, applyEmailChange, siblingConsumed, pendingEmailChange,
   clearEmailChangeTokens, consumeEitherToken,
+  listUsers, adminUpdateUser, softDeleteUser, adminSignOutUser,
   type TokenType, type AuthUser,
 } from './store.ts';
 import { resolveRedirect, withTokenFragment } from './redirect.ts';
@@ -1215,6 +1217,252 @@ export function registerProjectAuth(app: FastifyInstance, deps: ProjectAuthDeps)
       action: 'email_change_requested', userId: user.id, ...meta,
       payload: { new_email: newEmail, confirm: ctx.config.emailChangeConfirm } });
   }
+
+  /**
+   * `/auth/v1/admin/users` — the developer's own user management (D-114).
+   *
+   * ## Why this surface has different rules from every other one
+   *
+   * It is authorised by the **service_role** key, which is the customer's own
+   * server-side credential. So the enumeration resistance that shapes signup,
+   * `/recover` and `PUT /user` is pointless here and is deliberately absent: a
+   * caller holding service_role can already read every row in the schema, so
+   * refusing to confirm that a user id exists would protect nothing and make the
+   * surface unusable. Flow 10 says so explicitly — "the admin surface is not
+   * enumeration-sensitive" — and that is why `404 user_not_found` is the right
+   * answer here and would be a leak anywhere else in this file.
+   *
+   * The corollary is that the key check is the *only* thing standing between an
+   * anon key and every user's account, so it is checked first, on every route,
+   * before anything else happens.
+   */
+  const requireServiceRole = (ctx: ProjectContext) => {
+    if (ctx.keyRole !== 'service_role') {
+      // 403 rather than 401: the credential presented is valid, it is simply not
+      // this one. A 401 would send a developer to check whether their key was
+      // expired when the answer is that they used the published one.
+      throw new ApiError(403, AUTH_ERROR_CODES.UNAUTHORIZED,
+        'This endpoint needs the project\'s service_role key, not the anon key.');
+    }
+  };
+
+  const adminUserView = (u: AuthUser) => ({
+    ...publicUser(u),
+    // Two fields the user-facing object deliberately omits. A developer managing
+    // their own users needs to see a ban and needs to see the metadata half they
+    // control; an end user has no business reading either about themselves.
+    banned_until: u.banned_until?.toISOString() ?? null,
+    app_metadata: u.raw_app_meta_data,
+  });
+
+  app.get('/auth/v1/admin/users', async (req, reply) => {
+    const ctx = await project(deps, req);
+    requireServiceRole(ctx);
+    const page = parsePageRequest((req.query ?? {}) as Record<string, unknown>);
+    return withProjectDb(ctx, async (db) => {
+      const rows = await listUsers(db, page);
+      const out = toPage(rows, page.limit, (u) => ({
+        created_at: u.created_at.toISOString(), id: u.id }));
+      return reply.status(200).send({
+        users: out.items.map(adminUserView),
+        pagination: out.pagination,
+      });
+    });
+  });
+
+  app.get('/auth/v1/admin/users/:id', async (req, reply) => {
+    const ctx = await project(deps, req);
+    requireServiceRole(ctx);
+    const id = adminUserId(req);
+    return withProjectDb(ctx, async (db) => {
+      const user = await findUserById(db, id);
+      if (!user) throw notSuchUser();
+      return reply.status(200).send(adminUserView(user));
+    });
+  });
+
+  /**
+   * `POST /admin/users` — create a user directly.
+   *
+   * The endpoint a migration script uses, so it does the two things signup cannot:
+   * it can mark the address confirmed without an email round trip, and it can
+   * write `app_metadata`. It also answers **422 on a duplicate address** rather
+   * than signup's same-shape 200 — the decoy exists to protect an anonymous
+   * caller's privacy, and here the caller is the address's own custodian, so
+   * hiding the collision from them would just make imports fail silently.
+   */
+  app.post('/auth/v1/admin/users', async (req, reply) => {
+    const ctx = await project(deps, req);
+    requireServiceRole(ctx);
+    const parsed = z.object({
+      email: emailSchema,
+      password: z.string().optional(),
+      email_confirm: z.boolean().optional(),
+      user_metadata: z.record(z.unknown()).optional(),
+      app_metadata: z.record(z.unknown()).optional(),
+    }).strict().safeParse(req.body ?? {});
+    if (!parsed.success) {
+      throw new ApiError(400, AUTH_ERROR_CODES.VALIDATION_FAILED,
+        'Provide a valid `email`, and optionally `password`, `email_confirm`, '
+        + '`user_metadata`, `app_metadata`.');
+    }
+    const b = parsed.data;
+    const min = Math.max(MIN_END_USER_PASSWORD_LENGTH, ctx.config.passwordMinLength);
+    let hash: string | undefined;
+    if (b.password !== undefined) {
+      try {
+        hash = await hashPassword(b.password, min);
+      } catch (err) {
+        if (err instanceof PasswordFormatError) {
+          throw new ApiError(422, AUTH_ERROR_CODES.WEAK_PASSWORD, (err as Error).message);
+        }
+        throw err;
+      }
+    }
+    const meta = clientMeta(req);
+
+    return withProjectDb(ctx, async (db) => {
+      const created = await createUser(db, {
+        email: b.email,
+        // NULL, not an empty string. A user with no password is a legitimate
+        // state — an imported account awaiting a reset, or one that will only
+        // ever sign in through a provider — and `''` would be a value that means
+        // "absent", which the login path's own NULL check would then miss.
+        passwordHash: hash ?? null,
+        emailConfirmed: b.email_confirm ?? false,
+        ...(b.user_metadata ? { userMetadata: b.user_metadata } : {}),
+      });
+      if (!created) {
+        await writeAuthAudit(db, {
+          action: 'admin_create_user_duplicate', ...meta,
+          payload: { email: b.email } });
+        throw new ApiError(422, AUTH_ERROR_CODES.VALIDATION_FAILED,
+          'A user with that email address already exists.');
+      }
+      const withApp = b.app_metadata
+        ? await adminUpdateUser(db, created.id, { appMetadata: b.app_metadata })
+        : created;
+      await writeAuthAudit(db, {
+        action: 'admin_create_user', userId: created.id, ...meta,
+        payload: { email_confirm: b.email_confirm ?? false } });
+      return reply.status(201).send(adminUserView(withApp ?? created));
+    });
+  });
+
+  /**
+   * `PUT /admin/users/:id` — ban, unban, confirm, set a password, write metadata.
+   *
+   * A ban is enforced at **login and at refresh**, not per request (D-113): there
+   * is no session lookup on the data plane, so a banned user's already-issued
+   * access token keeps working until it expires — up to an hour by default. That
+   * is why banning also revokes every session here: it makes the ban immediate
+   * for everything except one outstanding token, which is the tightest guarantee
+   * a stateless token allows. A developer who needs it tighter configures a
+   * shorter `exp`.
+   */
+  app.put('/auth/v1/admin/users/:id', async (req, reply) => {
+    const ctx = await project(deps, req);
+    requireServiceRole(ctx);
+    const id = adminUserId(req);
+    const parsed = z.object({
+      email: emailSchema.optional(),
+      password: z.string().optional(),
+      email_confirm: z.boolean().optional(),
+      /** ISO timestamp, or null to lift a ban. */
+      ban_until: z.string().datetime().nullable().optional(),
+      user_metadata: z.record(z.unknown()).optional(),
+      app_metadata: z.record(z.unknown()).optional(),
+      /** Revoke every session without changing the account. */
+      sign_out: z.boolean().optional(),
+    }).strict().safeParse(req.body ?? {});
+    if (!parsed.success) {
+      throw new ApiError(400, AUTH_ERROR_CODES.VALIDATION_FAILED,
+        'Send some of `email`, `password`, `email_confirm`, `ban_until`, '
+        + '`user_metadata`, `app_metadata`, `sign_out`.');
+    }
+    const b = parsed.data;
+    if (!Object.keys(b).length) {
+      throw new ApiError(400, AUTH_ERROR_CODES.VALIDATION_FAILED, 'Nothing to change.');
+    }
+
+    const min = Math.max(MIN_END_USER_PASSWORD_LENGTH, ctx.config.passwordMinLength);
+    let hash: string | undefined;
+    if (b.password !== undefined) {
+      try {
+        hash = await hashPassword(b.password, min);
+      } catch (err) {
+        if (err instanceof PasswordFormatError) {
+          throw new ApiError(422, AUTH_ERROR_CODES.WEAK_PASSWORD, (err as Error).message);
+        }
+        throw err;
+      }
+    }
+    const meta = clientMeta(req);
+
+    return withProjectDb(ctx, async (db) => {
+      const banned = b.ban_until === undefined ? undefined
+        : b.ban_until === null ? null : new Date(b.ban_until);
+      const updated = await adminUpdateUser(db, id, {
+        ...(b.email !== undefined ? { email: b.email } : {}),
+        ...(hash !== undefined ? { passwordHash: hash } : {}),
+        ...(b.email_confirm !== undefined ? { emailConfirm: b.email_confirm } : {}),
+        ...(banned !== undefined ? { bannedUntil: banned } : {}),
+        ...(b.user_metadata !== undefined ? { userMetadata: b.user_metadata } : {}),
+        ...(b.app_metadata !== undefined ? { appMetadata: b.app_metadata } : {}),
+      });
+      if (!updated) throw notSuchUser();
+
+      // A ban, a password change and an explicit sign-out all end every session.
+      // A password set by an admin is the same suspicion as one set by the user
+      // (flows §8), and a ban that leaves sessions refreshing is not a ban.
+      const shouldSignOut = b.sign_out === true
+        || hash !== undefined
+        || (banned instanceof Date && banned.getTime() > Date.now());
+      let revoked = 0;
+      if (shouldSignOut) revoked = await adminSignOutUser(db, id);
+
+      await writeAuthAudit(db, {
+        action: 'admin_update_user', userId: id, ...meta,
+        payload: {
+          fields: Object.keys(b), sessions_revoked: revoked,
+          ...(banned !== undefined ? { banned: banned !== null } : {}),
+        },
+      });
+      const fresh = (await findUserById(db, id)) ?? updated;
+      return reply.status(200).send(adminUserView(fresh));
+    });
+  });
+
+  /**
+   * Flow 10 — `DELETE /admin/users/:id`.
+   *
+   * Soft, with a tombstone, and no cascade into the customer's schemas. Their
+   * tables reference `auth.users(id)` under their own FK semantics; deciding what
+   * happens to a customer's data is not ours to do, and a hard delete would
+   * either break those references or force that decision.
+   *
+   * Developer-initiated only in V1 (D-114). `DELETE /user` — an end user deleting
+   * their own account, with re-auth and a grace window — needs product choices
+   * that do not gate V1.
+   */
+  app.delete('/auth/v1/admin/users/:id', async (req, reply) => {
+    const ctx = await project(deps, req);
+    requireServiceRole(ctx);
+    const id = adminUserId(req);
+    const meta = clientMeta(req);
+    return withProjectDb(ctx, async (db) => {
+      const gone = await softDeleteUser(db, id);
+      if (!gone) throw notSuchUser();
+      // The audit row keeps the address the tombstone destroyed, because "which
+      // account was this" is the question a developer asks afterwards and the
+      // user row can no longer answer it. This log lives in the customer's own
+      // database (D-314), so it leaves with their `pg_dump`.
+      await writeAuthAudit(db, {
+        action: 'user_deleted', userId: id, ...meta,
+        payload: { email: gone.email } });
+      return reply.status(200).send({});
+    });
+  });
 }
 
 /**
@@ -1279,6 +1527,26 @@ function emailChangeBody(
              message: 'This link is invalid or has already been used.', request_id: requestId },
   });
 }
+
+/**
+ * A user id from the path, validated before it reaches a query.
+ *
+ * `pg` parameterises, so this is not an injection guard — it is a diagnosis one.
+ * Without it a typo'd id reaches Postgres and comes back as
+ * `invalid input syntax for type uuid`, which renders as a 500 and sends a
+ * developer looking for a server fault instead of at their own request.
+ */
+function adminUserId(req: FastifyRequest): string {
+  const { id } = req.params as { id: string };
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    throw new ApiError(400, AUTH_ERROR_CODES.VALIDATION_FAILED, 'That is not a user id.');
+  }
+  return id;
+}
+
+/** Flow 10's answer for an id that is not there. Safe here and nowhere else. */
+const notSuchUser = () =>
+  new ApiError(404, AUTH_ERROR_CODES.VALIDATION_FAILED, 'No such user.');
 
 /**
  * The URL that goes in an auth email.

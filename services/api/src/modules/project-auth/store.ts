@@ -50,7 +50,14 @@ export async function findUserByEmail(
 
 export interface CreateUserArgs {
   email: string;
-  passwordHash: string;
+  /**
+   * `null` for a user with no password — an imported account awaiting a reset, or
+   * one that will only ever sign in through a provider. Only the admin surface
+   * can create one; signup always sets a hash. The login path already refuses a
+   * NULL hash *after* spending a decoy verify, so such an account is
+   * indistinguishable from a wrong password rather than from a missing user.
+   */
+  passwordHash: string | null;
   /** Set when the project autoconfirms, so the user is usable immediately. */
   emailConfirmed: boolean;
   userMetadata?: Record<string, unknown> | undefined;
@@ -675,4 +682,163 @@ export async function consumeEitherToken(
     ? { id: rows[0].id, userId: rows[0].user_id, relatesTo: rows[0].relates_to,
         type: rows[0].token_type }
     : undefined;
+}
+
+// ── /admin/users (P4g, flows §10, D-114) ────────────────────────────────────
+
+/**
+ * A page of users, newest first, keyset-paginated on `(created_at, id)`.
+ *
+ * Soft-deleted rows are excluded. A tombstone carries no email, no password and
+ * no metadata (see `softDeleteUser`), so listing them would show a developer a
+ * page of `deleted+<uuid>@invalid` rows with nothing to act on — and the
+ * developer's own tables are where a deleted user's history actually lives.
+ */
+export async function listUsers(
+  client: Client, a: { limit: number; cursor?: { created_at: string; id: string } | undefined },
+): Promise<AuthUser[]> {
+  // `limit + 1`, so `has_more` is a fact rather than a second racing count.
+  const { rows } = a.cursor
+    ? await client.query<AuthUser>(
+        `SELECT ${USER_COLUMNS} FROM auth.users
+          WHERE deleted_at IS NULL
+            AND (created_at, id) < ($2::timestamptz, $3::uuid)
+          ORDER BY created_at DESC, id DESC LIMIT $1`,
+        [a.limit + 1, a.cursor.created_at, a.cursor.id])
+    : await client.query<AuthUser>(
+        `SELECT ${USER_COLUMNS} FROM auth.users
+          WHERE deleted_at IS NULL
+          ORDER BY created_at DESC, id DESC LIMIT $1`, [a.limit + 1]);
+  return rows;
+}
+
+export interface AdminUpdate {
+  /** Set or clear a ban. `null` unbans. */
+  bannedUntil?: Date | null | undefined;
+  /** Confirm an address without the user clicking anything. */
+  emailConfirm?: boolean | undefined;
+  /** A new password, already hashed. */
+  passwordHash?: string | undefined;
+  /** The service_role-writable half of the metadata. Merged, not replaced. */
+  appMetadata?: Record<string, unknown> | undefined;
+  /** The user half, so an admin tool can fix a bad value. Merged. */
+  userMetadata?: Record<string, unknown> | undefined;
+  email?: string | undefined;
+}
+
+/**
+ * Apply a developer-side update.
+ *
+ * Built as a dynamic SET list rather than one statement per field, because the
+ * alternative is five round trips for one request and a half-applied update if
+ * the third fails. Every fragment is a literal in this file and every value is a
+ * bound parameter — the list is assembled, never the values.
+ *
+ * Returns `undefined` when there is no such user, so the route can answer 404
+ * rather than reporting a successful update of nothing.
+ */
+export async function adminUpdateUser(
+  client: Client, userId: string, u: AdminUpdate,
+): Promise<AuthUser | undefined> {
+  const sets: string[] = [];
+  const params: unknown[] = [userId];
+  const add = (fragment: string, value: unknown) => {
+    params.push(value);
+    sets.push(fragment.replace('$n', `$${params.length}`));
+  };
+
+  if (u.bannedUntil !== undefined) add('banned_until = $n::timestamptz', u.bannedUntil);
+  if (u.emailConfirm !== undefined) {
+    // Confirming is idempotent; *unconfirming* clears the timestamp, which is a
+    // legitimate admin action after a support ticket about a wrong address.
+    add('email_confirmed_at = CASE WHEN $n::boolean THEN COALESCE(email_confirmed_at, now()) ELSE NULL END',
+      u.emailConfirm);
+  }
+  if (u.passwordHash !== undefined) add('encrypted_password = $n', u.passwordHash);
+  if (u.appMetadata !== undefined) {
+    add('raw_app_meta_data = raw_app_meta_data || $n::jsonb', JSON.stringify(u.appMetadata));
+  }
+  if (u.userMetadata !== undefined) {
+    add('raw_user_meta_data = raw_user_meta_data || $n::jsonb', JSON.stringify(u.userMetadata));
+  }
+  if (u.email !== undefined) add('email = $n', u.email);
+  if (!sets.length) return findUserById(client, userId);
+
+  const { rows } = await client.query<AuthUser>(
+    `UPDATE auth.users SET ${sets.join(', ')}, updated_at = now()
+      WHERE id = $1 AND deleted_at IS NULL
+      RETURNING ${USER_COLUMNS}`, params);
+  return rows[0];
+}
+
+/**
+ * Flow 10's soft delete, in one transaction.
+ *
+ * Soft, not hard, and the tombstone is the point: rows in the customer's own
+ * tables reference `auth.users(id)`, and Corebase does not cascade into app
+ * schemas (their FK semantics are theirs). A hard delete would either break those
+ * references or require us to decide what happens to a customer's data, and
+ * neither is ours to do.
+ *
+ * What the tombstone keeps is the id and nothing else. `email` becomes
+ * `deleted+<id>@invalid` — a syntactically valid address in a reserved TLD that
+ * can never receive mail — which frees the real address for re-registration via
+ * the partial unique index while keeping the row's identity stable for the
+ * developer's foreign keys. Password and metadata are scrubbed, because "deleted"
+ * that leaves a password hash and a full profile behind is not deletion in any
+ * sense a user would recognise.
+ */
+export async function softDeleteUser(
+  client: Client, userId: string,
+): Promise<{ email: string | null } | undefined> {
+  await client.query('BEGIN');
+  try {
+    // Read the address first, in the same transaction, rather than reaching for
+    // it from inside `RETURNING`. A subquery there would see the statement's
+    // pre-update snapshot and so happens to give the old value — correct today
+    // and for a reason nobody reading it would be sure of, which is a poor thing
+    // to build a "which address was freed" report on.
+    const { rows: before } = await client.query<{ email: string | null }>(
+      `SELECT email FROM auth.users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+      [userId]);
+    if (!before[0]) { await client.query('ROLLBACK'); return undefined; }
+
+    await client.query(
+      `UPDATE auth.users
+          SET deleted_at = now(),
+              email = 'deleted+' || id::text || '@invalid',
+              encrypted_password = NULL,
+              raw_user_meta_data = '{}'::jsonb,
+              raw_app_meta_data = '{}'::jsonb,
+              email_confirmed_at = NULL,
+              updated_at = now()
+        WHERE id = $1`, [userId]);
+
+    // Sessions and their lineages, then the outstanding links. A deleted user
+    // whose recovery token still works is a deleted user who can be signed back
+    // in from an inbox.
+    await client.query(
+      `UPDATE auth.sessions SET revoked_at = now()
+        WHERE user_id = $1 AND revoked_at IS NULL`, [userId]);
+    await client.query(
+      `UPDATE auth.refresh_tokens SET revoked = true
+        WHERE user_id = $1 AND revoked = false`, [userId]);
+    await client.query(`DELETE FROM auth.one_time_tokens WHERE user_id = $1`, [userId]);
+    await client.query('COMMIT');
+    return before[0];
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  }
+}
+
+/** Revoke every session a user has, without touching the account. */
+export async function adminSignOutUser(
+  client: Client, userId: string,
+): Promise<number> {
+  return revokeUserSessions(client, userId, 'global',
+    // `global` ignores the current-session parameter, so any uuid does — and this
+    // caller has no session of its own, which is the whole point of the admin
+    // surface: it acts on a user without being one.
+    '00000000-0000-0000-0000-000000000000');
 }
