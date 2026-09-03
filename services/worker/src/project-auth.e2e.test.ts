@@ -2160,3 +2160,418 @@ describe('P4f — email change', () => {
     await app.close();
   });
 });
+
+/**
+ * P4g — `/admin/users`, the last of the thirteen endpoints.
+ *
+ * This surface breaks the rule every other one follows, deliberately: it is
+ * authorised by the **service_role** key, which is the customer's own
+ * server-side credential, so a caller who holds it can already read every row in
+ * the schema. Enumeration resistance would protect nothing and make the API
+ * unusable, which is why `404 No such user` is right here and would be a leak
+ * anywhere else in the module. The corollary is that the key check is the only
+ * thing between an anon key and every account, so it is what gets tested hardest.
+ */
+describe('P4g — /admin/users', () => {
+  const password = 'correct horse battery';
+
+  async function withUsers(p: Fixture, n = 3) {
+    await autoconfirm(p.id);
+    const app = api();
+    const ids: string[] = [];
+    for (let i = 0; i < n; i++) {
+      const res = await app.inject({
+        method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+        payload: { email: `u${i}@example.com`, password } });
+      expect(res.statusCode).toBe(200);
+      ids.push(res.json().user.id as string);
+    }
+    return { app, ids };
+  }
+
+  const svc = (p: Fixture) => ({ apikey: p.serviceKey });
+
+  t('EXIT CRITERION: every admin route refuses the anon key with 403', async () => {
+    const p = await provision();
+    const { app, ids } = await withUsers(p, 1);
+    // The published key. This check is the only thing standing between it and
+    // every user's account, so all five routes are checked rather than one.
+    for (const [method, url] of [
+      ['GET', '/auth/v1/admin/users'],
+      ['GET', `/auth/v1/admin/users/${ids[0]}`],
+      ['POST', '/auth/v1/admin/users'],
+      ['PUT', `/auth/v1/admin/users/${ids[0]}`],
+      ['DELETE', `/auth/v1/admin/users/${ids[0]}`],
+    ] as const) {
+      const res = await app.inject({
+        method, url, headers: { apikey: p.anonKey },
+        payload: { email: 'x@example.com' } });
+      // 403, not 401: the credential is valid, it is simply not this one. A 401
+      // sends a developer to check whether their key expired.
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error.message).toMatch(/service_role/);
+    }
+    // And nothing was changed by any of them.
+    const db = await asAuthRole(p);
+    try {
+      const { rows } = await db.query<{ n: number }>(
+        `select count(*)::int as n from auth.users where deleted_at is null`);
+      expect(rows[0]!.n).toBe(1);
+    } finally { await db.end(); }
+    await app.close();
+  });
+
+  t('lists users newest-first with a working cursor', async () => {
+    const p = await provision();
+    const { app } = await withUsers(p, 5);
+    const first = await app.inject({
+      method: 'GET', url: '/auth/v1/admin/users?limit=2', headers: svc(p) });
+    expect(first.statusCode).toBe(200);
+    const a = first.json();
+    expect(a.users).toHaveLength(2);
+    expect(a.pagination.has_more).toBe(true);
+
+    const second = await app.inject({
+      method: 'GET',
+      url: `/auth/v1/admin/users?limit=2&cursor=${encodeURIComponent(a.pagination.next_cursor)}`,
+      headers: svc(p) });
+    const b = second.json();
+    expect(b.users).toHaveLength(2);
+    // Keyset, so no overlap and no gap — the failure a limit/offset page would
+    // have when a row is inserted between the two requests.
+    const seen = new Set([...a.users, ...b.users].map((u: { id: string }) => u.id));
+    expect(seen.size).toBe(4);
+
+    const rest = await app.inject({
+      method: 'GET',
+      url: `/auth/v1/admin/users?limit=50&cursor=${encodeURIComponent(b.pagination.next_cursor)}`,
+      headers: svc(p) });
+    expect(rest.json().users).toHaveLength(1);
+    expect(rest.json().pagination.has_more).toBe(false);
+    expect(rest.json().pagination.next_cursor).toBeNull();
+    await app.close();
+  });
+
+  t('the admin view shows the ban and app_metadata, and never the hash', async () => {
+    const p = await provision();
+    const { app, ids } = await withUsers(p, 1);
+    await app.inject({
+      method: 'PUT', url: `/auth/v1/admin/users/${ids[0]}`, headers: svc(p),
+      payload: { app_metadata: { plan: 'pro' } } });
+
+    const res = await app.inject({
+      method: 'GET', url: `/auth/v1/admin/users/${ids[0]}`, headers: svc(p) });
+    expect(res.statusCode).toBe(200);
+    // Two fields the user-facing object omits: a developer managing their own
+    // users needs to see a ban and the metadata half they control.
+    expect(res.json().app_metadata).toEqual({ plan: 'pro' });
+    expect(res.json()).toHaveProperty('banned_until', null);
+    // The allowlist still holds on this surface. service_role has no table grant
+    // on auth.users (D-315), and this route reaching it through corebase_auth
+    // must not become the way the hash escapes.
+    expect(JSON.stringify(res.json())).not.toContain('scrypt$');
+    expect(JSON.stringify(res.json())).not.toContain('encrypted_password');
+    await app.close();
+  });
+
+  t('creates a user, confirmed and with app_metadata, and rejects a duplicate', async () => {
+    const p = await provision();
+    await autoconfirm(p.id);
+    const app = api();
+    const res = await app.inject({
+      method: 'POST', url: '/auth/v1/admin/users', headers: svc(p),
+      payload: {
+        email: 'imported@example.com', password, email_confirm: true,
+        user_metadata: { locale: 'fr' }, app_metadata: { plan: 'team' },
+      } });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().email_confirmed_at).toBeTruthy();
+    expect(res.json().app_metadata).toEqual({ plan: 'team' });
+    expect(res.json().user_metadata).toEqual({ locale: 'fr' });
+
+    // Confirmed without an email round trip, so the account is usable at once —
+    // the thing signup cannot do and a migration script needs.
+    expect((await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=password',
+      headers: { apikey: p.anonKey },
+      payload: { email: 'imported@example.com', password } })).statusCode).toBe(200);
+
+    // 422 on a duplicate, unlike signup's same-shape 200: the decoy protects an
+    // anonymous caller's privacy, and here the caller is the address's own
+    // custodian, so hiding the collision would make imports fail silently.
+    const dupe = await app.inject({
+      method: 'POST', url: '/auth/v1/admin/users', headers: svc(p),
+      payload: { email: 'imported@example.com', password } });
+    expect(dupe.statusCode).toBe(422);
+    expect(dupe.json().error.message).toMatch(/already exists/);
+    await app.close();
+  });
+
+  t('a user created with no password cannot log in, and is not distinguishable',
+    async () => {
+      const p = await provision();
+      await autoconfirm(p.id);
+      const app = api();
+      const res = await app.inject({
+        method: 'POST', url: '/auth/v1/admin/users', headers: svc(p),
+        payload: { email: 'nopass@example.com', email_confirm: true } });
+      expect(res.statusCode).toBe(201);
+
+      const db = await asAuthRole(p);
+      try {
+        const { rows } = await db.query<{ hash: string | null }>(
+          `select encrypted_password as hash from auth.users where email = 'nopass@example.com'`);
+        // NULL, not '': an empty string is a value that means "absent", which the
+        // login path's own NULL check would miss.
+        expect(rows[0]!.hash).toBeNull();
+      } finally { await db.end(); }
+
+      const login = await app.inject({
+        method: 'POST', url: '/auth/v1/token?grant_type=password',
+        headers: { apikey: p.anonKey },
+        payload: { email: 'nopass@example.com', password: 'anything at all' } });
+      // The same generic answer as a wrong password — the decoy verify runs, so
+      // "this account has no password" is not observable.
+      expect(login.statusCode).toBe(400);
+      expect(login.json().error.code).toBe('invalid_credentials');
+      await app.close();
+    });
+
+  t('EXIT CRITERION: a ban stops refresh and revokes every session', async () => {
+    const p = await provision();
+    const { app, ids } = await withUsers(p, 1);
+    const login = await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=password',
+      headers: { apikey: p.anonKey }, payload: { email: 'u0@example.com', password } });
+    expect(login.statusCode).toBe(200);
+
+    const ban = await app.inject({
+      method: 'PUT', url: `/auth/v1/admin/users/${ids[0]}`, headers: svc(p),
+      payload: { ban_until: new Date(Date.now() + 86_400_000).toISOString() } });
+    expect(ban.statusCode).toBe(200);
+    expect(ban.json().banned_until).toBeTruthy();
+
+    // A ban that leaves sessions refreshing is not a ban. Login is refused and
+    // refresh is dead — the residual window is one already-issued access token,
+    // which is the tightest a stateless token allows (D-113).
+    expect((await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=password',
+      headers: { apikey: p.anonKey },
+      payload: { email: 'u0@example.com', password } })).statusCode).toBe(400);
+    expect((await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=refresh_token',
+      headers: { apikey: p.anonKey },
+      payload: { refresh_token: login.json().refresh_token } })).statusCode).toBe(401);
+
+    // …and lifting it works, which is the half a ban-only test would miss.
+    const unban = await app.inject({
+      method: 'PUT', url: `/auth/v1/admin/users/${ids[0]}`, headers: svc(p),
+      payload: { ban_until: null } });
+    expect(unban.json().banned_until).toBeNull();
+    expect((await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=password',
+      headers: { apikey: p.anonKey },
+      payload: { email: 'u0@example.com', password } })).statusCode).toBe(200);
+    await app.close();
+  });
+
+  t('sign_out revokes sessions without changing the account', async () => {
+    const p = await provision();
+    const { app, ids } = await withUsers(p, 1);
+    const login = await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=password',
+      headers: { apikey: p.anonKey }, payload: { email: 'u0@example.com', password } });
+
+    const res = await app.inject({
+      method: 'PUT', url: `/auth/v1/admin/users/${ids[0]}`, headers: svc(p),
+      payload: { sign_out: true } });
+    expect(res.statusCode).toBe(200);
+    expect((await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=refresh_token',
+      headers: { apikey: p.anonKey },
+      payload: { refresh_token: login.json().refresh_token } })).statusCode).toBe(401);
+    // Not banned, so signing back in works — the difference between "get off my
+    // service" and "log out of that stolen laptop".
+    expect((await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=password',
+      headers: { apikey: p.anonKey },
+      payload: { email: 'u0@example.com', password } })).statusCode).toBe(200);
+    await app.close();
+  });
+
+  t('an admin password reset ends every session', async () => {
+    const p = await provision();
+    const { app, ids } = await withUsers(p, 1);
+    const login = await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=password',
+      headers: { apikey: p.anonKey }, payload: { email: 'u0@example.com', password } });
+
+    await app.inject({
+      method: 'PUT', url: `/auth/v1/admin/users/${ids[0]}`, headers: svc(p),
+      payload: { password: 'set by the developer' } });
+    // A password set by an admin carries the same suspicion as one set by the
+    // user (flows §8), so the same rule applies.
+    expect((await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=refresh_token',
+      headers: { apikey: p.anonKey },
+      payload: { refresh_token: login.json().refresh_token } })).statusCode).toBe(401);
+    expect((await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=password',
+      headers: { apikey: p.anonKey },
+      payload: { email: 'u0@example.com', password: 'set by the developer' } })).statusCode)
+      .toBe(200);
+    await app.close();
+  });
+
+  t('app_metadata merges and is reachable only from here', async () => {
+    const p = await provision();
+    const { app, ids } = await withUsers(p, 1);
+    await app.inject({
+      method: 'PUT', url: `/auth/v1/admin/users/${ids[0]}`, headers: svc(p),
+      payload: { app_metadata: { plan: 'pro', seats: 3 } } });
+    const res = await app.inject({
+      method: 'PUT', url: `/auth/v1/admin/users/${ids[0]}`, headers: svc(p),
+      payload: { app_metadata: { plan: 'team' } } });
+    expect(res.json().app_metadata).toEqual({ plan: 'team', seats: 3 });
+
+    // The user's own PUT /user cannot touch it — which is the whole reason the
+    // two metadata columns exist separately, since a policy may read this one.
+    const login = await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=password',
+      headers: { apikey: p.anonKey }, payload: { email: 'u0@example.com', password } });
+    await app.inject({
+      method: 'PUT', url: '/auth/v1/user',
+      headers: { apikey: p.anonKey, authorization: `Bearer ${login.json().access_token}` },
+      payload: { data: { plan: 'enterprise' } } });
+    const after = await app.inject({
+      method: 'GET', url: `/auth/v1/admin/users/${ids[0]}`, headers: svc(p) });
+    expect(after.json().app_metadata).toEqual({ plan: 'team', seats: 3 });
+    await app.close();
+  });
+
+  t('EXIT CRITERION: deletion tombstones the row, frees the address, and kills the session',
+    async () => {
+      const p = await provision();
+      const { app, ids } = await withUsers(p, 1);
+      const login = await app.inject({
+        method: 'POST', url: '/auth/v1/token?grant_type=password',
+        headers: { apikey: p.anonKey }, payload: { email: 'u0@example.com', password } });
+
+      const res = await app.inject({
+        method: 'DELETE', url: `/auth/v1/admin/users/${ids[0]}`, headers: svc(p) });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({});
+
+      const db = await asAuthRole(p);
+      try {
+        const { rows } = await db.query<{
+          email: string; hash: string | null; um: unknown; am: unknown;
+          confirmed: Date | null; deleted: Date | null;
+        }>(`select email, encrypted_password as hash, raw_user_meta_data as um,
+                   raw_app_meta_data as am, email_confirmed_at as confirmed, deleted_at as deleted
+              from auth.users where id = $1`, [ids[0]]);
+        const row = rows[0]!;
+        // The id survives — the developer's own tables reference it and Corebase
+        // does not cascade into app schemas (Flow 10 step 3). Everything else is
+        // gone: "deleted" that leaves a password hash and a full profile behind
+        // is not deletion in any sense a user would recognise.
+        expect(row.deleted).toBeTruthy();
+        expect(row.email).toBe(`deleted+${ids[0]}@invalid`);
+        expect(row.hash).toBeNull();
+        expect(row.um).toEqual({});
+        expect(row.am).toEqual({});
+        expect(row.confirmed).toBeNull();
+
+        // No live sessions, no live tokens, no outstanding links. A deleted user
+        // whose recovery token still works is one who can be signed back in from
+        // an inbox.
+        const { rows: left } = await db.query<{ s: number; r: number; o: number }>(
+          `select (select count(*)::int from auth.sessions
+                    where user_id = $1 and revoked_at is null) as s,
+                  (select count(*)::int from auth.refresh_tokens
+                    where user_id = $1 and revoked = false) as r,
+                  (select count(*)::int from auth.one_time_tokens where user_id = $1) as o`,
+          [ids[0]]);
+        expect(left[0]!).toEqual({ s: 0, r: 0, o: 0 });
+
+        // The audit row keeps the address the tombstone destroyed, because the
+        // user row can no longer answer "which account was this".
+        const { rows: audit } = await db.query<{ payload: { email: string } }>(
+          `select payload from auth.audit_log_entries where action = 'user_deleted'`);
+        expect(audit[0]!.payload.email).toBe('u0@example.com');
+      } finally { await db.end(); }
+
+      expect((await app.inject({
+        method: 'POST', url: '/auth/v1/token?grant_type=refresh_token',
+        headers: { apikey: p.anonKey },
+        payload: { refresh_token: login.json().refresh_token } })).statusCode).toBe(401);
+
+      // The partial unique index frees the address, so the person can sign up
+      // again — and gets a *new* id, which is what a developer's foreign keys
+      // require.
+      const again = await app.inject({
+        method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+        payload: { email: 'u0@example.com', password } });
+      expect(again.statusCode).toBe(200);
+      expect(again.json().user.id).not.toBe(ids[0]);
+
+      // And the tombstone is gone from the admin list.
+      const list = await app.inject({
+        method: 'GET', url: '/auth/v1/admin/users', headers: svc(p) });
+      expect((list.json().users as Array<{ id: string }>).map((u) => u.id))
+        .not.toContain(ids[0]);
+      await app.close();
+    });
+
+  t('deleting twice is a 404 the second time, and a bad id is a 400', async () => {
+    const p = await provision();
+    const { app, ids } = await withUsers(p, 1);
+    expect((await app.inject({
+      method: 'DELETE', url: `/auth/v1/admin/users/${ids[0]}`, headers: svc(p) }))
+      .statusCode).toBe(200);
+    // 404 rather than a second silent success: an import script retrying must be
+    // able to tell "already gone" from "done".
+    expect((await app.inject({
+      method: 'DELETE', url: `/auth/v1/admin/users/${ids[0]}`, headers: svc(p) }))
+      .statusCode).toBe(404);
+    // A malformed id is ours to reject: passed through, Postgres answers
+    // `invalid input syntax for type uuid`, which renders as a 500 and sends a
+    // developer looking for a server fault instead of at their own request.
+    const bad = await app.inject({
+      method: 'DELETE', url: '/auth/v1/admin/users/not-a-uuid', headers: svc(p) });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error.message).toMatch(/not a user id/);
+    await app.close();
+  });
+
+  t('one project\'s service_role key cannot touch another\'s users', async () => {
+    const a = await provision();
+    const b = await provision();
+    const { app, ids } = await withUsers(a, 1);
+    // Signed by B's key and naming B, so it resolves B — and B has no such user.
+    // The isolation is structural rather than checked: the key selects the
+    // database, and the databases are physically separate (D-009).
+    const res = await app.inject({
+      method: 'GET', url: `/auth/v1/admin/users/${ids[0]}`,
+      headers: { apikey: b.serviceKey } });
+    expect(res.statusCode).toBe(404);
+
+    const list = await app.inject({
+      method: 'GET', url: '/auth/v1/admin/users', headers: { apikey: b.serviceKey } });
+    expect(list.json().users).toHaveLength(0);
+    await app.close();
+  });
+
+  t('an unknown field is refused rather than silently ignored', async () => {
+    const p = await provision();
+    const { app, ids } = await withUsers(p, 1);
+    // `{role: 'service_role'}` or `{deleted_at: null}` must be told they did
+    // nothing, not left believing they worked.
+    for (const payload of [{ role: 'service_role' }, { deleted_at: null }, {}]) {
+      const res = await app.inject({
+        method: 'PUT', url: `/auth/v1/admin/users/${ids[0]}`, headers: svc(p), payload });
+      expect(res.statusCode).toBe(400);
+    }
+    await app.close();
+  });
+});
