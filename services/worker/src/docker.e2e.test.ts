@@ -351,12 +351,70 @@ describe('T5d — container steps of the provisioning saga', () => {
     await docker.startContainer(id);
     await pool.query(`update project_databases set container_id=$2 where project_id=$1`, [p.id, id]);
 
+    // Wait for it to be *actually* gone before probing, which removes a race this
+    // test used to depend on. `exec` against an exited container throws rather
+    // than returning a non-zero code, so whether wait_healthy saw a failed probe
+    // or an Engine error came down to which happened first — the probe locally,
+    // the exit on a faster CI runner. That made the same assertion pass on one
+    // machine and fail on the other, and hid a real bug: the raw `POST /exec/…`
+    // error escaped the health loop and became the step's failure, so an operator
+    // saw an Engine URL instead of "container exited while starting".
+    //
+    // Pinning the harder case rather than the convenient one: every machine now
+    // takes the path where the probe cannot run at all.
+    for (let i = 0; i < 60; i++) {
+      const st = await docker.inspectContainer(id);
+      if (st && !st.State.Running) break;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    expect((await docker.inspectContainer(id))!.State.Running).toBe(false);
+
     const started = Date.now();
     await expect(runSteps(p.id, ['wait_healthy'], { healthTimeoutMs: 60_000 }))
       .rejects.toThrow(/exited while starting/);
     expect(Date.now() - started).toBeLessThan(30_000);
     expect((await placement(p.id)).status).toBe('provisioning');
   });
+
+  t('wait_healthy reports the container, not the Engine, when the probe cannot run',
+    async () => {
+      await registerNode(pool, { hostname: 'data-1', ramTotalMb: 8192, diskTotalGb: 200 });
+      const p = await mkProject();
+      await runSteps(p.id, ['allocate_node', 'create_volume']);
+      created.volumes.add((await placement(p.id)).volume_name);
+
+      const id = await docker.createContainer(containerName(p.ref), {
+        Image: IMAGE, Env: ['PGDATA=/var/lib/postgresql/data/pgdata'],
+        Labels: { [LABEL_MANAGED]: 'true' },
+        HostConfig: {
+          Memory: 268435456, MemorySwap: 268435456, NanoCpus: 500000000,
+          RestartPolicy: { Name: 'no' }, Mounts: [], PortBindings: {},
+        },
+        ExposedPorts: {},
+      });
+      await docker.startContainer(id);
+      await pool.query(
+        `update project_databases set container_id=$2 where project_id=$1`, [p.id, id]);
+
+      // An `exec` that throws the way the Engine does when the container is
+      // already gone. Injected rather than provoked, because **this machine's
+      // Engine will not do it**: Docker Desktop returns a non-zero exit code for
+      // an exec against an exited container while the CI runner's Engine answers
+      // `POST /exec/<id>/start` with an error. That difference is exactly how the
+      // bug survived — the test above passed here and failed there — so the only
+      // honest way to pin the behaviour on every machine is to inject the failure
+      // rather than hope for it.
+      //
+      // What must happen: the loop treats a throw as a failed probe and lets
+      // `inspect` say why, so the operator is told the container exited and not
+      // handed an Engine URL.
+      const failing = {
+        ...docker,
+        exec: async () => { throw new Error('POST /exec/deadbeef/start failed: 409'); },
+      };
+      await expect(runSteps(p.id, ['wait_healthy'], { docker: failing, healthTimeoutMs: 20_000 }))
+        .rejects.toThrow(/exited while starting/);
+    });
 
   t('start_container refuses to proceed when the node lacks the image', async () => {
     await registerNode(pool, { hostname: 'data-1', ramTotalMb: 8192, diskTotalGb: 200 });

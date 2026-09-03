@@ -254,7 +254,30 @@ describe('P2f — disk I/O', () => {
     if (caps.ioWeight) {
       // The kernel has weights, so the spec asked for one and the kernel took it.
       expect(SPEC.HostConfig.BlkioWeight).toBe(PLAN_IO_WEIGHT['free']);
-      expect(await cg('io.weight')).toContain(String(PLAN_IO_WEIGHT['free']));
+
+      // Asserted as "not the kernel's own default", **not** as the number we
+      // asked for. `HostConfig.BlkioWeight` is cgroup v1's blkio range (10–1000)
+      // and runc rescales it into cgroup v2's `io.weight` range (1–10000), so
+      // asking for 200 reads back as `default 1920`. That conversion is runc's
+      // implementation detail rather than a contract, and encoding its formula
+      // here would make this test fail the next time runc adjusts the rounding.
+      //
+      // This assertion used to check for the literal `200` and only ever ran on
+      // kernels that *lack* io.weight — where the branch is skipped — so it went
+      // green locally for months and failed the first time CI ran it on a kernel
+      // that has the feature. The property worth pinning is the one that can
+      // actually be wrong: we asked for a weight and the kernel is using
+      // something other than its default.
+      const weight = await cg('io.weight');
+      expect(weight).toMatch(/^default \d+/);
+      const applied = Number(/^default (\d+)/.exec(weight)![1]);
+      // 100 is cgroup v2's default. Reading it back would mean the weight was
+      // silently ignored, which is the failure this test exists to catch.
+      expect(applied).not.toBe(100);
+      // And it is below the middle of the range, because free tier is meant to
+      // lose a contended disk to a paid project (D-055). A rescaling that
+      // inverted the ordering would pass the check above and still be wrong.
+      expect(applied).toBeLessThan(5000);
     } else {
       // On this node the answer is *no*: the LinuxKit kernel has no weight-capable
       // I/O policy (no BFQ, no blk-iocost), so `io.weight` does not exist — and
