@@ -197,7 +197,7 @@ nothing at all to an address that is already confirmed or does not exist.
 | Failure | Response | Notes |
 |---|---|---|
 | Recovery token invalid/used/expired | `401 invalid_token` at step 1 | 1 h expiry keeps the window small |
-| — | — | **Step 1 is built (P4c); steps 2–6 are not.** A recovery link yields a working session, and `PUT /user` does not exist — so the reset gets you logged in and cannot yet change the password. Recorded as a gap in STATUS §8. |
+| — | — | **Built end to end in P4f.** Step 2's session is distinguished from an ordinary one by the reserved `amr: ["recovery"]` claim on the token the link minted (**D-343**), which is what lets step 3 skip `current_password`. The capability dies with that token — an hour at most, and not across a refresh — rather than lasting the session, because a recovery link is spent in seconds. Step 4 revokes every session *except* the current one (**D-346**), and step 5's notice mail goes out on this path and on Flow 8's. |
 | New password fails policy | `422 weak_password` | Token already spent — user must re-run Flow 6; acceptable, rare |
 | Rate limited | `429` | |
 
@@ -216,6 +216,13 @@ nothing at all to an address that is already confirmed or does not exist.
 | `current_password` missing | `400 validation_failed` |
 | New password fails policy | `422 weak_password` |
 
+**Built in P4f.** Step 2's requirement is the security content of the endpoint and
+it is pinned by a test that was made to fail: a stolen access token alone must not
+be convertible into permanent account ownership — a token from `localStorage` buys
+an hour, one that can set the password buys the account. Unknown fields are
+rejected rather than ignored (**D-347**), because a client sending `{role:
+'admin'}` should be told it did nothing rather than left believing it worked.
+
 ### Flow 9 — Email change
 
 `PUT /user` `{email: new}` (bearer), then two verifications
@@ -223,6 +230,17 @@ nothing at all to an address that is already confirmed or does not exist.
 1. Client requests the change. Auth stores the proposal in `one_time_tokens`: one token `token_type='email_change_current'` (sent to the **old** address), one `token_type='email_change_new'` with `relates_to = new_email` (sent to the **new** address). Both 24 h, single-use. `202 {}`.
 2. User clicks **both** links (any order); each hits `/verify?type=email_change`.
 3. Only when both tokens are consumed does auth update `users.email`, reset `email_confirmed_at = now()`, revoke all other sessions, audit, and notify both addresses.
+
+**Built in P4f**, including the `new_only` relaxation — which issues no
+old-address token at all rather than one nobody will click (**D-345**), since an
+unspendable row would make the change permanently un-completable. Two things the
+numbered steps do not say: `PUT /user {email}` never reports that an address is
+taken (**D-344**) — that would be the enumeration oracle signup and `/recover`
+were built to avoid, so the collision is decided by the unique index at
+confirmation and the loser gets a 409 — and `/verify?type=email_change` issues no
+session (**D-348**), because the click may come from a device that was never
+logged in. Step 3's revocation is *every* session, including the requesting one
+(**D-346**), which is the opposite of Flow 8's rule and deliberately so.
 
 *The why of double confirmation:* confirming only the **new** address lets an attacker with a hijacked session silently re-point the account (then own password reset forever); confirming only the **old** address lets a user lock themselves onto a typo'd unreachable new address. Old-address confirmation proves the legitimate owner approves; new-address confirmation proves the destination is real and theirs. Projects may relax to single (new-only) confirmation via config; default is double.
 

@@ -116,6 +116,14 @@ One place the design could not be implemented as written, and the honest version
 
 And revocation's boundary is stated rather than implied: **on the auth endpoints revocation is immediate; on the data API refresh is dead immediately and an already-issued access token dies within its hour.** Putting a session lookup on every data-plane request would move a database round trip onto the hot path and make auth availability into data-API availability. Anyone claiming stateless JWTs plus instant revocation everywhere is selling something.
 
+**Password reset works end to end (P4f).** `GET /user`, `PUT /user`, and the email-change branch of `/verify` — which closes the last gap that mattered: before this, a recovery link logged you in and could not change your credential.
+
+Changing a password requires the current one, and that rule is the security content of the endpoint: a token lifted from `localStorage` buys an attacker an hour, and a token that can *set* the password buys the account forever. The one exception is a token minted by a recovery link, which has already proved control of the mailbox — the same proof a password gives. That exception rides a claim on the token rather than a flag on the session, which turned out to be the better mechanism: the capability expires with the token that carried it, in an hour at most and not across a refresh, instead of lasting the session's thirty days.
+
+Email change needs **both** addresses to confirm, because both single-sided policies are broken in opposite directions. Confirm only the new address and an attacker with a hijacked session can silently re-point the account, then own password reset forever — a temporary compromise made permanent. Confirm only the old one and a user can strand themselves on a typo'd, unreachable address. And `PUT /user {email}` deliberately does *not* tell you an address is taken: that would be the enumeration oracle signup and `/recover` were carefully built to avoid, reachable with one throwaway account. The unique index decides the collision at confirmation time instead.
+
+Two asymmetries that look like bugs and are not: a completed password change revokes every session *except* the one that made it, while a completed email change revokes *every* session including that one. A password change is an act of suspicion, so the session performing it is the one known to be in the right hands. An email change re-points the account's identity, and if it came from a hijacked session then the owner's sessions going too is the correct outcome — there is no way to tell the two cases apart.
+
 ## Run it
 
 ```bash

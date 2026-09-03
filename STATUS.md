@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-09-03 · **Phase:** Phase 4 (auth) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 complete** (P3a–P3h; **all four exit criteria met**) · **Phase 4 in progress** (P4a–P4e done)
+**Last updated:** 2026-09-03 · **Phase:** Phase 4 (auth) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 complete** (P3a–P3h; **all four exit criteria met**) · **Phase 4 in progress** (P4a–P4f done)
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -2322,6 +2322,75 @@ immediately and being idempotent, all three scopes behaving differently, the
 sessions list flagging the current session and carrying no token material, and the
 bearer endpoints refusing an anon key, another project's user token, and no token
 at all.
+### P4f — `/user`: password change, password reset completion, email change · done · 16 tests
+
+**Password reset works end to end now**, which is the headline: before P4f a
+recovery link logged you in and could not change your credential. `GET /user`,
+`PUT /user` and the `email_change` branch of `/verify` close Flows 7, 8 and 9.
+
+**The `current_password` rule is the security content of the endpoint** and is
+pinned by a test that was made to fail. A stolen access token alone must not be
+convertible into permanent account ownership: a token lifted from `localStorage`
+buys an attacker an hour, and a token that can set the password buys the account.
+The one exception is a token minted by a recovery link, which has already proved
+control of the mailbox — the same proof a password would give.
+
+**That exception rides the reserved `amr` claim, not a session flag** (**D-343**).
+Marking the session would need a column in `auth.sessions`, which lives in the
+project-database image and **has no per-project migration path** — a gap this step
+surfaced and did not close (see §8). The claim table reserved `amr` for auth
+methods and says adding claims is non-breaking, so it is the mechanism already set
+aside for this. It also gives the tighter property: the capability dies with the
+token that carried it — an hour at most, and deliberately not carried across a
+refresh — rather than lasting the session's thirty days. A recovery link is spent
+in seconds.
+
+**Email change is Flow 9's double confirmation, and both single-sided policies are
+broken in opposite ways**, which is why the default is strict. Confirming only the
+*new* address lets an attacker with a hijacked session silently re-point the
+account and then own password reset forever — a temporary compromise turned
+permanent. Confirming only the *old* address lets a user strand themselves on a
+typo'd unreachable address. So: old-address confirmation proves the owner
+approves, new-address confirmation proves the destination is real and theirs.
+`new_only` exists because some products prefer the support burden to the friction,
+and it issues **no** old-address token rather than one nobody will click
+(**D-345**) — an unspendable row would make the change permanently
+un-completable.
+
+Two asymmetries that look like inconsistencies and are not:
+
+- A completed **password** change revokes every session *except* the one that made
+  it; a completed **email** change revokes *every* session including that one
+  (**D-346**). A password change is an act of suspicion, so the session performing
+  it is the one known to be in the right hands. An email change re-points the
+  account's identity, and if it came from a hijacked session then the owner's
+  sessions going too is correct — there is no way to tell the two cases apart.
+- `PUT /user {email}` never reports that an address is taken (**D-344**), while
+  the confirmation returns a 409. Reporting it up front would be the enumeration
+  oracle signup and `/recover` were carefully built to avoid, reachable with one
+  throwaway account. The unique index decides the collision instead, and
+  `applyEmailChange` distinguishes `23505` from a real error so the loser is told
+  rather than 500'd.
+
+`/verify?type=email_change` is the one verify that issues **no** session
+(**D-348**): the click may come from a mail client on a device that was never
+logged in. And `pending` is a 200, because the user did exactly what the link
+asked — reporting it as a failure is how a working double confirmation gets
+mistaken for a broken one, which is what makes a project switch to `new_only` and
+lose the protection.
+
+**Verification:** 16 integration tests — `GET /user` reading the database rather
+than the token's stale claims, a password change refused without and with a wrong
+`current_password`, a correct one killing every other session and sending the
+tripwire mail, a recovery link completing a reset with no old password, that
+capability *not* surviving a refresh, metadata merging rather than replacing and
+being unable to reach `app_metadata`, an unknown field and an empty body both
+refused, one address alone never completing a change, `new_only` skipping the old
+address, a taken address undisclosed on request and caught on confirmation, and
+the GET form redirecting with an outcome and no tokens. Two mutations were run:
+trusting the session instead of the claim let any bearer set a password with no
+current one, and applying on first confirmation completed a change from one
+address's word.
 
 ## 5. Rules the code follows
 
@@ -2630,17 +2699,21 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   customers could migrate a user table from GoTrue without a mass password reset;
   it needs a dependency of its own and nobody is migrating in yet. Recorded because
   D-004's portability is supposed to cut both ways.
-- The auth module serves **eleven of its thirteen endpoints** (P4b, P4c, P4e).
-  What is left: **`GET /user` and `PUT /user`**, and **`/admin/users`**. The
-  consequences are specific rather than cosmetic — `PUT /user` is what completes a
-  password reset (see below), holds the email-change flow, and is the only writer
-  of `raw_user_meta_data`; and without `/admin/users` a developer has no way to
-  ban, unban, delete or force-sign-out one of their own users except by SQL.
-- **Password reset still stops one step short of resetting a password.** Flow 7
-  step 1 works — a recovery link yields a session — and steps 2–6 need `PUT /user`.
-  So the flow logs you in and cannot change your credential, the "revoke every
-  other session" rule that makes a reset meaningful is unenforced, and the "your
-  password was changed" tripwire mail has nothing to trigger it.
+- The auth module serves **twelve of its thirteen endpoints** (P4b–P4f). What is
+  left is **`/admin/users`** and `/admin/users/:id`: without them a developer has
+  no way to list, create, ban, unban, delete or force-sign-out one of their own
+  users except by connecting to the database and writing SQL — and D-114's V1
+  stance makes developer-initiated deletion the *only* deletion, so today there
+  is no supported way for a customer to honour a user's deletion request.
+- **The project-database `auth` schema has no migration path** — surfaced by P4f
+  and not closed by it. The tables are created at `initdb` (D-314), which is right
+  for a fleet-wide identical schema and means **an existing project's schema is
+  frozen at whatever its image created**. P4f wanted a column on `auth.sessions`
+  and used a JWT claim instead (D-343), which was the better mechanism anyway — so
+  nothing is broken today. What is missing is the machinery for the first change
+  that has no such alternative: a per-project schema version, a step that applies
+  pending DDL to every running project, and a way to do it without a window where
+  the module and the schema disagree. It is a step, not a patch.
 - **No absolute session cap.** A lineage's lifetime is bounded only by idle expiry
   (30 days, per-project) and revocation, so a device refreshed weekly stays signed
   in indefinitely. OQ-113 has this as a V1.x config candidate; nothing enforces

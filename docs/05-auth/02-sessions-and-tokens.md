@@ -32,6 +32,14 @@ Per D-014: each project gets an ES256 (ECDSA P-256 + SHA-256) keypair generated 
 
 Reserved for later, not emitted in V1: `aal` (MFA assurance level, V1.2 — [OAuth & future](05-oauth-and-future.md)), `amr` (auth methods). Adding claims is non-breaking; that is why they are not stubbed now.
 
+*P4f emits `amr` after all, with exactly one value: `["recovery"]`, on the access
+token a recovery link mints (**D-343**). It is what lets `PUT /user` accept a new
+password with no `current_password`, and it is a claim rather than a session
+column because `auth.sessions` lives in the project-database image and there is
+no per-project migration path — plus the claim gives the tighter property, since
+the capability expires with the token instead of lasting the session. `aal` is
+still unemitted.*
+
 **Verification** (PostgREST, storage-api, and customer backends): signature against the project JWKS, `exp`/`iat` with **±60 s clock-skew leeway**, `aud = authenticated`, `iss` exact match. The gateway does *not* verify user JWTs on the REST path — that is PostgREST's job (one verification, not two); the gateway verifies only the `apikey` project key ([request pipeline](../04-data-api/02-request-pipeline.md)).
 
 ### JWKS: `https://<ref>.corebase.co/auth/v1/.well-known/jwks.json`
@@ -149,6 +157,12 @@ Routine (credential hygiene or suspected exposure without active abuse):
 Emergency (private key confirmed leaked): steps 1, 3, 4 immediately; skip dual-publish patience; old `kid` removed at once. Every outstanding access token and both API keys die instantly — a project-wide forced re-auth, which is the point. Refresh tokens survive (they are opaque, not signed), so users transparently recover on next refresh.
 
 ### What goes in `raw_user_meta_data` vs app tables
+
+*Built in P4f: `PUT /user {data}` **merges** into `raw_user_meta_data` rather than
+replacing it, so a client sending one field does not silently wipe the others, and
+it cannot reach `raw_app_meta_data` by construction — the store function only
+writes the user half, which is the entire reason the two columns exist
+separately.*
 
 - `raw_user_meta_data` is **user-writable** (`PUT /auth/v1/user`). It must never carry authorization data: no roles, no plan tiers, no feature flags. RLS policies must not read it. Privileged attributes go in `raw_app_meta_data` (service_role-writable) or, better, in the app's own tables joined by `user_id`.
 - Keep it to display-ish scalars (name, avatar URL, locale). Anything queried, joined, or constrained belongs in a `public.profiles` table with RLS — that is the documented pattern in the [SDK spec](../10-cli-and-sdk/03-sdk-spec.md).
