@@ -9,6 +9,7 @@ import { createSecretStore, SECRET_NAMES } from '@corebase/secrets';
 import { verify as verifyJwt, decodeUnverified, sign as signJwt } from '@corebase/jwt';
 import { buildApp } from '@corebase/api';
 import { createMemoryRateLimiter } from '@corebase/api/kernel/rate-limit.ts';
+import { createNullMailer } from '@corebase/api/modules/project-auth/mail.ts';
 import { createDocker, type Docker } from './docker.ts';
 import { buildSagas } from './jobs/sagas.ts';
 import { registerNode } from './placement.ts';
@@ -146,16 +147,41 @@ async function provision(): Promise<Fixture> {
  * test is that the limit is *checked before the hash*, which is a property of the
  * route and not of the counter's storage.
  */
-function api() {
-  return buildApp({
+function api(over: Partial<Record<string, number>> = {}) {
+  // The mailer is returned alongside the app because there is no sender until
+  // P4d: what a flow *owes* is the observable, and the token in the handed-over
+  // job is the only way a test can hold the link a real user would click.
+  const mailer = createNullMailer();
+  const app = buildApp({
     projectAuth: {
-      pool, secrets,
-      signupLimiter: createMemoryRateLimiter({ limit: 30, windowSeconds: 3600 }),
+      pool, secrets, mailer,
+      signupLimiter: createMemoryRateLimiter({ limit: over['signup'] ?? 30, windowSeconds: 3600 }),
       loginEmailLimiter: createMemoryRateLimiter({ limit: 10, windowSeconds: 300 }),
       loginIpLimiter: createMemoryRateLimiter({ limit: 30, windowSeconds: 300 }),
+      recoverEmailLimiter: createMemoryRateLimiter(
+        { limit: over['recoverEmail'] ?? 4, windowSeconds: 3600 }),
+      recoverIpLimiter: createMemoryRateLimiter({ limit: 10, windowSeconds: 3600 }),
+      verifyIpLimiter: createMemoryRateLimiter({ limit: 30, windowSeconds: 3600 }),
     },
   });
+  return Object.assign(app, { mailer });
 }
+
+/** The token out of the link a real user would click. */
+function tokenFromJob(job: { variables: Record<string, string> }): string {
+  const url = new URL(job.variables['action_url']!);
+  const token = url.searchParams.get('token');
+  if (!token) throw new Error(`no token in action_url: ${job.variables['action_url']}`);
+  return token;
+}
+
+const setSite = (projectId: string, siteUrl: string | null, extra: string[] = []) =>
+  pool.query(
+    `insert into project_auth_config (project_id, site_url, additional_redirects)
+     values ($1, $2, $3)
+     on conflict (project_id) do update
+        set site_url = $2, additional_redirects = $3`,
+    [projectId, siteUrl, extra]);
 
 const autoconfirm = (projectId: string) => pool.query(
   `insert into project_auth_config (project_id, autoconfirm) values ($1, true)
@@ -446,6 +472,9 @@ describe('P4b — password login', () => {
         signupLimiter: createMemoryRateLimiter({ limit: 30, windowSeconds: 3600 }),
         loginEmailLimiter: createMemoryRateLimiter({ limit: 3, windowSeconds: 300 }),
         loginIpLimiter: createMemoryRateLimiter({ limit: 100, windowSeconds: 300 }),
+        recoverEmailLimiter: createMemoryRateLimiter({ limit: 4, windowSeconds: 3600 }),
+        recoverIpLimiter: createMemoryRateLimiter({ limit: 10, windowSeconds: 3600 }),
+        verifyIpLimiter: createMemoryRateLimiter({ limit: 30, windowSeconds: 3600 }),
       },
     });
     const attempt = () => app.inject({
@@ -600,6 +629,525 @@ describe('P4b — the project boundary', () => {
       method: 'POST', url: '/auth/v1/token?grant_type=refresh_token',
       headers: { apikey: p.anonKey }, payload: { refresh_token: 'cb_rt_whatever' } });
     expect(refresh.statusCode).toBe(501);
+    await app.close();
+  });
+});
+
+describe('P4c — email confirmation', () => {
+  t('EXIT CRITERION: a signup link confirms the address and issues a session', async () => {
+    const p = await provision();
+    await setSite(p.id, 'https://app.example.com');
+    const app = api();
+    const signup = await app.inject({
+      method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+      payload: { email: 'conf@example.com', password: 'correct horse battery' } });
+    expect(signup.statusCode).toBe(200);
+    // No session yet — that is the whole point of requiring confirmation.
+    expect(signup.json().access_token).toBeUndefined();
+
+    // Exactly one mail owed, and its link is built by us from a validated
+    // redirect (D-116) — never from anything the client sent.
+    expect(app.mailer.jobs).toHaveLength(1);
+    const job = app.mailer.jobs[0]!;
+    expect(job.email).toBe('confirmation');
+    expect(job.to).toBe('conf@example.com');
+    expect(job.variables['action_url']).toContain(`https://${p.ref}.corebase.co/auth/v1/verify`);
+
+    const token = tokenFromJob(job);
+    const res = await app.inject({
+      method: 'POST', url: '/auth/v1/verify', headers: { apikey: p.anonKey },
+      payload: { token, type: 'signup' } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().access_token).toBeTruthy();
+    expect(res.json().user.email_confirmed_at).toBeTruthy();
+
+    // And the login that was refused before now works.
+    const login = await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=password',
+      headers: { apikey: p.anonKey },
+      payload: { email: 'conf@example.com', password: 'correct horse battery' } });
+    expect(login.statusCode).toBe(200);
+    await app.close();
+  });
+
+  t('EXIT CRITERION: a verification link is single-use', async () => {
+    const p = await provision();
+    await setSite(p.id, 'https://app.example.com');
+    const app = api();
+    await app.inject({
+      method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+      payload: { email: 'once@example.com', password: 'correct horse battery' } });
+    const token = tokenFromJob(app.mailer.jobs[0]!);
+
+    const first = await app.inject({
+      method: 'POST', url: '/auth/v1/verify', headers: { apikey: p.anonKey },
+      payload: { token, type: 'signup' } });
+    expect(first.statusCode).toBe(200);
+
+    // A forwarded mail, a scanner's prefetch, a browser's back button: all
+    // replays, and none of them may produce a second session.
+    const second = await app.inject({
+      method: 'POST', url: '/auth/v1/verify', headers: { apikey: p.anonKey },
+      payload: { token, type: 'signup' } });
+    expect(second.statusCode).toBe(401);
+    expect(second.json().error.code).toBe('invalid_token');
+
+    const db = await asAuthRole(p);
+    try {
+      const { rows } = await db.query<{ n: number; used: Date | null }>(
+        `select (select count(*)::int from auth.sessions) as n,
+                (select used_at from auth.one_time_tokens) as used`);
+      expect(rows[0]!.n).toBe(1);          // one session, not two
+      expect(rows[0]!.used).not.toBeNull();
+    } finally { await db.end(); }
+    await app.close();
+  });
+
+  t('concurrent clicks on one link yield exactly one session', async () => {
+    const p = await provision();
+    await setSite(p.id, 'https://app.example.com');
+    const app = api();
+    await app.inject({
+      method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+      payload: { email: 'race@example.com', password: 'correct horse battery' } });
+    const token = tokenFromJob(app.mailer.jobs[0]!);
+
+    // The reason `consumeOneTimeToken` is one UPDATE and not select-then-update:
+    // both of these pass a `used_at IS NULL` check if the check is its own
+    // statement, and both then issue a session.
+    const [a, b] = await Promise.all([
+      app.inject({ method: 'POST', url: '/auth/v1/verify', headers: { apikey: p.anonKey },
+        payload: { token, type: 'signup' } }),
+      app.inject({ method: 'POST', url: '/auth/v1/verify', headers: { apikey: p.anonKey },
+        payload: { token, type: 'signup' } }),
+    ]);
+    const codes = [a.statusCode, b.statusCode].sort();
+    expect(codes).toEqual([200, 401]);
+
+    const db = await asAuthRole(p);
+    try {
+      const { rows } = await db.query<{ n: number }>(
+        `select count(*)::int as n from auth.sessions`);
+      expect(rows[0]!.n).toBe(1);
+    } finally { await db.end(); }
+    await app.close();
+  });
+
+  t('resend replaces the previous link rather than adding another', async () => {
+    const p = await provision();
+    await setSite(p.id, 'https://app.example.com');
+    const app = api();
+    await app.inject({
+      method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+      payload: { email: 'again@example.com', password: 'correct horse battery' } });
+    const first = tokenFromJob(app.mailer.jobs[0]!);
+
+    const resend = await app.inject({
+      method: 'POST', url: '/auth/v1/resend', headers: { apikey: p.anonKey },
+      payload: { email: 'again@example.com' } });
+    expect(resend.statusCode).toBe(200);
+    expect(resend.json()).toEqual({});
+    const second = tokenFromJob(app.mailer.jobs[1]!);
+    expect(second).not.toBe(first);
+
+    // Ten resends must leave one live credential in an inbox, not ten. The old
+    // link is dead the moment a new one is issued.
+    const stale = await app.inject({
+      method: 'POST', url: '/auth/v1/verify', headers: { apikey: p.anonKey },
+      payload: { token: first, type: 'signup' } });
+    expect(stale.statusCode).toBe(401);
+
+    const fresh = await app.inject({
+      method: 'POST', url: '/auth/v1/verify', headers: { apikey: p.anonKey },
+      payload: { token: second, type: 'signup' } });
+    expect(fresh.statusCode).toBe(200);
+
+    const db = await asAuthRole(p);
+    try {
+      const { rows } = await db.query<{ n: number }>(
+        `select count(*)::int as n from auth.one_time_tokens`);
+      expect(rows[0]!.n).toBe(1);          // the UNIQUE (user, type) doing its job
+    } finally { await db.end(); }
+    await app.close();
+  });
+
+  t('resend to an unknown or already-confirmed address sends nothing and says nothing',
+    async () => {
+      const p = await provision();
+      await setSite(p.id, 'https://app.example.com');
+      await autoconfirm(p.id);
+      const app = api();
+      await app.inject({
+        method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+        payload: { email: 'done@example.com', password: 'correct horse battery' } });
+      app.mailer.jobs.length = 0;
+
+      for (const email of ['done@example.com', 'nobody@example.com']) {
+        const res = await app.inject({
+          method: 'POST', url: '/auth/v1/resend', headers: { apikey: p.anonKey },
+          payload: { email } });
+        // Same 200 and same empty body for both, or the endpoint answers "is
+        // this address registered" for anyone who asks.
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({});
+      }
+      // And no mail either way: re-confirming a confirmed address is a way to
+      // make our sending domain deliver to any registered address on demand.
+      expect(app.mailer.jobs).toHaveLength(0);
+
+      const db = await asAuthRole(p);
+      try {
+        const { rows } = await db.query<{ action: string }>(
+          `select action from auth.audit_log_entries
+            where action like 'resend%' order by created_at`);
+        expect(rows.map((r) => r.action))
+          .toEqual(['resend_already_confirmed', 'resend_unknown_email']);
+      } finally { await db.end(); }
+      await app.close();
+    });
+
+  t('a signup on a taken unconfirmed address refreshes that user\'s own link', async () => {
+    const p = await provision();
+    await setSite(p.id, 'https://app.example.com');
+    const app = api();
+    const payload = { email: 'twice@example.com', password: 'correct horse battery' };
+    await app.inject({
+      method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey }, payload });
+    await app.inject({
+      method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey }, payload });
+
+    // For someone who never finished signing up, a second attempt is
+    // indistinguishable from retrying their own — so they get a working link,
+    // not a "you already have an account" notice about an account they cannot
+    // use yet.
+    expect(app.mailer.jobs.map((j) => j.email)).toEqual(['confirmation', 'confirmation']);
+    const fresh = tokenFromJob(app.mailer.jobs[1]!);
+    const res = await app.inject({
+      method: 'POST', url: '/auth/v1/verify', headers: { apikey: p.anonKey },
+      payload: { token: fresh, type: 'signup' } });
+    expect(res.statusCode).toBe(200);
+    await app.close();
+  });
+
+  t('a signup on a taken confirmed address notifies the owner and nobody else', async () => {
+    const p = await provision();
+    await setSite(p.id, 'https://app.example.com');
+    await autoconfirm(p.id);
+    const app = api();
+    const payload = { email: 'owner@example.com', password: 'correct horse battery' };
+    await app.inject({
+      method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey }, payload });
+    app.mailer.jobs.length = 0;
+
+    const second = await app.inject({
+      method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey }, payload });
+    expect(second.statusCode).toBe(200);
+    // The response cannot say the address is taken, so this mail is the only
+    // channel that can — and it goes to an address whose owner already has an
+    // account, so it tells the attacker nothing.
+    expect(app.mailer.jobs).toHaveLength(1);
+    expect(app.mailer.jobs[0]!.email).toBe('account_exists_notice');
+    expect(app.mailer.jobs[0]!.to).toBe('owner@example.com');
+    // No link in it: there is no token, and a "you already have an account"
+    // mail carrying a credential would be a password-reset nobody asked for.
+    expect(app.mailer.jobs[0]!.variables['action_url']).toBeUndefined();
+    await app.close();
+  });
+});
+
+describe('P4c — password recovery', () => {
+  t('EXIT CRITERION: recover answers identically for a real and an unknown address',
+    async () => {
+      const p = await provision();
+      await setSite(p.id, 'https://app.example.com');
+      await autoconfirm(p.id);
+      const app = api();
+      await app.inject({
+        method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+        payload: { email: 'real@example.com', password: 'correct horse battery' } });
+      app.mailer.jobs.length = 0;
+
+      const real = await app.inject({
+        method: 'POST', url: '/auth/v1/recover', headers: { apikey: p.anonKey },
+        payload: { email: 'real@example.com' } });
+      const fake = await app.inject({
+        method: 'POST', url: '/auth/v1/recover', headers: { apikey: p.anonKey },
+        payload: { email: 'ghost@example.com' } });
+
+      // `/recover` answering honestly is a bare "does this person have an
+      // account here" service — worse than signup, which at least needs a
+      // password guess.
+      expect(real.statusCode).toBe(200);
+      expect(fake.statusCode).toBe(200);
+      expect(real.json()).toEqual({});
+      expect(fake.json()).toEqual({});
+      expect(real.headers['content-type']).toBe(fake.headers['content-type']);
+
+      // One mail, to the address that exists.
+      expect(app.mailer.jobs.map((j) => j.email)).toEqual(['recovery']);
+      expect(app.mailer.jobs[0]!.to).toBe('real@example.com');
+      await app.close();
+    });
+
+  t('a recovery link is single-use, hands back a session, and expires in an hour',
+    async () => {
+      const p = await provision();
+      await setSite(p.id, 'https://app.example.com');
+      await autoconfirm(p.id);
+      const app = api();
+      await app.inject({
+        method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+        payload: { email: 'reset@example.com', password: 'correct horse battery' } });
+      app.mailer.jobs.length = 0;
+      await app.inject({
+        method: 'POST', url: '/auth/v1/recover', headers: { apikey: p.anonKey },
+        payload: { email: 'reset@example.com' } });
+      const token = tokenFromJob(app.mailer.jobs[0]!);
+
+      const db = await asAuthRole(p);
+      try {
+        // One hour, not the confirmation token's twenty-four: a recovery token
+        // is a password reset sitting in an inbox.
+        const { rows } = await db.query<{ secs: number; type: string }>(
+          `select extract(epoch from (expires_at - created_at))::int as secs, token_type as type
+             from auth.one_time_tokens`);
+        expect(rows[0]!.type).toBe('recovery');
+        expect(rows[0]!.secs).toBe(3600);
+      } finally { await db.end(); }
+
+      const first = await app.inject({
+        method: 'POST', url: '/auth/v1/verify', headers: { apikey: p.anonKey },
+        payload: { token, type: 'recovery' } });
+      expect(first.statusCode).toBe(200);
+      expect(first.json().access_token).toBeTruthy();
+
+      const replay = await app.inject({
+        method: 'POST', url: '/auth/v1/verify', headers: { apikey: p.anonKey },
+        payload: { token, type: 'recovery' } });
+      expect(replay.statusCode).toBe(401);
+      await app.close();
+    });
+
+  t('a recovery link also confirms an unconfirmed address', async () => {
+    const p = await provision();
+    await setSite(p.id, 'https://app.example.com');
+    const app = api();
+    await app.inject({
+      method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+      payload: { email: 'never@example.com', password: 'correct horse battery' } });
+    app.mailer.jobs.length = 0;
+    await app.inject({
+      method: 'POST', url: '/auth/v1/recover', headers: { apikey: p.anonKey },
+      payload: { email: 'never@example.com' } });
+
+    // Clicking a recovery link proves control of the mailbox exactly as well as
+    // clicking a confirmation link. Leaving them unconfirmed would send them
+    // through a successful reset into a login that refuses them.
+    const res = await app.inject({
+      method: 'POST', url: '/auth/v1/verify', headers: { apikey: p.anonKey },
+      payload: { token: tokenFromJob(app.mailer.jobs[0]!), type: 'recovery' } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().user.email_confirmed_at).toBeTruthy();
+    await app.close();
+  });
+
+  t('a recovery link carries a validated destination, not the one asked for', async () => {
+    const p = await provision();
+    await setSite(p.id, 'https://app.example.com');
+    await autoconfirm(p.id);
+    const app = api();
+    await app.inject({
+      method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+      payload: { email: 'redirreset@example.com', password: 'correct horse battery' } });
+    app.mailer.jobs.length = 0;
+    await app.inject({
+      method: 'POST', url: '/auth/v1/recover', headers: { apikey: p.anonKey },
+      payload: { email: 'redirreset@example.com', redirect_to: 'https://evil.test/collect' } });
+
+    // The first version of this endpoint passed `redirect_to` straight into the
+    // link, which would have made Corebase send an attacker-chosen destination
+    // from its own domain — the exact capability D-116's fixed templates exist
+    // to withhold. The mail is the artefact, so the mail is what is asserted on.
+    const url = new URL(app.mailer.jobs[0]!.variables['action_url']!);
+    expect(url.searchParams.get('redirect_to')).toBe('https://app.example.com');
+    expect(app.mailer.jobs[0]!.variables['action_url']).not.toContain('evil.test');
+    await app.close();
+  });
+
+  t('the per-address bucket stops targeted inbox flooding', async () => {
+    const p = await provision();
+    await setSite(p.id, 'https://app.example.com');
+    await autoconfirm(p.id);
+    const app = api({ recoverEmail: 2 });
+    await app.inject({
+      method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+      payload: { email: 'flood@example.com', password: 'correct horse battery' } });
+    app.mailer.jobs.length = 0;
+
+    const ask = () => app.inject({
+      method: 'POST', url: '/auth/v1/recover', headers: { apikey: p.anonKey },
+      payload: { email: 'flood@example.com' } });
+    expect((await ask()).statusCode).toBe(200);
+    expect((await ask()).statusCode).toBe(200);
+    const limited = await ask();
+    expect(limited.statusCode).toBe(429);
+    expect(limited.json().error.code).toBe('over_rate_limit');
+    // Two mails owed, not three: the cap is on the sending, not just the reply.
+    expect(app.mailer.jobs).toHaveLength(2);
+    await app.close();
+  });
+});
+
+describe('P4c — the redirect allowlist, live', () => {
+  t('EXIT CRITERION: an unlisted redirect_to is replaced, never honoured', async () => {
+    const p = await provision();
+    await setSite(p.id, 'https://app.example.com', ['https://staging.example.com/auth']);
+    const app = api();
+    await app.inject({
+      method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+      payload: { email: 'redir@example.com', password: 'correct horse battery',
+                 redirect_to: 'https://evil.test/collect' } });
+
+    // The link in the mail already carries the *substituted* destination: a
+    // redirect is validated when the link is built, not only when it is followed.
+    const url = new URL(app.mailer.jobs[0]!.variables['action_url']!);
+    expect(url.searchParams.get('redirect_to')).toBe('https://app.example.com');
+
+    const token = tokenFromJob(app.mailer.jobs[0]!);
+    const res = await app.inject({
+      method: 'GET',
+      url: `/auth/v1/verify?token=${token}&type=signup&redirect_to=${
+        encodeURIComponent('https://evil.test/collect')}`,
+      headers: { apikey: p.anonKey } });
+    expect(res.statusCode).toBe(302);
+    const location = res.headers['location'] as string;
+    // The tokens went to the project's own site, and nowhere near evil.test.
+    expect(location.startsWith('https://app.example.com#')).toBe(true);
+    expect(location).not.toContain('evil.test');
+    const frag = new URLSearchParams(location.split('#')[1]);
+    expect(frag.get('access_token')).toBeTruthy();
+    expect(frag.get('refresh_token')!.startsWith('cb_rt_')).toBe(true);
+
+    const db = await asAuthRole(p);
+    try {
+      const { rows } = await db.query<{ action: string }>(
+        `select action from auth.audit_log_entries
+          where action = 'redirect_not_allowlisted'`);
+      // Substituting silently is right for the user and invisible to the
+      // developer, so it is audited — and this row is also what an exfiltration
+      // attempt looks like from our side.
+      expect(rows.length).toBeGreaterThanOrEqual(1);
+    } finally { await db.end(); }
+    await app.close();
+  });
+
+  t('the GET form puts tokens in the fragment, never in the query string', async () => {
+    const p = await provision();
+    await setSite(p.id, 'https://app.example.com', ['https://app.example.com/welcome']);
+    const app = api();
+    await app.inject({
+      method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+      payload: { email: 'frag@example.com', password: 'correct horse battery',
+                 redirect_to: 'https://app.example.com/welcome' } });
+    const token = tokenFromJob(app.mailer.jobs[0]!);
+    const res = await app.inject({
+      method: 'GET',
+      url: `/auth/v1/verify?token=${token}&type=signup&redirect_to=${
+        encodeURIComponent('https://app.example.com/welcome')}`,
+      headers: { apikey: p.anonKey } });
+    const location = res.headers['location'] as string;
+    // A query string reaches the destination's access log, every proxy in
+    // between, and the Referer header. A fragment reaches none of them.
+    const [head, fragment] = location.split('#');
+    expect(head).toBe('https://app.example.com/welcome');
+    expect(head).not.toContain('access_token');
+    expect(new URLSearchParams(fragment).get('access_token')).toBeTruthy();
+    await app.close();
+  });
+
+  t('a bad token redirects with a generic error rather than leaking which', async () => {
+    const p = await provision();
+    await setSite(p.id, 'https://app.example.com');
+    const app = api();
+    const res = await app.inject({
+      method: 'GET', url: '/auth/v1/verify?token=nonsense&type=signup',
+      headers: { apikey: p.anonKey } });
+    expect(res.statusCode).toBe(302);
+    const frag = new URLSearchParams((res.headers['location'] as string).split('#')[1]);
+    // Unknown, spent and expired are one code: telling them apart says whether
+    // an address is registered and whether a link was already used.
+    expect(frag.get('error')).toBe('invalid_token');
+    expect(frag.get('access_token')).toBeNull();
+    await app.close();
+  });
+
+  t('a project with no site_url gets JSON instead of a guessed redirect', async () => {
+    const p = await provision();
+    await setSite(p.id, null);
+    const app = api();
+    await app.inject({
+      method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+      payload: { email: 'nosite@example.com', password: 'correct horse battery' } });
+    const token = tokenFromJob(app.mailer.jobs[0]!);
+    const res = await app.inject({
+      method: 'GET', url: `/auth/v1/verify?token=${token}&type=signup`,
+      headers: { apikey: p.anonKey } });
+    // Inventing a destination would be exactly the open redirect this module
+    // exists to prevent, so it answers in JSON and lets the client decide.
+    expect(res.statusCode).toBe(200);
+    expect(res.json().access_token).toBeTruthy();
+    await app.close();
+  });
+
+  t('a token of the wrong type is refused', async () => {
+    const p = await provision();
+    await setSite(p.id, 'https://app.example.com');
+    const app = api();
+    await app.inject({
+      method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+      payload: { email: 'wrongtype@example.com', password: 'correct horse battery' } });
+    const token = tokenFromJob(app.mailer.jobs[0]!);
+
+    // A confirmation token presented as a recovery token: same bytes, different
+    // authority. `token_type` is part of the lookup for that reason.
+    const res = await app.inject({
+      method: 'POST', url: '/auth/v1/verify', headers: { apikey: p.anonKey },
+      payload: { token, type: 'recovery' } });
+    expect(res.statusCode).toBe(401);
+
+    // Unspent, so the right type still works — a wrong-type attempt must not
+    // burn somebody's link.
+    const ok = await app.inject({
+      method: 'POST', url: '/auth/v1/verify', headers: { apikey: p.anonKey },
+      payload: { token, type: 'signup' } });
+    expect(ok.statusCode).toBe(200);
+    await app.close();
+  });
+
+  t('only the hash of a token is ever stored', async () => {
+    const p = await provision();
+    await setSite(p.id, 'https://app.example.com');
+    const app = api();
+    await app.inject({
+      method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+      payload: { email: 'hashed@example.com', password: 'correct horse battery' } });
+    const token = tokenFromJob(app.mailer.jobs[0]!);
+
+    const db = await asAuthRole(p);
+    try {
+      // A dump of this table must not be a bag of live links. These tokens are
+      // bearer credentials with no second factor at all, so it matters more here
+      // than for passwords.
+      const { rows } = await db.query<{ hex: string; len: number }>(
+        `select encode(token_hash,'hex') as hex, length(token_hash) as len
+           from auth.one_time_tokens`);
+      expect(rows[0]!.len).toBe(32);                 // sha256
+      expect(rows[0]!.hex).not.toContain(Buffer.from(token).toString('hex'));
+      const { rows: found } = await db.query<{ n: number }>(
+        `select count(*)::int as n from auth.one_time_tokens
+          where token_hash::text like $1`, [`%${token.slice(0, 8)}%`]);
+      expect(found[0]!.n).toBe(0);
+    } finally { await db.end(); }
     await app.close();
   });
 });

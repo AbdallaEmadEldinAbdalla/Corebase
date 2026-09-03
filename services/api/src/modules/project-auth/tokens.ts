@@ -85,3 +85,36 @@ export function hashEquals(a: Buffer, b: Buffer): boolean {
 /** Does this look like one of ours at all? Cheap reject before any database work. */
 export const looksLikeRefreshToken = (v: unknown): v is string =>
   typeof v === 'string' && v.startsWith(REFRESH_PREFIX) && v.length > REFRESH_PREFIX.length + 20;
+
+// ── one-time tokens (P4c) ───────────────────────────────────────────────────
+
+/**
+ * A one-time token as it appears in a link, and the hash the database stores.
+ *
+ * No prefix, unlike a refresh token: this value travels in a URL, and 32 bytes of
+ * base64url is already 43 characters of query string. It is also short-lived and
+ * single-use, so the secret-scanner argument that justifies `cb_rt_` buys much
+ * less here.
+ *
+ * 32 bytes from a CSPRNG, which is the same strength as the refresh token,
+ * because this *is* a credential — clicking the link produces a session with no
+ * second factor. A shorter token would be the weakest link in the whole flow.
+ */
+export function newOneTimeToken(): { token: string; hash: Buffer } {
+  const token = randomBytes(32).toString('base64url');
+  return { token, hash: refreshHash(token) };
+}
+
+/**
+ * Hash a token that arrived from a client.
+ *
+ * The same sha256 as `refreshHash`, and sharing it is deliberate rather than
+ * lazy: one hash function for every opaque token means a token can never be
+ * stored under one digest and looked up under another, which is a bug that
+ * presents as "valid links don't work" and resists every obvious diagnosis.
+ *
+ * Not scrypt, and worth saying why: these tokens are 256 bits of CSPRNG output,
+ * so there is no dictionary to attack and no work factor to buy. The reason to
+ * hash at all is that a database dump must not be a bag of live links.
+ */
+export const oneTimeHash = refreshHash;

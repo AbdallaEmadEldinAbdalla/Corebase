@@ -40,11 +40,17 @@ export interface AuthConfig {
   disableSignup: boolean;
   accessTtlSeconds: number;
   passwordMinLength: number;
+  /** Where auth links may send someone (P4c). Null means nowhere. */
+  siteUrl: string | null;
+  additionalRedirects: readonly string[];
 }
 
 export const AUTH_CONFIG_DEFAULTS: AuthConfig = {
   autoconfirm: false, disableSignup: false,
   accessTtlSeconds: 3600, passwordMinLength: 8,
+  // No default URL. A project that has configured nothing permits no redirect,
+  // rather than permitting whatever the caller asked for (P4c).
+  siteUrl: null, additionalRedirects: [],
 };
 
 export interface ProjectContext {
@@ -137,9 +143,11 @@ export async function resolveProject(
     id: string; ref: string; host: string | null; port: number | null; status: string;
     autoconfirm: boolean | null; disable_signup: boolean | null;
     access_token_ttl_seconds: number | null; password_min_length: number | null;
+    site_url: string | null; additional_redirects: string[] | null;
   }>(
     `SELECT p.id, p.ref::text AS ref, n.address AS host, d.port, p.status::text AS status,
-            c.autoconfirm, c.disable_signup, c.access_token_ttl_seconds, c.password_min_length
+            c.autoconfirm, c.disable_signup, c.access_token_ttl_seconds, c.password_min_length,
+            c.site_url, c.additional_redirects
        FROM projects p
        JOIN project_databases d ON d.project_id = p.id
        JOIN nodes n ON n.id = d.node_id
@@ -202,6 +210,8 @@ export async function resolveProject(
       disableSignup: row.disable_signup ?? AUTH_CONFIG_DEFAULTS.disableSignup,
       accessTtlSeconds: row.access_token_ttl_seconds ?? AUTH_CONFIG_DEFAULTS.accessTtlSeconds,
       passwordMinLength: row.password_min_length ?? AUTH_CONFIG_DEFAULTS.passwordMinLength,
+      siteUrl: row.site_url ?? AUTH_CONFIG_DEFAULTS.siteUrl,
+      additionalRedirects: row.additional_redirects ?? AUTH_CONFIG_DEFAULTS.additionalRedirects,
     },
   };
 }

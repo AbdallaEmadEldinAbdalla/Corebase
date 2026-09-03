@@ -167,12 +167,31 @@ const projectAuth: ProjectAuthDeps | undefined = await (async () => {
     signupLimiter: limiter(30, 3600),
     loginEmailLimiter: limiter(10, 300),
     loginIpLimiter: limiter(30, 300),
+    // The mail-sending endpoints are the tightest of the set, and not because of
+    // brute force: the per-address bucket stops targeted flooding of one
+    // person's inbox, and the per-IP bucket protects a sending domain that every
+    // project on the platform shares (D-116).
+    recoverEmailLimiter: limiter(4, 3600),
+    recoverIpLimiter: limiter(10, 3600),
+    // Generous, because a corporate mail scanner fetching every link in an inbox
+    // counts against it (OQ-114).
+    verifyIpLimiter: limiter(30, 3600),
     ...(process.env.CB_PROJECT_DOMAIN ? { projectDomain: process.env.CB_PROJECT_DOMAIN } : {}),
     // Must match what the worker signed the project's keys with (CB_JWT_ISSUER
     // there), or every apikey fails its issuer check.
     ...(process.env.CB_JWT_ISSUER ? { keyIssuer: process.env.CB_JWT_ISSUER } : {}),
+    // No mailer: P4c writes the tokens and hands the mail over, and P4d builds
+    // the thing that sends it. Said out loud at boot, because "confirmation
+    // emails never arrive" and "there is no sender yet" look identical from the
+    // outside and only one of them is a bug.
   };
 })();
+if (projectAuth) {
+  console.warn(JSON.stringify({ level: 'warn', service: 'api',
+    msg: 'auth emails are recorded and NOT sent — the sender is P4d. '
+       + 'Signup with confirmation required will not deliver a link; set a '
+       + 'project\'s autoconfirm for local development.' }));
+}
 
 /**
  * A static token that is short, guessable, or one of the values this repo's own

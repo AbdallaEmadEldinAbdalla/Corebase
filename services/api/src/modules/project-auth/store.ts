@@ -172,3 +172,119 @@ export const publicUser = (u: AuthUser) => ({
   created_at: u.created_at.toISOString(),
   last_sign_in_at: u.last_sign_in_at?.toISOString() ?? null,
 });
+
+// ── one-time tokens (P4c, flows §2, §6, §7) ─────────────────────────────────
+
+/**
+ * The token types `auth.one_time_tokens` accepts. The CHECK constraint carries
+ * the same list, so a typo here is a constraint violation rather than a row that
+ * quietly never matches anything.
+ */
+export type TokenType =
+  | 'confirmation' | 'recovery' | 'email_change_current' | 'email_change_new'
+  | 'magic_link';
+
+/** Flow lifetimes, from flows §"Token lifetimes". */
+export const TOKEN_TTL_SECONDS: Record<TokenType, number> = {
+  confirmation: 24 * 3600,
+  // One hour, not twenty-four: a recovery token is a password reset in an inbox,
+  // so the window in which a stolen or forwarded mail is useful should be as
+  // short as a real person needs to click a link.
+  recovery: 3600,
+  email_change_current: 24 * 3600,
+  email_change_new: 24 * 3600,
+  magic_link: 900,
+};
+
+/**
+ * Issue a one-time token, replacing any previous one of the same type.
+ *
+ * The upsert is what makes `/resend` safe rather than a way to accumulate live
+ * links: the `UNIQUE (user_id, token_type)` constraint means the newest token
+ * *replaces* the previous one, so an old link stops working the moment a new one
+ * is issued. Ten resends leave one valid token, not ten.
+ *
+ * Only the hash is stored. A dump of this table is therefore not a set of usable
+ * links — which matters more here than for passwords, because these tokens are
+ * bearer credentials with no second factor at all.
+ */
+export async function issueOneTimeToken(
+  client: Client,
+  a: { userId: string; type: TokenType; hash: Buffer; relatesTo?: string | undefined },
+): Promise<{ expiresAt: Date }> {
+  const { rows } = await client.query<{ expires_at: Date }>(
+    `INSERT INTO auth.one_time_tokens (user_id, token_type, token_hash, relates_to, expires_at)
+     VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5::int))
+     ON CONFLICT (user_id, token_type) DO UPDATE
+        SET token_hash = excluded.token_hash,
+            relates_to = excluded.relates_to,
+            created_at = now(),
+            expires_at = excluded.expires_at,
+            -- Cleared, or a replacement token inherits the previous one's spent
+            -- state and the new link is dead on arrival.
+            used_at    = NULL
+     RETURNING expires_at`,
+    [a.userId, a.type, a.hash, a.relatesTo ?? null, TOKEN_TTL_SECONDS[a.type]]);
+  return { expiresAt: rows[0]!.expires_at };
+}
+
+export interface ConsumedToken {
+  id: string;
+  userId: string;
+  relatesTo: string | null;
+}
+
+/**
+ * Spend a one-time token: exists, unused, unexpired, all in one statement.
+ *
+ * One statement rather than select-then-update, and that is the whole point. Two
+ * clicks on the same link arrive concurrently often enough to matter — mail
+ * clients prefetch, users double-click, scanners follow links — and a
+ * check-then-act would let both pass the check and both issue a session, which is
+ * exactly the replay the single-use property exists to prevent. The `used_at IS
+ * NULL` predicate lives inside the UPDATE, so the database decides the race and
+ * exactly one caller gets a row back.
+ *
+ * The three failure reasons are deliberately indistinguishable to the caller
+ * (unknown / spent / expired all return `undefined`): telling them apart is an
+ * oracle for whether an address is registered and whether a link was already
+ * used.
+ */
+export async function consumeOneTimeToken(
+  client: Client, type: TokenType, hash: Buffer,
+): Promise<ConsumedToken | undefined> {
+  const { rows } = await client.query<{ id: string; user_id: string; relates_to: string | null }>(
+    `UPDATE auth.one_time_tokens t
+        SET used_at = now()
+      WHERE t.token_type = $1
+        AND t.token_hash = $2
+        AND t.used_at IS NULL
+        AND t.expires_at > now()
+        -- A token belonging to a deleted user is not a valid token. Without this
+        -- the join is the only thing stopping a tombstoned account from being
+        -- confirmed back into a working session.
+        AND EXISTS (SELECT 1 FROM auth.users u
+                     WHERE u.id = t.user_id AND u.deleted_at IS NULL)
+      RETURNING t.id::text AS id, t.user_id, t.relates_to`,
+    [type, hash]);
+  return rows[0]
+    ? { id: rows[0].id, userId: rows[0].user_id, relatesTo: rows[0].relates_to }
+    : undefined;
+}
+
+/** Mark an address confirmed. Idempotent: a second confirmation is not an error. */
+export async function markEmailConfirmed(client: Client, userId: string): Promise<void> {
+  await client.query(
+    `UPDATE auth.users
+        SET email_confirmed_at = COALESCE(email_confirmed_at, now()), updated_at = now()
+      WHERE id = $1`, [userId]);
+}
+
+/** The user behind a consumed token, for minting a session straight afterwards. */
+export async function findUserById(
+  client: Client, id: string,
+): Promise<AuthUser | undefined> {
+  const { rows } = await client.query<AuthUser>(
+    `SELECT ${USER_COLUMNS} FROM auth.users WHERE id = $1 AND deleted_at IS NULL`, [id]);
+  return rows[0];
+}

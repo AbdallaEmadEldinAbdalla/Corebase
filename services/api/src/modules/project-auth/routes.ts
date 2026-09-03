@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { Client } from 'pg';
 import { z } from 'zod';
 import { AUTH_ERROR_CODES } from '@corebase/types';
 import { toJwk } from '@corebase/jwt';
@@ -13,11 +14,15 @@ import {
   resolveProject, withProjectDb, AuthContextError,
   type ResolveDeps, type ProjectContext,
 } from './context.ts';
-import { mintAccessToken, newRefreshToken } from './tokens.ts';
+import { mintAccessToken, newRefreshToken, newOneTimeToken, oneTimeHash } from './tokens.ts';
 import {
-  findUserByEmail, createUser, updatePasswordHash, markSignedIn, openSession,
-  writeAuthAudit, publicUser,
+  findUserByEmail, findUserById, createUser, updatePasswordHash, markSignedIn,
+  openSession, writeAuthAudit, publicUser,
+  issueOneTimeToken, consumeOneTimeToken, markEmailConfirmed,
+  type TokenType, type AuthUser,
 } from './store.ts';
+import { resolveRedirect, withTokenFragment } from './redirect.ts';
+import { createNullMailer, type AuthMailer } from './mail.ts';
 
 /**
  * `/auth/v1/*` — the data-plane auth API (P4b, flows §1 and §3).
@@ -49,6 +54,8 @@ const SignupBody = z.object({
   password: z.string(),
   /** → `raw_user_meta_data`; user-writable, never trusted for authorization. */
   data: z.record(z.unknown()).optional(),
+  /** Where the confirmation link lands. Allowlisted, never trusted (P4c). */
+  redirect_to: z.string().max(2048).optional(),
 });
 
 const PasswordGrantBody = z.object({
@@ -63,6 +70,14 @@ export interface ProjectAuthDeps extends ResolveDeps {
   loginEmailLimiter: RateLimiter;
   /** …and 30/5min per IP. */
   loginIpLimiter: RateLimiter;
+  /** `POST /recover` and `/resend`: 4/hour per email (P4c). */
+  recoverEmailLimiter: RateLimiter;
+  /** …and 10/hour per IP. */
+  recoverIpLimiter: RateLimiter;
+  /** `POST /verify`: 10/hour per IP. Mail-scanner prefetch counts, so it is generous. */
+  verifyIpLimiter: RateLimiter;
+  /** Absent means owed emails are recorded and not sent — the state until P4d. */
+  mailer?: AuthMailer;
 }
 
 const tooMany = (retryAfterSeconds: number) =>
@@ -108,6 +123,8 @@ const clientMeta = (req: FastifyRequest) => {
 };
 
 export function registerProjectAuth(app: FastifyInstance, deps: ProjectAuthDeps) {
+  const mailer = deps.mailer ?? createNullMailer();
+
   /**
    * Liveness of the *module*, not of any project (proposal §69).
    *
@@ -210,6 +227,29 @@ export function registerProjectAuth(app: FastifyInstance, deps: ProjectAuthDeps)
         // Taken. The audit log is where the truth lives — it is ours and the
         // client never sees it, so it can be precise where the response cannot.
         await writeAuthAudit(db, { action: 'signup_duplicate_email', ...meta });
+
+        // Flows §1 step 3b: the existing account's owner is told somebody tried.
+        // It is the only channel that can say so, and it discloses nothing to
+        // whoever triggered it — the mail goes to an address that already has an
+        // account, so only its owner learns anything.
+        //
+        // An unconfirmed existing account gets its confirmation token refreshed
+        // instead, because for that person this attempt is indistinguishable from
+        // a legitimate retry of their own signup.
+        const existing = await findUserByEmail(db, email);
+        if (existing && !existing.email_confirmed_at) {
+          await sendConfirmation(db, ctx, existing, parsed.data.redirect_to, meta);
+        } else if (existing) {
+          await mailer.enqueue({
+            // Not a token id — there is no token in this branch. A uuid keyed to
+            // nothing is right here: the job is genuinely one-off, and reusing
+            // some other row's id would make two different mails collide on one
+            // delivery key.
+            deliveryId: `notice_${crypto.randomUUID()}`,
+            projectId: ctx.projectId, projectRef: ctx.ref,
+            email: 'account_exists_notice', to: email, variables: {},
+          });
+        }
         return reply.status(200).send({
           id: crypto.randomUUID(),          // decoy, per flows §1 step 5
           email,
@@ -223,13 +263,11 @@ export function registerProjectAuth(app: FastifyInstance, deps: ProjectAuthDeps)
       });
 
       if (!ctx.config.autoconfirm) {
-        // No confirmation token and no email yet — both are P4c/P4d. What is
-        // returned is still the doc's shape, and `confirmation_sent_at` is a
-        // claim we are not yet entitled to make; STATUS records it as a gap
-        // rather than letting the response quietly lie about a sent email.
+        const sentAt = await sendConfirmation(
+          db, ctx, created, parsed.data.redirect_to, meta);
         return reply.status(200).send({
           id: created.id, email: created.email,
-          confirmation_sent_at: new Date().toISOString(),
+          confirmation_sent_at: sentAt.toISOString(),
         });
       }
 
@@ -330,6 +368,298 @@ export function registerProjectAuth(app: FastifyInstance, deps: ProjectAuthDeps)
       return reply.status(200).send({ ...session, user: publicUser(user) });
     });
   });
+
+  /**
+   * Flow 2 — `GET /verify` (the link in the mail) and `POST /verify` (the SDK).
+   *
+   * The two differ only in how they hand back the session: GET **302s** to the
+   * allowlisted redirect with the tokens in the URL *fragment*, POST returns
+   * them as JSON. The fragment is not incidental — it is never sent to a server,
+   * so the tokens stay out of the destination's access logs, out of every proxy
+   * in between, and out of the `Referer` header.
+   *
+   * Consuming the token on GET is a known tradeoff (OQ-114): corporate mail
+   * scanners fetch every link, so a scanner's prefetch verifies the address and
+   * spends the link. V1 accepts it — the redirect still goes to the allowlisted
+   * page and the user is genuinely verified — and the fallback if it bites is an
+   * interstitial confirm page.
+   */
+  const verifyTypes: Record<string, TokenType> = {
+    // `signup` is what the mail links say and `confirmation` is what the column
+    // stores. Both accepted, mapping to one type: a client that sends the
+    // column's name is not wrong, and a 401 for a *correct* token because of a
+    // vocabulary mismatch is the kind of failure nobody diagnoses from the
+    // outside.
+    signup: 'confirmation', confirmation: 'confirmation',
+    recovery: 'recovery', magiclink: 'magic_link', magic_link: 'magic_link',
+  };
+
+  async function doVerify(
+    req: FastifyRequest, token: string, typeParam: string,
+    redirectTo: string | undefined,
+  ): Promise<
+    | { ok: true; ctx: ProjectContext; session: Session; user: AuthUser; redirect: string | null }
+    | { ok: false; ctx: ProjectContext; redirect: string | null }
+  > {
+    const ctx = await project(deps, req);
+    const hit = await deps.verifyIpLimiter.hit(projKey(ctx, 'verify-ip', req.ip ?? 'unknown'));
+    if (!hit.allowed) throw tooMany(hit.retryAfterSeconds);
+
+    const type = verifyTypes[typeParam];
+    const { url: redirect, substituted } = resolveRedirect(ctx.config, redirectTo);
+    if (!type) {
+      // A type we do not issue cannot have a valid token, so this is the same
+      // answer as a bad token rather than its own error — one code for every
+      // reason a verification failed (flows §2).
+      return { ok: false, ctx, redirect };
+    }
+
+    const meta = clientMeta(req);
+    return withProjectDb(ctx, async (db) => {
+      if (substituted) {
+        // Audited rather than silent. Replacing the redirect is right for the
+        // *user* and invisible to the *developer*, who otherwise sees "my
+        // redirect is ignored" with nothing to go on — and this is also what an
+        // exfiltration attempt looks like from our side.
+        await writeAuthAudit(db, {
+          action: 'redirect_not_allowlisted', ...meta,
+          payload: { requested: redirectTo ?? null, type: typeParam },
+        });
+      }
+      const consumed = await consumeOneTimeToken(db, type, oneTimeHash(token));
+      if (!consumed) {
+        await writeAuthAudit(db, { action: `verify_failed_${type}`, ...meta });
+        return { ok: false as const, ctx, redirect };
+      }
+      const user = await findUserById(db, consumed.userId);
+      if (!user) {
+        // The token's own predicate excludes deleted users, so reaching here
+        // means the row vanished between two statements. Treated as a failure
+        // rather than crashing: a 500 on a verification link is indistinguishable
+        // from "our email is broken" to the person holding it.
+        await writeAuthAudit(db, { action: `verify_failed_${type}`, ...meta });
+        return { ok: false as const, ctx, redirect };
+      }
+
+      // Confirming the address is part of *every* successful verify, not just
+      // `signup`. A recovery link proves control of the mailbox exactly as well
+      // as a confirmation link does, and leaving an unconfirmed user unconfirmed
+      // after they proved it means their password reset ends at a login that
+      // refuses them for `email_not_confirmed`.
+      await markEmailConfirmed(db, user.id);
+      const session = await issueSession(db, ctx, user.id, user.email, meta);
+      await markSignedIn(db, user.id);
+      await writeAuthAudit(db, {
+        action: `verify_${type}`, userId: user.id, ...meta,
+        payload: { token_id: consumed.id },
+      });
+      const fresh = (await findUserById(db, user.id)) ?? user;
+      return { ok: true as const, ctx, session, user: fresh, redirect };
+    });
+  }
+
+  app.get('/auth/v1/verify', async (req, reply) => {
+    const q = (req.query ?? {}) as Record<string, string | undefined>;
+    if (!q['token'] || !q['type']) {
+      throw new ApiError(400, AUTH_ERROR_CODES.VALIDATION_FAILED,
+        'A verification link needs `token` and `type`.');
+    }
+    const out = await doVerify(req, q['token'], q['type'], q['redirect_to']);
+    if (!out.redirect) {
+      // Nowhere to send them: the project configured no `site_url`, so there is
+      // no allowlisted destination and inventing one would be the open redirect
+      // this whole module exists to prevent. Answer in JSON instead of guessing.
+      return out.ok
+        ? reply.status(200).send({ ...out.session, user: publicUser(out.user) })
+        : reply.status(401).send({
+            error: {
+              code: AUTH_ERROR_CODES.INVALID_TOKEN,
+              message: 'This link is invalid or has already been used.',
+              request_id: String(reply.getHeader('x-request-id') ?? req.id),
+            },
+          });
+    }
+    const target = out.ok
+      ? withTokenFragment(out.redirect, {
+          access_token: out.session.access_token,
+          refresh_token: out.session.refresh_token,
+          expires_in: out.session.expires_in,
+          token_type: 'bearer',
+          type: String((req.query as Record<string, string>)['type']),
+        })
+      // One generic error in the fragment, for the same reason the JSON form has
+      // one code: which of unknown/spent/expired it was is not the user's
+      // business and is an oracle for ours.
+      : withTokenFragment(out.redirect, { error: 'invalid_token' });
+    return reply.status(302).header('location', target).send();
+  });
+
+  app.post('/auth/v1/verify', async (req, reply) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const token = typeof body['token'] === 'string' ? body['token'] : undefined;
+    const type = typeof body['type'] === 'string' ? body['type'] : undefined;
+    if (!token || !type) {
+      throw new ApiError(400, AUTH_ERROR_CODES.VALIDATION_FAILED,
+        'Provide `token` and `type`.');
+    }
+    const out = await doVerify(req, token, type, undefined);
+    if (!out.ok) {
+      throw new ApiError(401, AUTH_ERROR_CODES.INVALID_TOKEN,
+        'This link is invalid or has already been used.');
+    }
+    return reply.status(200).send({ ...out.session, user: publicUser(out.user) });
+  });
+
+  /**
+   * Flow 6 — `POST /recover`: request a password-reset mail.
+   *
+   * **Always 200 with an empty body**, whether or not the address exists. This is
+   * the second classic enumeration oracle after signup, and it is a worse one:
+   * signup at least has to guess a password, while `/recover` is a bare
+   * "does this person have an account" endpoint if it answers honestly.
+   *
+   * Both rate-limit buckets matter for a reason that is not brute force: the
+   * per-email bucket stops *targeted flooding* of one person's inbox, and the
+   * per-IP bucket protects the shared sending domain's reputation, which every
+   * project on the platform shares (D-116).
+   */
+  app.post('/auth/v1/recover', async (req, reply) => {
+    const ctx = await project(deps, req);
+    const parsed = z.object({ email: emailSchema, redirect_to: z.string().max(2048).optional() })
+      .safeParse(req.body ?? {});
+    if (!parsed.success) {
+      throw new ApiError(400, AUTH_ERROR_CODES.VALIDATION_FAILED, 'Provide a valid `email`.');
+    }
+    const email = parsed.data.email;
+    for (const [limiter, bucket, id] of [
+      [deps.recoverEmailLimiter, 'recover-email', email.toLowerCase()],
+      [deps.recoverIpLimiter, 'recover-ip', req.ip ?? 'unknown'],
+    ] as const) {
+      const hit = await limiter.hit(projKey(ctx, bucket, id));
+      // A 429 here *is* a disclosure — but of our rate limit, not of the
+      // account: the bucket is keyed on the address the caller supplied, and it
+      // fills identically for an address that exists and one that does not.
+      if (!hit.allowed) throw tooMany(hit.retryAfterSeconds);
+    }
+
+    const meta = clientMeta(req);
+    await withProjectDb(ctx, async (db) => {
+      const user = await findUserByEmail(db, email);
+      if (!user) {
+        await writeAuthAudit(db, { action: 'recover_unknown_email', ...meta });
+        return;
+      }
+      const t = newOneTimeToken();
+      const { expiresAt } = await issueOneTimeToken(
+        db, { userId: user.id, type: 'recovery', hash: t.hash });
+      // Validated *before* it goes into the link, not only when the link is
+      // followed. The first version of this passed `parsed.data.redirect_to`
+      // straight through, which would have put an attacker-chosen destination
+      // into a mail Corebase sends from its own domain — the one thing D-116's
+      // fixed templates exist to make impossible.
+      const { url: dest, substituted } = resolveRedirect(ctx.config, parsed.data.redirect_to);
+      if (substituted) {
+        await writeAuthAudit(db, {
+          action: 'redirect_not_allowlisted', userId: user.id, ...meta,
+          payload: { requested: parsed.data.redirect_to ?? null, type: 'recovery' },
+        });
+      }
+      const link = actionLink(ctx, t.token, 'recovery', dest ?? undefined);
+      await mailer.enqueue({
+        deliveryId: `recovery_${user.id}`,
+        projectId: ctx.projectId, projectRef: ctx.ref,
+        email: 'recovery', to: email,
+        variables: { action_url: link, expires_at: expiresAt.toISOString() },
+      });
+      await writeAuthAudit(db, { action: 'recover_requested', userId: user.id, ...meta });
+    });
+    // Empty object, not `{ok: true}` or a message: the body is part of the
+    // same-shape contract, so it must not vary and must not be worth reading.
+    return reply.status(200).send({});
+  });
+
+  /**
+   * `POST /resend`: re-issue a confirmation mail.
+   *
+   * Same-shape 200 as `/recover`, and for the same reason. Worth noting what the
+   * upsert in `issueOneTimeToken` buys here: each resend *replaces* the previous
+   * token, so ten resends leave one working link rather than ten. A user who
+   * clicks the first of five mails gets a dead link, which is the correct
+   * tradeoff — the alternative is five live credentials in an inbox.
+   */
+  app.post('/auth/v1/resend', async (req, reply) => {
+    const ctx = await project(deps, req);
+    const parsed = z.object({
+      email: emailSchema,
+      type: z.enum(['signup', 'confirmation']).optional(),
+      redirect_to: z.string().max(2048).optional(),
+    }).safeParse(req.body ?? {});
+    if (!parsed.success) {
+      throw new ApiError(400, AUTH_ERROR_CODES.VALIDATION_FAILED, 'Provide a valid `email`.');
+    }
+    const email = parsed.data.email;
+    for (const [limiter, bucket, id] of [
+      [deps.recoverEmailLimiter, 'resend-email', email.toLowerCase()],
+      [deps.recoverIpLimiter, 'resend-ip', req.ip ?? 'unknown'],
+    ] as const) {
+      const hit = await limiter.hit(projKey(ctx, bucket, id));
+      if (!hit.allowed) throw tooMany(hit.retryAfterSeconds);
+    }
+
+    const meta = clientMeta(req);
+    await withProjectDb(ctx, async (db) => {
+      const user = await findUserByEmail(db, email);
+      // An already-confirmed address gets nothing — not an error, and not a mail
+      // either. Re-sending a confirmation to someone already confirmed is a way
+      // to make our sending domain deliver mail on demand to any address that
+      // happens to be registered.
+      if (!user || user.email_confirmed_at) {
+        await writeAuthAudit(db, {
+          action: user ? 'resend_already_confirmed' : 'resend_unknown_email',
+          ...(user ? { userId: user.id } : {}), ...meta,
+        });
+        return;
+      }
+      await sendConfirmation(db, ctx, user, parsed.data.redirect_to, meta);
+      await writeAuthAudit(db, { action: 'resend_confirmation', userId: user.id, ...meta });
+    });
+    return reply.status(200).send({});
+  });
+
+  /**
+   * Issue a confirmation token and hand its mail over. Shared by signup and
+   * resend so the two cannot drift — a confirmation link built two ways is a
+   * link that works from one endpoint and not the other.
+   */
+  async function sendConfirmation(
+    db: Client, ctx: ProjectContext, user: AuthUser,
+    redirectTo: string | undefined,
+    meta: { userAgent?: string | undefined; ip?: string | undefined },
+  ): Promise<Date> {
+    const t = newOneTimeToken();
+    const { expiresAt } = await issueOneTimeToken(
+      db, { userId: user.id, type: 'confirmation', hash: t.hash });
+    const { url, substituted } = resolveRedirect(ctx.config, redirectTo);
+    if (substituted) {
+      await writeAuthAudit(db, {
+        action: 'redirect_not_allowlisted', userId: user.id, ...meta,
+        payload: { requested: redirectTo ?? null, type: 'signup' },
+      });
+    }
+    await mailer.enqueue({
+      // The token id would be better still, but the upsert makes (user, type)
+      // the stable identity of "the confirmation link currently owed to this
+      // person" — which is exactly the deduplication a delivery id is for.
+      deliveryId: `confirmation_${user.id}`,
+      projectId: ctx.projectId, projectRef: ctx.ref,
+      email: 'confirmation', to: user.email ?? '',
+      variables: {
+        action_url: actionLink(ctx, t.token, 'signup', url ?? undefined),
+        expires_at: expiresAt.toISOString(),
+      },
+    });
+    return new Date();
+  }
 }
 
 /**
@@ -359,6 +689,28 @@ async function issueSession(
     refresh_token: refresh.token,
   };
 }
+
+/**
+ * The URL that goes in an auth email.
+ *
+ * Built here, from the project's issuer and an already-**validated** redirect —
+ * never from anything the client sent. D-116 is the reason: the whole point of
+ * fixed templates with variable interpolation is that Corebase cannot be made to
+ * send an arbitrary link from a reputable domain, and a client-supplied
+ * `action_url` would hand that capability straight back.
+ */
+function actionLink(
+  ctx: ProjectContext, token: string, type: string, redirect: string | undefined,
+): string {
+  const u = new URL(`${ctx.issuer}/verify`);
+  u.searchParams.set('token', token);
+  u.searchParams.set('type', type);
+  if (redirect) u.searchParams.set('redirect_to', redirect);
+  return u.toString();
+}
+
+/** What `issueSession` hands back. Named so the verify helpers can carry it. */
+type Session = Awaited<ReturnType<typeof issueSession>>;
 
 /**
  * The project ref, from the Host subdomain or `?ref=`.
