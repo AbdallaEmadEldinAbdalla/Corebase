@@ -10,6 +10,7 @@ import { createUserStore } from './modules/auth/store.ts';
 import { createTokenStore } from './kernel/tokens.ts';
 import { createSessionStore, createMemorySessionStore } from './kernel/sessions.ts';
 import { createRateLimiter, createMemoryRateLimiter } from './kernel/rate-limit.ts';
+import type { ProjectAuthDeps } from './modules/project-auth/routes.ts';
 import type { AuthDeps } from './modules/auth/routes.ts';
 import { createOrgStore } from './modules/orgs/store.ts';
 
@@ -143,6 +144,37 @@ const orgs = auth
   : undefined;
 
 /**
+ * The data-plane auth API (P4b), which needs the control-plane pool to resolve a
+ * project from its anon key and the secret store to read that project's signing
+ * key and `corebase_auth` password.
+ *
+ * Without envelope encryption configured there is no secret store, so there are
+ * no signing keys and no database credentials — every request would 503. The
+ * routes are therefore not registered at all in that case, for the same reason
+ * platform auth is not: a route that exists and cannot work is worse than a 404,
+ * because a client codes against it.
+ */
+const projectAuth: ProjectAuthDeps | undefined = await (async () => {
+  if (!url || !secretsForApi) return undefined;
+  const pool = new Pool({ connectionString: url, max: 5 });
+  const limiter = (limit: number, windowSeconds: number) => (redisUrl
+    ? createRateLimiter(createRedis(redisUrl), { limit, windowSeconds })
+    : createMemoryRateLimiter({ limit, windowSeconds }));
+  return {
+    pool, secrets: secretsForApi,
+    // The doc's V1 numbers (flows §rate limits). They are per project *and* per
+    // identifier — see routes.ts for the key shape.
+    signupLimiter: limiter(30, 3600),
+    loginEmailLimiter: limiter(10, 300),
+    loginIpLimiter: limiter(30, 300),
+    ...(process.env.CB_PROJECT_DOMAIN ? { projectDomain: process.env.CB_PROJECT_DOMAIN } : {}),
+    // Must match what the worker signed the project's keys with (CB_JWT_ISSUER
+    // there), or every apikey fails its issuer check.
+    ...(process.env.CB_JWT_ISSUER ? { keyIssuer: process.env.CB_JWT_ISSUER } : {}),
+  };
+})();
+
+/**
  * A static token that is short, guessable, or one of the values this repo's own
  * scripts default to is refused at boot rather than served.
  *
@@ -178,6 +210,7 @@ const app = buildApp({
   ...(auth ? { auth } : {}),
   ...(orgs ? { orgs } : {}),
   ...(secretsForApi ? { projectSecrets: { secrets: secretsForApi } } : {}),
+  ...(projectAuth ? { projectAuth } : {}),
   ...(orgs && auth
     ? {
         projects: {

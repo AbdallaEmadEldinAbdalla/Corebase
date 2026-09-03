@@ -6,6 +6,7 @@ import { createMemoryStore, type ControlPlaneStore } from './modules/control-pla
 import { registerMetrics } from './kernel/metrics.ts';
 import { registerAuth, type AuthDeps } from './modules/auth/routes.ts';
 import { registerOrgs, type OrgDeps } from './modules/orgs/routes.ts';
+import { registerProjectAuth, type ProjectAuthDeps } from './modules/project-auth/routes.ts';
 import type { PrincipalDeps } from './kernel/principal.ts';
 
 export interface BuildOptions {
@@ -49,6 +50,12 @@ export interface BuildOptions {
   corsOrigins?: readonly string[];
   /** Overrides the per-org project ceiling; tests set it low. */
   projectsPerOrgLimit?: number;
+  /**
+   * The **data-plane** auth API at `/auth/v1/*` (P4b) — a customer's end users,
+   * not our operators. Absent means those routes do not exist, which is the right
+   * answer for a deployment with no project databases to serve.
+   */
+  projectAuth?: ProjectAuthDeps;
 }
 
 /** Composition root: the only place that wires modules together. */
@@ -73,6 +80,9 @@ export function buildApp(opts: BuildOptions = {}): FastifyInstance {
 
   if (opts.auth) registerAuth(app, opts.auth);
   if (opts.orgs) registerOrgs(app, opts.orgs);
+  // `/auth/v1/*`, which is a different surface from `/v1/auth/*` above. See
+  // modules/project-auth/routes.ts for why the two prefixes look alike.
+  if (opts.projectAuth) registerProjectAuth(app, opts.projectAuth);
 
   registerControlPlane(app, {
     store: opts.store ?? createMemoryStore(),

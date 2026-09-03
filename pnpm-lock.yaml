@@ -285,6 +285,9 @@ importers:
         specifier: ^8.13.1
         version: 8.23.0
     devDependencies:
+      '@corebase/api':
+        specifier: workspace:*
+        version: link:../api
       '@corebase/config':
         specifier: workspace:*
         version: link:../../packages/config
