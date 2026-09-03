@@ -58,15 +58,18 @@ Exceeding any bucket → `429 over_rate_limit` + `Retry-After`. Limits are per p
 | Email send fails | 200 anyway; send retried via job queue (D-018) | User can `POST /resend` |
 | Email exists | **200, same shape** | Never 409 |
 
-**Built in P4b, with two deviations worth stating.** The confirmation token and the
-verification email in steps 3b/4 are **not built** — they are P4c and P4d — so a
-signup with confirmation required returns the doc's shape with a
-`confirmation_sent_at` that no email corresponds to. That one field is a claim we
-are not yet entitled to make; it is recorded as a gap in STATUS §8 rather than
-papered over, and omitting it instead would break the response-shape contract this
-flow's security depends on. The hash on the duplicate-address path is spent
-deliberately (**D-322**): skipping it makes a taken address answer in 2 ms and a
-fresh one in 100 ms, which is the same oracle moved into the clock.
+**Built in P4b, completed in P4c.** All three branches of step 3 now behave as
+written: a new address gets a `confirmation` token and its mail, an *unconfirmed*
+existing one gets its token refreshed (for that person a second attempt is
+indistinguishable from retrying their own signup), and a *confirmed* one gets the
+"you already have an account" notice — the only channel that can say so, and one
+that discloses nothing to whoever triggered it. `confirmation_sent_at` is now a
+claim we are entitled to make, in the sense that the mail is genuinely handed over
+and owed; the thing that **sends** it is P4d, so it waits in the queue.
+
+The hash on the duplicate-address path is spent deliberately (**D-322**): skipping
+it makes a taken address answer in 2 ms and a fresh one in 100 ms, which is the
+same oracle moved into the clock.
 
 ### Flow 2 — Email verification
 
@@ -83,6 +86,20 @@ fresh one in 100 ms, which is the same oracle moved into the clock.
 | Token unknown / used / expired | GET: redirect to `site_url` `#error=invalid_token`; POST: `401 invalid_token` | One generic code for all three — no oracle for which |
 | `redirect_to` not allowlisted | Proceed, redirect to `site_url` | Never redirect to unlisted URL |
 | Rate limited | `429` | Mail-scanner prefetch counts; cap is generous |
+
+**Built in P4c.** Two things are stricter than the numbered steps imply. The
+consume in steps 3–4 is a **single UPDATE** carrying `used_at IS NULL` rather than
+the checks-then-mark the ordering suggests (**D-324**) — two concurrent clicks on
+one link both pass a separate check and both issue a session, which is the replay
+single-use exists to prevent, and removing the predicate demonstrably produces
+exactly that. And step 5's fragment is load-bearing rather than stylistic
+(**D-327**). A successful verify of *any* type confirms the address (**D-328**),
+not only `signup`: a recovery link proves mailbox control just as well, and not
+confirming would send a user through a successful reset into a login that refuses
+them.
+
+A project with no `site_url` has no allowlisted destination, so the GET form
+degrades to the POST form's JSON rather than guessing one (**D-326**).
 
 *Security note: some corporate mail scanners GET every link. Consuming the token on GET is a known tradeoff; V1 accepts it (the scanner's GET verifies the email, redirect still goes to the allowlisted site). If it bites, the fallback is an interstitial confirm page — tracked as OQ-114.*
 
@@ -146,6 +163,13 @@ oracle.
 | Rate limited | `429` | Per-email bucket stops targeted flooding |
 | Email send failure | 200; retried via queue | |
 
+**Built in P4c.** The `redirect_to` is validated *before* it goes into the mailed
+link, not only when the link is followed (**D-325**) — the first version of this
+endpoint passed it straight through, which would have had Corebase mailing an
+attacker-chosen destination from its own domain. `/resend` is built alongside it
+and replaces the outstanding token rather than adding one (**D-329**), and sends
+nothing at all to an address that is already confirmed or does not exist.
+
 ### Flow 7 — Password reset completion
 
 `GET/POST /verify` with `type=recovery`, then `PUT /user`
@@ -160,6 +184,7 @@ oracle.
 | Failure | Response | Notes |
 |---|---|---|
 | Recovery token invalid/used/expired | `401 invalid_token` at step 1 | 1 h expiry keeps the window small |
+| — | — | **Step 1 is built (P4c); steps 2–6 are not.** A recovery link yields a working session, and `PUT /user` does not exist — so the reset gets you logged in and cannot yet change the password. Recorded as a gap in STATUS §8. |
 | New password fails policy | `422 weak_password` | Token already spent — user must re-run Flow 6; acceptable, rare |
 | Rate limited | `429` | |
 

@@ -90,6 +90,14 @@ The interesting part is what the endpoints refuse to tell you. A signup against 
 
 Two of the boundary checks here nearly shipped broken, and both were caught by insisting a guard must be able to fail. A project's API key and a user's access token carry different issuers; pinning one string for both returned 401 for every request with a perfectly valid signature. And the test asserting that a user's own token is rejected as an API key **passed with that check disabled** — the issuer pin was doing all the work — so it now mints a token that gets past the issuer pin and fails with a 200 when the role check is removed.
 
+**Verification, password reset, and the link that carries them (P4c).** A signup writes a single-use confirmation token, `/auth/v1/verify` spends it and hands back a session, and `/recover` and `/resend` do the same for a password reset — all four answering with a shape that is identical whether or not the address exists.
+
+Two details are the actual work. **Spending a token once is a concurrency property, not a check:** the consume is one `UPDATE … WHERE used_at IS NULL`, because concurrent clicks on one link are ordinary — mail clients prefetch, users double-click, corporate scanners follow every link — and with a select-then-update both callers pass the check and both get a session. Removing that predicate was tried: two simultaneous verifies of one link both returned 200 and left two sessions.
+
+And **the redirect allowlist caught a bug in my own code.** `/recover` originally put the caller's `redirect_to` straight into the mailed link. That is not an open-redirect nuisance — the mail comes from a reputable domain, the link genuinely points at the project's own host, and the session tokens land wherever the attacker asked. So a redirect is validated where the link is *built*, not only where it is followed; an unlisted one is replaced by the project's `site_url` and the substitution is audited; a project that has configured nothing permits nothing; and the tokens ride in the URL fragment, which no server, proxy or `Referer` header ever sees.
+
+Nothing sends the mail yet — that is the next step. The boundary is a handover that cannot throw, because an enumeration-safe flow has already committed to returning 200, and the token in the project's own database is the record that mail is owed.
+
 ## Run it
 
 ```bash

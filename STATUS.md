@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-09-03 · **Phase:** Phase 4 (auth) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 complete** (P3a–P3h; **all four exit criteria met**) · **Phase 4 in progress** (P4a, P4b done)
+**Last updated:** 2026-09-03 · **Phase:** Phase 4 (auth) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 complete** (P3a–P3h; **all four exit criteria met**) · **Phase 4 in progress** (P4a–P4c done)
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -2112,6 +2112,70 @@ getting the generic error while the audit log says `login_failed_banned`, a
 soft-deleted user unable to log in with the address free to re-register, and a
 spliced apikey writing nothing to either of two projects. Both mutation checks
 above were run and both failed as they should.
+### P4c — one-time tokens, and the flows that spend them · done · 12 unit + 18 integration
+
+`/auth/v1/verify` (GET and POST), `/recover` and `/resend` are built, and signup
+now writes the confirmation token it always claimed to. The whole step is about
+one table — `auth.one_time_tokens` — and one discipline: a token is 256 bits of
+CSPRNG output, only its sha256 is stored, and it is spent exactly once.
+
+**Spent exactly once is a concurrency property, not a check** (**D-324**). The
+consume is a single `UPDATE … WHERE used_at IS NULL AND expires_at > now()`, so
+the database decides the race. That matters because concurrent clicks on one link
+are ordinary — mail clients prefetch, users double-click, corporate scanners
+follow every link in an inbox — and with a select-then-update both callers pass
+the check and both get a session. Removing the predicate was run: two simultaneous
+verifies of one link both returned 200 and left two sessions behind. The same
+predicate excludes soft-deleted users, so a tombstoned account cannot be confirmed
+back into a working session.
+
+**The redirect allowlist is the other half of the step, and it caught a real bug in
+my own code.** `/recover` originally passed `redirect_to` straight into the mailed
+link. That is not an open-redirect nuisance: the mail comes from a reputable
+domain, the link genuinely points at `<ref>.corebase.co`, and the tokens land
+wherever the attacker asked — precisely the capability D-116's fixed templates
+exist to withhold. So validation happens where the link is **built**, not only
+where it is followed (**D-325**), and the substitution is audited because it is
+otherwise invisible to the developer whose redirect is being ignored. A project
+with no `site_url` permits no redirect at all and its `GET /verify` answers in JSON
+rather than guessing a destination (**D-326**) — "configured nothing" must not read
+as "allowed everything".
+
+The allowlist itself is a pure module with its own unit suite, because every way an
+allowlist gets written wrong is a string-comparison mistake: exact origin rather
+than suffix (`endsWith('example.com')` also accepts `evil-example.com`), path
+prefix only at a segment boundary (`/auth` must not authorise
+`/authorize-elsewhere`), and non-http schemes refused *before* any origin
+comparison (`javascript:` parses with origin `null`, so a scheme check placed after
+the origin match can be skipped entirely).
+
+Tokens ride in the redirect's **fragment**, never the query string (**D-327**) —
+same tokens, same URL, and the difference is whether a live session gets written
+into somebody else's log retention. Every successful verify confirms the address,
+not just `type=signup` (**D-328**), because a recovery link proves mailbox control
+just as well and the alternative sends a user through a successful reset into a
+login that refuses them.
+
+`/resend` replaces the outstanding token rather than adding one (**D-329**), so ten
+resends leave one live link in an inbox instead of ten, and an already-confirmed
+address gets a same-shape 200 and no mail — otherwise it is a way to make the
+shared sending domain deliver to any registered address on demand.
+
+**Nothing sends the mail yet.** The boundary is an `AuthMailer.enqueue` that cannot
+throw (**D-330**) — an enumeration-safe flow has already committed to a 200, so a
+send failure becoming a 500 would both break the contract and signal that the
+address was interesting. The default records jobs and sends nothing, and the API
+says so at boot. The row of record is the token in the project's own database, per
+D-018, so losing Redis loses delivery and not the fact that mail is owed.
+
+**Verification:** `redirect.p4c.unit.test.ts` 12/12 (suffix matching, segment
+boundaries, scheme confusion, the empty-config case) and 18 new integration tests
+against live projects — the mailed link confirming an address and unlocking the
+login that was refused, a replayed link 401ing, two concurrent clicks yielding
+exactly one session, a resend killing the previous link, an unlisted `redirect_to`
+substituted in both the mail and the redirect with an audit row to show it, and the
+token's plaintext appearing nowhere in `auth.one_time_tokens`. Both mutations above
+were run and failed as they should.
 
 ## 5. Rules the code follows
 
@@ -2420,19 +2484,37 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   customers could migrate a user table from GoTrue without a mass password reset;
   it needs a dependency of its own and nobody is migrating in yet. Recorded because
   D-004's portability is supposed to cut both ways.
-- The auth module serves **two of its thirteen endpoints** (P4b). Signup and the
-  password grant work; `/token?grant_type=refresh_token` returns a 501 that says
-  so, and `/logout`, `/verify`, `/recover`, `/resend`, `/user`, `/sessions` and
-  `/admin/users` are not registered at all. A session can therefore be created and
-  cannot yet be ended or renewed — an access token lives out its hour and the
-  refresh token in the client's hands has nothing to redeem it against.
-- **A signup with confirmation required returns `confirmation_sent_at` and sends no
-  email.** No confirmation token is written either (P4c) and there is no sender
-  (P4d). The field is in the response because removing it would break the
-  same-shape contract Flow 1's enumeration resistance depends on; it is a claim we
-  are not yet entitled to make, and the honest summary is that the only usable
-  signup path today is `autoconfirm`, which is off by default for good reason
-  (D-321).
+- The auth module serves **seven of its thirteen endpoints** (P4b, P4c). Signup,
+  the password grant, `/verify` (GET and POST), `/recover`, `/resend`, `/health`
+  and JWKS work. `/token?grant_type=refresh_token` returns a 501 that says so, and
+  `/logout`, `/user`, `/sessions` and `/admin/users` are not registered at all. A
+  session can therefore be created and **cannot yet be ended or renewed** — an
+  access token lives out its hour and the refresh token in the client's hands has
+  nothing to redeem it against. That is the largest remaining hole in the module.
+- **Nothing sends email.** P4c writes every token and hands every owed mail to an
+  `AuthMailer`; the default records the job and sends nothing, and the API logs a
+  warning at boot saying so. So a signup with confirmation required is complete on
+  our side and dead from the user's, and the only usable signup path in a
+  deployment without a sender is `autoconfirm` — off by default for good reason
+  (D-321). Templates, per-project caps, suppression lists and bounce handling are
+  all P4d (D-116).
+- **Password reset stops one step short of resetting a password.** Flow 7 step 1 is
+  built: a recovery link yields a working session. Steps 2–6 need `PUT /user`,
+  which does not exist — so the flow logs you in and cannot change your
+  credential, and the "your password was changed" tripwire mail has nothing to
+  trigger it.
+- **Email change is not built at all.** `email_change_current` and
+  `email_change_new` are accepted token types with no endpoint that issues them,
+  so Flow 9's double confirmation is a table constraint and nothing more.
+- **`/recover` and `/resend` are rate-limited but not yet capped per project.** The
+  request buckets exist (4/hour per address, 10/hour per IP); D-116's *send* caps —
+  30/hour and 200/day on Free, 100 distinct recipients, ≤4/hour to one address —
+  are a P4d concern and unenforced, as are the suppression lists that are supposed
+  to be consulted at enqueue.
+- Consuming a token on GET means a corporate mail scanner's prefetch verifies the
+  address and spends the link (OQ-114). Accepted for V1 deliberately; the audit
+  action `verify_failed_confirmation` is the signal that would justify building the
+  interstitial page, and nothing yet counts it.
 - `corebase_auth` is still not in the pooler's `auth_query` allowlist, and OQ-110
   is still open. P4b took the third option — a fresh connection per request
   (D-323) — because a cached pool breaks on credential rotation. Putting auth
