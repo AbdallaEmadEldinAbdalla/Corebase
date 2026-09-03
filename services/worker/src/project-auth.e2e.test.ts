@@ -168,6 +168,8 @@ function api(over: Partial<Record<string, number>> = {}) {
         { limit: over['recoverEmail'] ?? 4, windowSeconds: 3600 }),
       recoverIpLimiter: createMemoryRateLimiter({ limit: 10, windowSeconds: 3600 }),
       verifyIpLimiter: createMemoryRateLimiter({ limit: 30, windowSeconds: 3600 }),
+      refreshIpLimiter: createMemoryRateLimiter(
+        { limit: over['refresh'] ?? 60, windowSeconds: 300 }),
     },
   });
   return Object.assign(app, { mailer });
@@ -481,6 +483,7 @@ describe('P4b — password login', () => {
         recoverEmailLimiter: createMemoryRateLimiter({ limit: 4, windowSeconds: 3600 }),
         recoverIpLimiter: createMemoryRateLimiter({ limit: 10, windowSeconds: 3600 }),
         verifyIpLimiter: createMemoryRateLimiter({ limit: 30, windowSeconds: 3600 }),
+        refreshIpLimiter: createMemoryRateLimiter({ limit: 60, windowSeconds: 300 }),
       },
     });
     const attempt = () => app.inject({
@@ -629,12 +632,17 @@ describe('P4b — the project boundary', () => {
     expect(none.statusCode).toBe(400);
     expect(none.json().error.code).toBe('validation_failed');
 
-    // Not built yet, and it says which — a client doing the right thing against a
-    // server that has not caught up should not be told its token is bad.
+    // Built as of P4e, so a well-formed unknown token is now `invalid_grant`
+    // rather than the 501 this asserted while the grant did not exist. The
+    // assertion is kept rather than deleted: it is the one place that checks the
+    // grant is *dispatched* at all, and a typo in the query-parameter comparison
+    // would otherwise show up only as every client silently getting the
+    // validation error above.
     const refresh = await app.inject({
       method: 'POST', url: '/auth/v1/token?grant_type=refresh_token',
-      headers: { apikey: p.anonKey }, payload: { refresh_token: 'cb_rt_whatever' } });
-    expect(refresh.statusCode).toBe(501);
+      headers: { apikey: p.anonKey }, payload: { refresh_token: 'cb_rt_' + 'a'.repeat(43) } });
+    expect(refresh.statusCode).toBe(401);
+    expect(refresh.json().error.code).toBe('invalid_grant');
     await app.close();
   });
 });
@@ -1185,6 +1193,7 @@ describe('P4c + P4d — a signup link that actually arrives', () => {
           recoverEmailLimiter: createMemoryRateLimiter({ limit: 4, windowSeconds: 3600 }),
           recoverIpLimiter: createMemoryRateLimiter({ limit: 10, windowSeconds: 3600 }),
           verifyIpLimiter: createMemoryRateLimiter({ limit: 30, windowSeconds: 3600 }),
+          refreshIpLimiter: createMemoryRateLimiter({ limit: 60, windowSeconds: 300 }),
         },
       });
 
@@ -1247,4 +1256,434 @@ describe('P4c + P4d — a signup link that actually arrives', () => {
         await redis.quit();
       }
     }, 300_000);
+});
+
+/**
+ * P4e — refresh rotation, reuse detection, logout and sessions.
+ *
+ * The rotation protocol (D-112) is the densest piece of logic in the auth module
+ * and every branch of it is a security decision, so each branch gets its own
+ * test. The two that matter most are the pair that pull in opposite directions:
+ * a replay inside the grace window must **not** be treated as theft, and a replay
+ * outside it must be — and a mistake in either direction is invisible until it is
+ * either logging users out constantly or letting a stolen token live forever.
+ */
+describe('P4e — refresh rotation', () => {
+  /** A logged-in user, with their first refresh token. */
+  async function session(p: Fixture, email = 'rot@example.com') {
+    await autoconfirm(p.id);
+    const app = api();
+    const res = await app.inject({
+      method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+      payload: { email, password: 'correct horse battery' } });
+    expect(res.statusCode).toBe(200);
+    return { app, email, refresh: res.json().refresh_token as string,
+             access: res.json().access_token as string };
+  }
+
+  const refresh = (app: ReturnType<typeof api>, p: Fixture, token: string) =>
+    app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=refresh_token',
+      headers: { apikey: p.anonKey }, payload: { refresh_token: token } });
+
+  t('EXIT CRITERION: a refresh returns a new pair and keeps the session id', async () => {
+    const p = await provision();
+    const { app, refresh: r0, access: a0 } = await session(p);
+    const res = await refresh(app, p, r0);
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.refresh_token).not.toBe(r0);
+    expect(body.refresh_token.startsWith('cb_rt_')).toBe(true);
+    expect(body.access_token).not.toBe(a0);
+    expect(body.expires_in).toBe(3600);
+
+    // Same session across the rotation, which is what makes a session revocable
+    // at all: it is the only thing tying a stateless JWT to a revocable row.
+    const claim = (tok: string) => JSON.parse(
+      Buffer.from(tok.split('.')[1]!, 'base64url').toString()).session_id;
+    expect(claim(body.access_token)).toBe(claim(a0));
+
+    const db = await asAuthRole(p);
+    try {
+      const { rows } = await db.query<{ n: number; used: number; sessions: number }>(
+        `select (select count(*)::int from auth.refresh_tokens) as n,
+                (select count(*)::int from auth.refresh_tokens where used_at is not null) as used,
+                (select count(*)::int from auth.sessions) as sessions`);
+      // A lineage of two, one spent, one session — not a second login.
+      expect(rows[0]!).toMatchObject({ n: 2, used: 1, sessions: 1 });
+      const { rows: lineage } = await db.query<{ parent_id: number | null }>(
+        `select parent_id from auth.refresh_tokens order by id`);
+      expect(lineage[0]!.parent_id).toBeNull();
+      expect(lineage[1]!.parent_id).not.toBeNull();
+    } finally { await db.end(); }
+    await app.close();
+  });
+
+  t('EXIT CRITERION: replaying a spent token beyond the grace window kills the family',
+    async () => {
+      const p = await provision();
+      const { app, refresh: r0 } = await session(p);
+      const first = await refresh(app, p, r0);
+      const r1 = first.json().refresh_token as string;
+
+      // Backdate the spend so the replay lands outside the 10s window without
+      // the test sleeping for eleven seconds.
+      const db = await asAuthRole(p);
+      try {
+        await db.query(
+          `update auth.refresh_tokens set used_at = now() - interval '60 seconds'
+            where used_at is not null`);
+      } finally { await db.end(); }
+
+      const replay = await refresh(app, p, r0);
+      expect(replay.statusCode).toBe(401);
+      expect(replay.json().error.code).toBe('invalid_grant');
+
+      // The whole family, not just the replayed token. Which party tripped it is
+      // unknowable — the attacker used the stolen token first and the client's
+      // next refresh lands here, or the reverse — and it does not matter.
+      const db2 = await asAuthRole(p);
+      try {
+        const { rows } = await db2.query<{ live: number; revoked: number; sessions: number }>(
+          `select (select count(*)::int from auth.refresh_tokens where revoked = false) as live,
+                  (select count(*)::int from auth.refresh_tokens where revoked) as revoked,
+                  (select count(*)::int from auth.sessions where revoked_at is null) as sessions`);
+        expect(rows[0]!.live).toBe(0);
+        expect(rows[0]!.revoked).toBe(2);
+        expect(rows[0]!.sessions).toBe(0);
+        const { rows: audit } = await db2.query<{ action: string }>(
+          `select action from auth.audit_log_entries where action = 'token_reuse_detected'`);
+        expect(audit).toHaveLength(1);
+      } finally { await db2.end(); }
+
+      // And the child the legitimate client is holding is dead too — that is the
+      // cost of the policy and the reason the grace window exists.
+      expect((await refresh(app, p, r1)).statusCode).toBe(401);
+      await app.close();
+    });
+
+  t('EXIT CRITERION: a replay inside the grace window is a retry, not a theft signal',
+    async () => {
+      const p = await provision();
+      const { app, refresh: r0 } = await session(p);
+      const first = await refresh(app, p, r0);
+      expect(first.statusCode).toBe(200);
+
+      // Immediately, so it is inside the 10s window. This is the mobile client
+      // whose first response was lost, and the two-tab SPA race. Zero tolerance
+      // turns both into forced logouts at a rate that teaches developers to
+      // disable rotation — which loses the whole protection.
+      const retry = await refresh(app, p, r0);
+      expect(retry.statusCode).toBe(200);
+      const r1b = retry.json().refresh_token as string;
+      expect(r1b).not.toBe(first.json().refresh_token);
+
+      const db = await asAuthRole(p);
+      try {
+        const { rows } = await db.query<{ children: number; sessions: number }>(
+          `select (select count(*)::int from auth.refresh_tokens
+                    where parent_id is not null) as children,
+                  (select count(*)::int from auth.sessions where revoked_at is null) as sessions`);
+        // Two children under one parent, but only one of them live: no second
+        // lineage was created and the session is intact.
+        expect(rows[0]!.sessions).toBe(1);
+        const { rows: live } = await db.query<{ n: number }>(
+          `select count(*)::int as n from auth.refresh_tokens
+            where revoked = false and used_at is null`);
+        expect(live[0]!.n).toBe(1);
+        const { rows: audit } = await db.query<{ action: string }>(
+          `select action from auth.audit_log_entries
+            where action in ('token_reuse_detected','token_refresh_replayed')`);
+        expect(audit.map((r) => r.action)).toEqual(['token_refresh_replayed']);
+      } finally { await db.end(); }
+
+      // The replacement works and the one the lost response carried does not,
+      // which is the documented deviation: the child's plaintext was never
+      // stored, so it cannot be handed back a second time.
+      expect((await refresh(app, p, r1b)).statusCode).toBe(200);
+      expect((await refresh(app, p, first.json().refresh_token)).statusCode).toBe(401);
+      await app.close();
+    });
+
+  t('two concurrent refreshes with one token both succeed, and make one lineage',
+    async () => {
+      const p = await provision();
+      const { app, refresh: r0 } = await session(p);
+      // The race the grace window is for. One of them spends the token; the
+      // other finds it spent, sees the spend was milliseconds ago, and replays.
+      const [a, b] = await Promise.all([refresh(app, p, r0), refresh(app, p, r0)]);
+      expect([a.statusCode, b.statusCode].sort()).toEqual([200, 200]);
+
+      const db = await asAuthRole(p);
+      try {
+        const { rows } = await db.query<{ live: number; sessions: number }>(
+          `select (select count(*)::int from auth.refresh_tokens
+                    where revoked = false and used_at is null) as live,
+                  (select count(*)::int from auth.sessions where revoked_at is null) as sessions`);
+        // Exactly one usable token afterwards. Two would be two live lineages
+        // from one token, which is the state reuse detection exists to prevent.
+        expect(rows[0]!.live).toBe(1);
+        expect(rows[0]!.sessions).toBe(1);
+      } finally { await db.end(); }
+      await app.close();
+    });
+
+  t('an idle-expired session is revoked rather than refreshed', async () => {
+    const p = await provision();
+    await pool.query(
+      `insert into project_auth_config (project_id, autoconfirm, session_idle_seconds)
+       values ($1, true, 3600)
+       on conflict (project_id) do update set autoconfirm = true, session_idle_seconds = 3600`,
+      [p.id]);
+    const { app, refresh: r0 } = await session(p, 'idle@example.com');
+
+    const db = await asAuthRole(p);
+    try {
+      // Never refreshed, so idle is measured from creation — a NULL treated as
+      // "never idle" would make an unrefreshed session immortal.
+      await db.query(
+        `update auth.sessions set created_at = now() - interval '2 hours',
+                                  last_refreshed_at = null`);
+    } finally { await db.end(); }
+
+    const res = await refresh(app, p, r0);
+    expect(res.statusCode).toBe(401);
+    const db2 = await asAuthRole(p);
+    try {
+      const { rows } = await db2.query<{ n: number }>(
+        `select count(*)::int as n from auth.sessions where revoked_at is not null`);
+      expect(rows[0]!.n).toBe(1);
+    } finally { await db2.end(); }
+    await app.close();
+  });
+
+  t('a banned user cannot refresh, and the session dies', async () => {
+    const p = await provision();
+    const { app, refresh: r0 } = await session(p, 'banned@example.com');
+    const db = await asAuthRole(p);
+    try {
+      await db.query(`update auth.users set banned_until = now() + interval '1 day'`);
+    } finally { await db.end(); }
+
+    // Refresh is where a ban is enforced in V1 (D-113): there is no per-request
+    // session check, so a banned user survives at most one access-token
+    // lifetime and then cannot renew.
+    const res = await refresh(app, p, r0);
+    expect(res.statusCode).toBe(401);
+    expect(res.json().error.code).toBe('invalid_grant');
+    const db2 = await asAuthRole(p);
+    try {
+      const { rows } = await db2.query<{ action: string }>(
+        `select action from auth.audit_log_entries
+          where action = 'refresh_failed_banned'`);
+      expect(rows).toHaveLength(1);
+    } finally { await db2.end(); }
+    await app.close();
+  });
+
+  t('every refresh failure looks the same from outside', async () => {
+    const p = await provision();
+    const { app, refresh: r0 } = await session(p, 'uniform@example.com');
+    await refresh(app, p, r0);          // spend it
+
+    const answers = [];
+    for (const token of [
+      'cb_rt_' + 'a'.repeat(43),          // well-formed and unknown
+      r0,                                  // spent (grace, but child is live → ok)
+      'cb_rt_short',                       // wrong shape
+      'not-a-token-at-all',
+    ]) {
+      const res = await refresh(app, p, token);
+      answers.push({ code: res.statusCode, body: res.json().error?.code });
+    }
+    // Unknown, malformed and short are one answer. Distinguishing them tells an
+    // attacker holding a stolen token which of those it is.
+    expect(answers[0]).toEqual({ code: 401, body: 'invalid_grant' });
+    expect(answers[2]).toEqual({ code: 401, body: 'invalid_grant' });
+    expect(answers[3]).toEqual({ code: 401, body: 'invalid_grant' });
+    await app.close();
+  });
+});
+
+describe('P4e — logout and sessions', () => {
+  async function twoSessions(p: Fixture) {
+    await autoconfirm(p.id);
+    const app = api();
+    const creds = { email: 'multi@example.com', password: 'correct horse battery' };
+    const first = await app.inject({
+      method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+      payload: creds });
+    const second = await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=password',
+      headers: { apikey: p.anonKey, 'user-agent': 'Second Device/1.0' },
+      payload: creds });
+    expect(second.statusCode).toBe(200);
+    return { app, a: first.json(), b: second.json() };
+  }
+
+  t('EXIT CRITERION: logout kills refresh immediately, and says so honestly', async () => {
+    const p = await provision();
+    const { app, a } = await twoSessions(p);
+    const out = await app.inject({
+      method: 'POST', url: '/auth/v1/logout',
+      headers: { apikey: p.anonKey, authorization: `Bearer ${a.access_token}` } });
+    expect(out.statusCode).toBe(204);
+    expect(out.body).toBe('');
+
+    // Refresh is dead from this instant.
+    const res = await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=refresh_token',
+      headers: { apikey: p.anonKey }, payload: { refresh_token: a.refresh_token } });
+    expect(res.statusCode).toBe(401);
+
+    // And the access token it just discarded is refused *on the auth
+    // endpoints*, because those do check the session — which is the whole
+    // reason `/logout` means anything. On the data API it stays valid until
+    // `exp` (D-113), and that is a documented, deliberate limit.
+    const after = await app.inject({
+      method: 'GET', url: '/auth/v1/sessions',
+      headers: { apikey: p.anonKey, authorization: `Bearer ${a.access_token}` } });
+    expect(after.statusCode).toBe(401);
+    await app.close();
+  });
+
+  t('logout is idempotent', async () => {
+    const p = await provision();
+    const { app, a } = await twoSessions(p);
+    const headers = { apikey: p.anonKey, authorization: `Bearer ${a.access_token}` };
+    expect((await app.inject({ method: 'POST', url: '/auth/v1/logout', headers })).statusCode)
+      .toBe(204);
+    // Still 204: logout is the one operation a client must be able to complete
+    // unconditionally, and there is nothing to protect — revoking an already
+    // revoked session changes nothing.
+    expect((await app.inject({ method: 'POST', url: '/auth/v1/logout', headers })).statusCode)
+      .toBe(204);
+    await app.close();
+  });
+
+  t('scope=local leaves the other device signed in; global does not', async () => {
+    const p = await provision();
+    const { app, a, b } = await twoSessions(p);
+    await app.inject({
+      method: 'POST', url: '/auth/v1/logout',
+      headers: { apikey: p.anonKey, authorization: `Bearer ${a.access_token}` } });
+
+    const bRefresh = () => app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=refresh_token',
+      headers: { apikey: p.anonKey }, payload: { refresh_token: b.refresh_token } });
+    const stillIn = await bRefresh();
+    expect(stillIn.statusCode).toBe(200);
+
+    // Asserted, and it was not: the first version of this test ignored the
+    // status here, so a 500 from `?scope=global` (an unused `$2` in the UPDATE —
+    // a bind error) passed as a working global logout. An unchecked status on a
+    // mutation is a mutation that never has to happen.
+    const global = await app.inject({
+      method: 'POST', url: '/auth/v1/logout?scope=global',
+      headers: { apikey: p.anonKey,
+                 authorization: `Bearer ${stillIn.json().access_token}` } });
+    expect(global.statusCode).toBe(204);
+    expect((await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=refresh_token',
+      headers: { apikey: p.anonKey },
+      payload: { refresh_token: stillIn.json().refresh_token } })).statusCode).toBe(401);
+    await app.close();
+  });
+
+  t('scope=others signs out every device except this one', async () => {
+    const p = await provision();
+    const { app, a, b } = await twoSessions(p);
+    const out = await app.inject({
+      method: 'POST', url: '/auth/v1/logout?scope=others',
+      headers: { apikey: p.anonKey, authorization: `Bearer ${b.access_token}` } });
+    expect(out.statusCode).toBe(204);
+
+    // The other device is gone…
+    expect((await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=refresh_token',
+      headers: { apikey: p.anonKey },
+      payload: { refresh_token: a.refresh_token } })).statusCode).toBe(401);
+    // …and this one is not, which is the entire point of the scope.
+    expect((await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=refresh_token',
+      headers: { apikey: p.anonKey },
+      payload: { refresh_token: b.refresh_token } })).statusCode).toBe(200);
+    await app.close();
+  });
+
+  t('the sessions list flags the current one and shows what a user would recognise',
+    async () => {
+      const p = await provision();
+      const { app, a, b } = await twoSessions(p);
+      const res = await app.inject({
+        method: 'GET', url: '/auth/v1/sessions',
+        headers: { apikey: p.anonKey, authorization: `Bearer ${b.access_token}` } });
+      expect(res.statusCode).toBe(200);
+      const list = res.json().sessions as Array<Record<string, unknown>>;
+      expect(list).toHaveLength(2);
+      // "Which of these is me" is otherwise unanswerable, and revoking the wrong
+      // one is a self-inflicted logout.
+      expect(list.filter((s) => s.current)).toHaveLength(1);
+      const current = list.find((s) => s.current)!;
+      expect(current.user_agent).toBe('Second Device/1.0');
+      expect(typeof current.created_at).toBe('string');
+      // No tokens and no hashes in a list a user is shown.
+      expect(JSON.stringify(list)).not.toContain('cb_rt_');
+      expect(Object.keys(current).sort()).toEqual([
+        'created_at', 'current', 'id', 'ip', 'last_refreshed_at', 'user_agent',
+      ]);
+      void a;
+      await app.close();
+    });
+
+  t('a user can revoke one session by id, and cannot touch anyone else\'s', async () => {
+    const p = await provision();
+    const { app, a, b } = await twoSessions(p);
+    const list = (await app.inject({
+      method: 'GET', url: '/auth/v1/sessions',
+      headers: { apikey: p.anonKey, authorization: `Bearer ${b.access_token}` } }))
+      .json().sessions as Array<{ id: string; current: boolean }>;
+    const other = list.find((s) => !s.current)!;
+
+    const del = await app.inject({
+      method: 'DELETE', url: `/auth/v1/sessions/${other.id}`,
+      headers: { apikey: p.anonKey, authorization: `Bearer ${b.access_token}` } });
+    expect(del.statusCode).toBe(204);
+    expect((await app.inject({
+      method: 'POST', url: '/auth/v1/token?grant_type=refresh_token',
+      headers: { apikey: p.anonKey },
+      payload: { refresh_token: a.refresh_token } })).statusCode).toBe(401);
+
+    // Somebody else's session id: 404 rather than 403, because the two are
+    // distinguishable only to someone probing for which ids exist.
+    const stranger = await app.inject({
+      method: 'DELETE', url: '/auth/v1/sessions/00000000-0000-4000-8000-000000000000',
+      headers: { apikey: p.anonKey, authorization: `Bearer ${b.access_token}` } });
+    expect(stranger.statusCode).toBe(404);
+    await app.close();
+  });
+
+  t('the bearer endpoints refuse an anon key, a user token from another project, and no token',
+    async () => {
+      const a = await provision();
+      const bProj = await provision();
+      const { app, a: sess } = await twoSessions(a);
+
+      for (const headers of [
+        { apikey: a.anonKey },                                       // no bearer
+        { apikey: a.anonKey, authorization: `Bearer ${a.anonKey}` },  // an API key as a user
+        { apikey: a.anonKey, authorization: 'Bearer garbage' },
+      ]) {
+        expect((await app.inject({ method: 'GET', url: '/auth/v1/sessions', headers }))
+          .statusCode).toBe(401);
+      }
+
+      // A real access token for project A, presented to project B. Same claim
+      // shape, different signing key — and the issuer names A.
+      expect((await app.inject({
+        method: 'GET', url: '/auth/v1/sessions',
+        headers: { apikey: bProj.anonKey, authorization: `Bearer ${sess.access_token}` } }))
+        .statusCode).toBe(401);
+      await app.close();
+    });
 });
