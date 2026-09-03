@@ -159,6 +159,42 @@ services:
       timeout: 3s
       retries: 30
 
+  # ── email sink (P4d) ────────────────────────────────────────────────────
+  # The local stand-in for Postmark, and the same kind of substitute MinIO is for
+  # R2: a real SMTP listener that accepts real messages, so what gets exercised is
+  # our rendering, our headers and our multipart structure rather than a mock's
+  # idea of them. What it cannot exercise is deliverability — SPF, DKIM, DMARC and
+  # inbox placement are properties of a real domain and a real provider, and are
+  # recorded as unmet in STATUS rather than pretended at.
+  #
+  # Its HTTP API is what the tests read: a message that arrives here arrived
+  # through an SMTP conversation, which is the assertion worth making.
+  mailpit:
+    image: axllent/mailpit:v1.21.8
+    container_name: cb-mailpit
+    restart: unless-stopped
+    environment:
+      # Keep everything: a test that asserts on the last message needs the
+      # messages to still be there, and this is a throwaway container.
+      MP_MAX_MESSAGES: "5000"
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+      # Without this the sink pauses **8 seconds before sending its SMTP
+      # greeting**: it reverse-resolves the connecting address first, and from
+      # inside a container that PTR lookup goes to a resolver that has no answer
+      # and times out. Every send then costs 8s, which made the P4d suite 80
+      # seconds of waiting and looked exactly like a bug in our own SMTP client —
+      # the client was fine and was patiently waiting for a banner.
+      MP_SMTP_DISABLE_RDNS: "true"
+    ports:
+      - "${MAILPIT_SMTP_PORT:-51025}:1025"
+      - "${MAILPIT_HTTP_PORT:-58025}:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   # ── monitoring (T9) ─────────────────────────────────────────────────────
   # Production runs these on a separate mon-1 node with R2-backed storage
   # (D-146/D-147). Locally they sit beside the control node; what is being

@@ -223,6 +223,57 @@ EOF
   fi
 }
 
+# The local stand-in for Postmark (P4d). Same shape as backup-store: emit the
+# environment the services need, and prove the path they will actually take.
+cmd_mail_sink() {
+  echo "▸ email sink"
+  if ! docker ps --filter name=cb-mailpit --filter status=running -q | grep -q .; then
+    echo "  ✗ cb-mailpit is not running — run ./scripts/staging.sh up"; return 1
+  fi
+
+  local env_file="$STAGING_DIR/mail-sink.env"
+  cat > "$env_file" <<EOF
+# The worker runs on the host here, so it reaches the sink on the published port.
+# In production these are the provider's own host and 587 with STARTTLS.
+CB_SMTP_HOST=127.0.0.1
+CB_SMTP_PORT=${MAILPIT_SMTP_PORT:-51025}
+# Plaintext, and only ever correct for a local sink. The worker refuses this in
+# production, and refuses to send credentials over it anywhere.
+CB_SMTP_TLS=off
+CB_MAIL_FROM=auth@mail.corebase.co
+# Where the tests read what arrived. Not used by the services.
+CB_MAILPIT_API=http://127.0.0.1:${MAILPIT_HTTP_PORT:-58025}
+EOF
+  chmod 600 "$env_file"
+  echo "  ✓ smtp 127.0.0.1:${MAILPIT_SMTP_PORT:-51025} → $(basename "$env_file") (gitignored)"
+
+  # An actual SMTP conversation, not a port check. A listening socket that rejects
+  # EHLO looks identical to a working sink until the first send fails, and the
+  # difference between "the sink is up" and "the sink will accept mail" is the
+  # whole reason this step exists rather than a `nc -z`.
+  printf '  %-36s' "sink accepts a message"
+  local before after
+  before="$(curl -fsS "http://127.0.0.1:${MAILPIT_HTTP_PORT:-58025}/api/v1/messages"             | sed -n 's/.*"messages_count":\([0-9]*\).*/\1/p')"
+  if printf 'EHLO probe\r\nMAIL FROM:<probe@corebase.test>\r\nRCPT TO:<sink@corebase.test>\r\nDATA\r\nSubject: staging probe\r\n\r\nprobe\r\n.\r\nQUIT\r\n' \
+     | nc -w 5 127.0.0.1 "${MAILPIT_SMTP_PORT:-51025}" >/dev/null 2>&1; then
+    # Polled, not read once. The sink accepts the message on the SMTP socket and
+    # indexes it a moment later, so a single read immediately after `nc` returns
+    # sees the old count and reports a working sink as broken — which is exactly
+    # what the first run of this check did.
+    after="${before:-0}"
+    for _ in $(seq 1 20); do
+      after="$(curl -fsS "http://127.0.0.1:${MAILPIT_HTTP_PORT:-58025}/api/v1/messages" \
+               | sed -n 's/.*"messages_count":\([0-9]*\).*/\1/p')"
+      [ "${after:-0}" -gt "${before:-0}" ] && break
+      sleep 0.25
+    done
+    if [ "${after:-0}" -gt "${before:-0}" ]; then echo "PASS"; else
+      echo "FAIL (SMTP accepted the message but the sink never showed it)"; return 1; fi
+  else
+    echo "FAIL (could not talk SMTP to the sink)"; return 1
+  fi
+}
+
 cmd_seed_images() {
   # Production pre-pulls images onto every node so provisioning is a claim, not a
   # download (D-071). Locally the data node has its own image store, so we push
@@ -346,6 +397,7 @@ case "${1:-}" in
   kek) cmd_kek ;;
   app-role) cmd_app_role ;;
   backup-store) cmd_backup_store ;;
+  mail-sink) cmd_mail_sink ;;
   seed-images) cmd_seed_images ;;
   verify) cmd_verify ;;
   idempotent) cmd_idempotent ;;
@@ -355,6 +407,6 @@ case "${1:-}" in
   monitoring) cmd_monitoring ;;
   # seed-images before backup-store: the egress probe runs a container from the
   # project image on the node, so the image has to be there first.
-  all) cmd_up && cmd_kek && cmd_app_role && cmd_seed_images && cmd_backup_store && cmd_verify && cmd_idempotent ;;
-  *) echo "usage: $0 {up|kek|app-role|seed-images|verify|idempotent|down|nuke|status|monitoring|all}"; exit 2 ;;
+  all) cmd_up && cmd_kek && cmd_app_role && cmd_seed_images && cmd_backup_store && cmd_mail_sink && cmd_verify && cmd_idempotent ;;
+  *) echo "usage: $0 {up|kek|app-role|seed-images|backup-store|mail-sink|verify|idempotent|down|nuke|status|monitoring|all}"; exit 2 ;;
 esac
