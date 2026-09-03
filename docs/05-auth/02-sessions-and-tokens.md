@@ -68,6 +68,24 @@ Refresh tokens are **opaque 256-bit values** from a CSPRNG, base64url-encoded wi
    - **Grace window (D-112): `now() - used_at ≤ 10 s`** → treat as a network race (client retried, or two tabs refreshed simultaneously): return the **already-issued child** R′ and a fresh access JWT — do *not* mint a second child. Idempotent-replay semantics; requires reading the child row via `parent_id`. If the child is itself already used, fall through to the theft case.
    - **Beyond the grace window → theft signal.** Someone is replaying an old refresh token: either the attacker used the stolen token first (client's later legitimate refresh trips this) or the client did (attacker trips it). Either way: **revoke the entire session family** — set `sessions.revoked_at`, set `revoked = true` on every token with that `session_id` — write `auth.audit_log_entries(action='token_reuse_detected')`, and return `401 invalid_grant`. The legitimate user is forced to re-authenticate; the attacker's stolen lineage dies with them.
 
+**Built in P4e, with one deviation that matters.** Step 5's grace branch says to
+"return the already-issued child R′", and that cannot be done as written: only
+`sha256(R′)` was ever stored, so R′'s plaintext cannot be handed out a second
+time. What P4e does instead is issue a **replacement** child under the same parent
+and revoke the one it replaces (**D-338**). The property the window exists for is
+delivered exactly — a client whose response was lost gets a working token instead
+of a forced logout, and no second lineage appears — and what changes is that the
+lost child's plaintext stops working, which is right: the only party who might
+hold it is whoever received the response the retrying client did not.
+
+Two other things are stricter than the numbered steps imply. Step 4a's spend is a
+single `UPDATE … WHERE used_at IS NULL`, so two concurrent refreshes with one
+token cannot both mint a child — the loser falls into step 5 and the grace window
+turns it into a replay rather than a false theft signal. And idle expiry is
+measured from `COALESCE(last_refreshed_at, created_at)` (**D-341**): a NULL read as
+"never idle" would make a session that was never refreshed immortal, which is
+precisely the session on a device nobody uses any more.
+
 Why 10 seconds and not zero: mobile clients on flaky networks genuinely retry refresh calls, and SPAs in multiple tabs race; a zero-tolerance policy converts those into forced logouts at a rate that trains developers to disable rotation. Why 10 seconds and not 60: the window is exactly the period during which a stolen-and-immediately-replayed token goes undetected; 10 s covers TCP/TLS retry behavior without giving an attacker a meaningful operating window. GoTrue ships the same order of magnitude for the same reason.
 
 Refresh tokens have **no independent absolute expiry in V1**: lineage lifetime is bounded by session idle expiry (30 days default) and session revocation. An absolute session cap ("force re-login every N days") is a per-project config candidate for V1.x (OQ-113).
@@ -83,6 +101,15 @@ One `auth.sessions` row per login. The `session_id` claim makes every access JWT
 | Logout (this session) | `POST /auth/v1/logout` | Revokes the bearer's `session_id` |
 | Sign out everywhere | `POST /auth/v1/logout?scope=global` | Revokes **all** the user's sessions |
 | Everywhere but here | `POST /auth/v1/logout?scope=others` | All sessions except the bearer's |
+
+**Built in P4e:** all five rows of the table above. Two notes on what the code
+does that the table cannot say. A bearer token is refused unless its `role` claim
+is `authenticated` (**D-340**) — a project's anon and service_role keys are valid
+JWTs under the same keypair, so without that check an API key works as a user
+credential — and the session lookup is keyed on `(session_id, user_id)`, so a
+token naming somebody else's session cannot act on it. `POST /logout` answers 204
+even for an already-revoked session: logout is the one operation a client must be
+able to complete unconditionally, and there is nothing to protect.
 
 Password reset and password change revoke sessions per the rules in [flows](03-flows.md). Developer-side (service_role) session revocation rides `/admin/users/:id` (ban / force sign-out).
 
@@ -100,6 +127,14 @@ The mitigations menu, with V1 stances (D-113):
 | Key rotation as a kill switch | Invalidates *every* token in the project | Emergency lever only (runbook below) |
 
 **The V1 stance, plainly: revocation means "refresh is dead now; access dies within `exp` (≤1 h default)." Projects that need a tighter window configure a shorter `exp`. Per-request session checking is explicitly out of V1.**
+
+*Built in P4e, and worth stating precisely because the boundary is easy to
+misread (**D-339**): the **auth endpoints** do check session liveness on every
+bearer request, so a token discarded at logout is refused there immediately —
+that is what makes `/logout` mean anything at all. The **data plane** does not,
+and will not before the strict-mode row above is built. So the sentence above is
+the whole guarantee, and the pair of behaviours is deliberate rather than
+inconsistent.*
 
 ### Signing-key rotation runbook (per project)
 

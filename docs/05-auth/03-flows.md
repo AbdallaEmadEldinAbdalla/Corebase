@@ -135,6 +135,14 @@ oracle.
 
 `POST /token?grant_type=refresh_token` `{refresh_token}` — the full rotation/reuse-detection protocol, including the 10 s grace window and family revocation, is specified in [sessions & tokens](02-sessions-and-tokens.md) (D-112). Failure modes: any invalid/spent/revoked/expired token → `401 invalid_grant` (uniform); reuse beyond grace additionally revokes the session family and audits `token_reuse_detected`.
 
+**Built in P4e.** Both directions of the grace window are pinned by tests that were
+made to fail: removing the theft branch let a replay 60 seconds later succeed, and
+removing the grace let an immediate retry destroy the session. Getting either wrong
+is invisible from the outside until it is already logging users out constantly or
+letting a stolen token live indefinitely. The one deviation from step 5 — a
+replacement child rather than the already-issued one, which was never recoverable
+— is D-338.
+
 ### Flow 5 — Logout
 
 `POST /logout[?scope=local|global|others]` (bearer)
@@ -143,6 +151,11 @@ oracle.
 2. Auth verifies JWT, reads `session_id`; sets `sessions.revoked_at` per scope (`local` default = this session; `global` = all the user's sessions; `others` = all but this).
 3. `204`. Client discards both tokens.
 4. *Honesty note (D-113): the just-discarded access token remains cryptographically valid until `exp`; server-side, its session is dead — refresh is impossible from this instant.*
+
+**Built in P4e.** 204 even when the session is already revoked, and the honesty
+note in step 4 is the shipped behaviour: on the auth endpoints the discarded
+access token is refused immediately, because those check session liveness; on the
+data API it stays valid until `exp` (D-339).
 
 | Failure | Response |
 |---|---|

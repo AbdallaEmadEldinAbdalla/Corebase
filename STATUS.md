@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-09-03 · **Phase:** Phase 4 (auth) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 complete** (P3a–P3h; **all four exit criteria met**) · **Phase 4 in progress** (P4a–P4d done)
+**Last updated:** 2026-09-03 · **Phase:** Phase 4 (auth) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 complete** (P3a–P3h; **all four exit criteria met**) · **Phase 4 in progress** (P4a–P4e done)
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -2249,6 +2249,79 @@ at the third attempt, a suppressed address never queued, one project's suppressi
 not touching another's, the per-recipient cap stopping a mail-bomb with each
 refusal recorded and named, a new Free project on half caps, and a broken pool
 proving the mailer cannot fail a flow. Two guards were proven by breaking them.
+### P4e — refresh rotation, reuse detection, logout and sessions · done · 14 tests
+
+The largest hole in the module is closed: a session can now be renewed and ended.
+`POST /token?grant_type=refresh_token`, `POST /logout[?scope=]`, `GET /sessions`
+and `DELETE /sessions/:id` are built, along with the bearer-token middleware they
+all need.
+
+**The rotation protocol (D-112) is the densest logic in the module and every
+branch is a security decision**, so each got its own test and the two that pull
+against each other were proven in both directions:
+
+- Removing the theft branch let a token replayed 60 seconds after being spent
+  succeed.
+- Removing the grace window let an ordinary immediate retry destroy the session.
+
+Both mistakes are invisible from outside until the system is either logging users
+out constantly or letting a stolen token live indefinitely, which is why ten
+seconds is argued rather than chosen: not zero, because mobile clients on flaky
+networks retry and two SPA tabs race, and zero tolerance trains developers to
+switch rotation off; not sixty, because the window *is* the period in which a
+stolen-and-immediately-replayed token goes undetected.
+
+**One deviation from the doc, and it is unavoidable** (**D-338**). D-112 says the
+grace branch returns "the already-issued child R′". Only `sha256(R′)` was ever
+stored, so R′'s plaintext cannot be handed out a second time. P4e issues a
+*replacement* child under the same parent and revokes the one it replaces. The
+property the window exists for is delivered exactly — a client whose response was
+lost gets a working token, no second lineage appears — and what changes is that
+the lost child stops working, which is right: the only party who might hold it is
+whoever received the response the retrying client did not.
+
+**Revocation's boundary is now precise** (**D-339**). The auth endpoints check
+session liveness on every bearer request, which is the only reason `/logout` means
+anything — an access token is stateless, so verifying it cannot reveal that the
+user signed out. The data plane does not, and will not before D-113's deferred
+strict mode: a session lookup per data-plane request puts a database round trip on
+the hot path D-051 exists to keep database-free, and turns auth availability into
+data-API availability. So the guarantee is stated rather than implied: **on the
+auth endpoints revocation is immediate; on the data API refresh is dead
+immediately and access dies within `exp`.**
+
+A bearer token is refused unless its `role` claim is `authenticated` (**D-340**),
+because a project's anon and service_role keys are valid JWTs under the same
+keypair — without that check an API key works as a user credential. And the
+session lookup is keyed on `(session_id, user_id)`, so a token naming somebody
+else's session cannot act on it.
+
+**A bug worth recording, because the test that should have caught it did not.**
+`?scope=global` names no `$2` in its UPDATE, and node-postgres sent one anyway — a
+bind error, surfacing as a 500 while `local` and `others` worked because those two
+reference the parameter (**D-342**). The test called the global logout and did not
+assert its status, so a 500 passed as a successful global sign-out. An unchecked
+status on a mutation is a mutation that never has to happen; the assertion is now
+there and the parameter list follows the predicate.
+
+One stale assertion turned up, and it is the good kind of failure: P4b's test
+asserted that `grant_type=refresh_token` returned a 501 saying it was not built,
+and P4e built it. The assertion was rewritten rather than deleted — it is the one
+place that checks the grant is *dispatched* at all, and a typo in the
+query-parameter comparison would otherwise show up only as every client silently
+receiving a validation error.
+
+**Verification:** 14 integration tests against live projects — a rotation keeping
+its `session_id` and building a two-link lineage, a beyond-grace replay revoking
+the whole family with a `token_reuse_detected` row, an inside-grace replay
+returning a working token and *not* revoking, two concurrent refreshes with one
+token both succeeding and leaving exactly one usable token, an idle-expired session
+revoked rather than refreshed, a banned user's refresh killing the session, every
+refresh failure returning one indistinguishable answer, logout killing refresh
+immediately and being idempotent, all three scopes behaving differently, the
+sessions list flagging the current session and carrying no token material, and the
+bearer endpoints refusing an anon key, another project's user token, and no token
+at all.
 
 ## 5. Rules the code follows
 
@@ -2557,13 +2630,25 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   customers could migrate a user table from GoTrue without a mass password reset;
   it needs a dependency of its own and nobody is migrating in yet. Recorded because
   D-004's portability is supposed to cut both ways.
-- The auth module serves **seven of its thirteen endpoints** (P4b, P4c). Signup,
-  the password grant, `/verify` (GET and POST), `/recover`, `/resend`, `/health`
-  and JWKS work. `/token?grant_type=refresh_token` returns a 501 that says so, and
-  `/logout`, `/user`, `/sessions` and `/admin/users` are not registered at all. A
-  session can therefore be created and **cannot yet be ended or renewed** — an
-  access token lives out its hour and the refresh token in the client's hands has
-  nothing to redeem it against. That is the largest remaining hole in the module.
+- The auth module serves **eleven of its thirteen endpoints** (P4b, P4c, P4e).
+  What is left: **`GET /user` and `PUT /user`**, and **`/admin/users`**. The
+  consequences are specific rather than cosmetic — `PUT /user` is what completes a
+  password reset (see below), holds the email-change flow, and is the only writer
+  of `raw_user_meta_data`; and without `/admin/users` a developer has no way to
+  ban, unban, delete or force-sign-out one of their own users except by SQL.
+- **Password reset still stops one step short of resetting a password.** Flow 7
+  step 1 works — a recovery link yields a session — and steps 2–6 need `PUT /user`.
+  So the flow logs you in and cannot change your credential, the "revoke every
+  other session" rule that makes a reset meaningful is unenforced, and the "your
+  password was changed" tripwire mail has nothing to trigger it.
+- **No absolute session cap.** A lineage's lifetime is bounded only by idle expiry
+  (30 days, per-project) and revocation, so a device refreshed weekly stays signed
+  in indefinitely. OQ-113 has this as a V1.x config candidate; nothing enforces
+  "force re-login every N days" today.
+- **Nothing prunes spent refresh tokens.** Every rotation leaves a row, so a
+  long-lived session accumulates one per refresh — roughly one per hour per active
+  session at the default TTL. Harmless at current scale and a table that grows
+  without bound is still a table that grows without bound; there is no reaper.
 - **Email sends, but only to a sink.** P4d built the interface, the SMTP client,
   the templates, the caps and the suppression check; the **Postmark client does
   not exist** (D-331), so a deployment's only working provider is an SMTP host.

@@ -108,6 +108,14 @@ Caps are checked at enqueue rather than at send, and suppression before caps —
 
 One local trap worth passing on: the sink paused **eight seconds before its SMTP greeting**, which made every send 8s and looked precisely like a bug in our client. It reverse-resolves the connecting address first, and inside a container that lookup finds no resolver and times out. One environment variable took a send from 8038ms to 20ms; the client had been patiently waiting for a banner, correctly.
 
+**A session can now be renewed and ended (P4e).** Refresh rotation with reuse detection, `/logout` with all three scopes, and a sessions list a user can act on.
+
+Rotation is the densest logic in the module and every branch of it is a security decision, so both halves of the grace window were proven by breaking them: remove the theft branch and a token replayed a minute after being spent still works; remove the grace and an ordinary retry destroys the session. Both mistakes are invisible from outside until the system is either logging people out constantly or letting a stolen token live indefinitely. Ten seconds is argued from both ends — not zero, because mobile clients on flaky networks retry and two browser tabs race, and zero tolerance teaches developers to switch rotation off; not sixty, because the window *is* the period in which a stolen token goes undetected.
+
+One place the design could not be implemented as written, and the honest version is better: the spec says a replay inside the grace window returns the already-issued child token. Only its SHA-256 was ever stored, so it cannot be handed out twice. The code issues a replacement under the same parent and revokes the one it replaces — same property (a client whose response was lost gets a working token, no second lineage), and the token from the lost response stops working, which is right, because the only party who might hold it is whoever received the response the retrying client did not.
+
+And revocation's boundary is stated rather than implied: **on the auth endpoints revocation is immediate; on the data API refresh is dead immediately and an already-issued access token dies within its hour.** Putting a session lookup on every data-plane request would move a database round trip onto the hot path and make auth availability into data-API availability. Anyone claiming stateless JWTs plus instant revocation everywhere is selling something.
+
 ## Run it
 
 ```bash
