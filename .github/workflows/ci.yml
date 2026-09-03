@@ -149,6 +149,18 @@ jobs:
       - name: object store — bucket, TLS, and egress from a project network
         run: ./scripts/staging.sh backup-store
 
+      # The email sink (P4d). Its own step for the same reason backup-store is
+      # one: it emits the environment the sender needs and it *proves the path* —
+      # an SMTP conversation that ends with the message visible in the sink, not
+      # a port check. A listening socket that rejects EHLO looks identical to a
+      # working sink until the first send fails.
+      #
+      # Adding a suite without adding its setup step is the mistake that left
+      # every Phase 3 suite red in CI for five steps while passing locally, so
+      # this goes in with the code that needs it.
+      - name: email sink — SMTP reachable and accepting
+        run: ./scripts/staging.sh mail-sink
+
       - name: verify the substitute is actually usable
         # Ten checks including "plaintext :2375 refused" and "node can run a
         # project container". A green suite on a half-up stack is worth nothing.

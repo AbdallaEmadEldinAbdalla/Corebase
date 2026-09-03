@@ -10,6 +10,12 @@ import { verify as verifyJwt, decodeUnverified, sign as signJwt } from '@corebas
 import { buildApp } from '@corebase/api';
 import { createMemoryRateLimiter } from '@corebase/api/kernel/rate-limit.ts';
 import { createNullMailer } from '@corebase/api/modules/project-auth/mail.ts';
+import { createMailer } from '@corebase/api/modules/project-auth/mailer.ts';
+import { createRedis, createAuthEmailQueue } from '@corebase/queue';
+import { createSmtpProvider } from '@corebase/email';
+import { createEmailSender } from './email-sender.ts';
+
+const MAILPIT = process.env.CB_MAILPIT_API ?? 'http://127.0.0.1:58025';
 import { createDocker, type Docker } from './docker.ts';
 import { buildSagas } from './jobs/sagas.ts';
 import { registerNode } from './placement.ts';
@@ -1150,4 +1156,95 @@ describe('P4c — the redirect allowlist, live', () => {
     } finally { await db.end(); }
     await app.close();
   });
+});
+
+describe('P4c + P4d — a signup link that actually arrives', () => {
+  t('EXIT CRITERION: signup → queue → SMTP → the link in the mail confirms the user',
+    async () => {
+      const p = await provision();
+      await setSite(p.id, 'https://app.example.com');
+
+      // The real mailer this time: suppression, caps, a send row, a queued job.
+      // Everything before this asserted on what a flow *owed*; this asserts that
+      // a user with an inbox can finish signing up.
+      const redis = createRedis(process.env.CB_REDIS_URL ?? 'redis://127.0.0.1:56379');
+      const queueRedis = createRedis(process.env.CB_REDIS_URL ?? 'redis://127.0.0.1:56379');
+      const queue = createAuthEmailQueue(queueRedis);
+      await queue.obliterate({ force: true }).catch(() => undefined);
+      const stale = await redis.keys('cb:mail:*');
+      if (stale.length) await redis.del(...stale);
+      await fetch(`${MAILPIT}/api/v1/messages`, { method: 'DELETE' }).then((r) => r.text());
+
+      const app = buildApp({
+        projectAuth: {
+          pool, secrets,
+          mailer: createMailer({ pool, redis, queue }),
+          signupLimiter: createMemoryRateLimiter({ limit: 30, windowSeconds: 3600 }),
+          loginEmailLimiter: createMemoryRateLimiter({ limit: 10, windowSeconds: 300 }),
+          loginIpLimiter: createMemoryRateLimiter({ limit: 30, windowSeconds: 300 }),
+          recoverEmailLimiter: createMemoryRateLimiter({ limit: 4, windowSeconds: 3600 }),
+          recoverIpLimiter: createMemoryRateLimiter({ limit: 10, windowSeconds: 3600 }),
+          verifyIpLimiter: createMemoryRateLimiter({ limit: 30, windowSeconds: 3600 }),
+        },
+      });
+
+      try {
+        const signup = await app.inject({
+          method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+          payload: { email: 'inbox@example.test', password: 'correct horse battery' } });
+        expect(signup.statusCode).toBe(200);
+
+        const sender = createEmailSender({
+          pool, from: 'auth@mail.corebase.co',
+          provider: createSmtpProvider({
+            host: process.env.CB_SMTP_HOST ?? '127.0.0.1',
+            port: Number(process.env.CB_SMTP_PORT ?? 51025),
+            tls: 'off', timeoutMs: 8000 }),
+        });
+        const jobs = await queue.getJobs(['waiting', 'delayed']);
+        expect(jobs).toHaveLength(1);
+        for (const job of jobs) await sender.handle(job.data, job.attemptsMade);
+
+        // Read the link out of the delivered message rather than out of our own
+        // job payload: what is under test is that the URL survived rendering,
+        // MIME encoding and the SMTP conversation intact. Reading the payload
+        // would test the same object twice.
+        const list = await fetch(`${MAILPIT}/api/v1/messages`).then((r) => r.json()) as
+          { messages: Array<{ ID: string; To: Array<{ Address: string }> }> };
+        const mail = list.messages.find((m) => m.To[0]?.Address === 'inbox@example.test');
+        expect(mail).toBeTruthy();
+        const raw = await fetch(`${MAILPIT}/api/v1/message/${mail!.ID}/raw`).then((r) => r.text());
+        const decoded = raw.split('Content-Transfer-Encoding: base64')
+          .slice(1).map((part) => Buffer.from(
+            part.split('--')[0]!.replace(/[^A-Za-z0-9+/=]/g, ''), 'base64').toString('utf8'))
+          .join('\n');
+        const link = decoded.match(/https:\/\/[^\s"<]+verify\?[^\s"<]+/)?.[0];
+        expect(link).toBeTruthy();
+
+        const url = new URL(link!.replace(/&amp;/g, '&'));
+        const token = url.searchParams.get('token')!;
+        const verify = await app.inject({
+          method: 'POST', url: '/auth/v1/verify', headers: { apikey: p.anonKey },
+          payload: { token, type: url.searchParams.get('type') } });
+        expect(verify.statusCode).toBe(200);
+        expect(verify.json().user.email_confirmed_at).toBeTruthy();
+
+        // And the login that was refused before the mail arrived now works.
+        const login = await app.inject({
+          method: 'POST', url: '/auth/v1/token?grant_type=password',
+          headers: { apikey: p.anonKey },
+          payload: { email: 'inbox@example.test', password: 'correct horse battery' } });
+        expect(login.statusCode).toBe(200);
+
+        const { rows } = await pool.query<{ status: string }>(
+          `select status from email_sends where project_id = $1`, [p.id]);
+        expect(rows[0]!.status).toBe('sent');
+      } finally {
+        await app.close();
+        await queue.obliterate({ force: true }).catch(() => undefined);
+        await queue.close();
+        await queueRedis.quit();
+        await redis.quit();
+      }
+    }, 300_000);
 });
