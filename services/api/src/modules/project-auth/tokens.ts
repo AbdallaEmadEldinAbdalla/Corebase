@@ -23,6 +23,19 @@ export const ACCESS_TTL_MAX = 86_400;
  * public repository and not.
  */
 export const REFRESH_PREFIX = 'cb_rt_';
+
+/**
+ * The rotation grace window (D-112).
+ *
+ * Ten seconds, and both bounds are argued. Not zero: mobile clients on flaky
+ * networks genuinely retry refresh calls and SPAs in multiple tabs race, so
+ * zero tolerance converts ordinary conditions into forced logouts at a rate that
+ * trains developers to disable rotation — which loses the whole protection. Not
+ * sixty: this window is precisely the period in which a stolen-and-immediately-
+ * replayed token goes undetected, and ten seconds covers TCP and TLS retry
+ * behaviour without giving an attacker room to work.
+ */
+export const REFRESH_GRACE_MS = 10_000;
 const REFRESH_BYTES = 32;   // 256 bits from a CSPRNG
 
 export interface AccessTokenArgs {

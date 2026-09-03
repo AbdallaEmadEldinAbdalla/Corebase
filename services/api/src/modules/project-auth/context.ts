@@ -43,6 +43,8 @@ export interface AuthConfig {
   /** Where auth links may send someone (P4c). Null means nowhere. */
   siteUrl: string | null;
   additionalRedirects: readonly string[];
+  /** A session unrefreshed for this long is dead (P4e). */
+  sessionIdleSeconds: number;
 }
 
 export const AUTH_CONFIG_DEFAULTS: AuthConfig = {
@@ -51,6 +53,7 @@ export const AUTH_CONFIG_DEFAULTS: AuthConfig = {
   // No default URL. A project that has configured nothing permits no redirect,
   // rather than permitting whatever the caller asked for (P4c).
   siteUrl: null, additionalRedirects: [],
+  sessionIdleSeconds: 30 * 24 * 3600,
 };
 
 export interface ProjectContext {
@@ -144,10 +147,11 @@ export async function resolveProject(
     autoconfirm: boolean | null; disable_signup: boolean | null;
     access_token_ttl_seconds: number | null; password_min_length: number | null;
     site_url: string | null; additional_redirects: string[] | null;
+    session_idle_seconds: number | null;
   }>(
     `SELECT p.id, p.ref::text AS ref, n.address AS host, d.port, p.status::text AS status,
             c.autoconfirm, c.disable_signup, c.access_token_ttl_seconds, c.password_min_length,
-            c.site_url, c.additional_redirects
+            c.site_url, c.additional_redirects, c.session_idle_seconds
        FROM projects p
        JOIN project_databases d ON d.project_id = p.id
        JOIN nodes n ON n.id = d.node_id
@@ -212,6 +216,7 @@ export async function resolveProject(
       passwordMinLength: row.password_min_length ?? AUTH_CONFIG_DEFAULTS.passwordMinLength,
       siteUrl: row.site_url ?? AUTH_CONFIG_DEFAULTS.siteUrl,
       additionalRedirects: row.additional_redirects ?? AUTH_CONFIG_DEFAULTS.additionalRedirects,
+      sessionIdleSeconds: row.session_idle_seconds ?? AUTH_CONFIG_DEFAULTS.sessionIdleSeconds,
     },
   };
 }

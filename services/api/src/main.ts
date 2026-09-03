@@ -178,6 +178,11 @@ const projectAuth: ProjectAuthDeps | undefined = await (async () => {
     // Generous, because a corporate mail scanner fetching every link in an inbox
     // counts against it (OQ-114).
     verifyIpLimiter: limiter(30, 3600),
+    // Looser than login by design: a legitimate client refreshes on a schedule
+    // and a mobile app on a flaky network retries, so a tight bucket here logs
+    // real users out. It is also the least useful endpoint to brute-force —
+    // a refresh token is 256 bits of CSPRNG, not a password.
+    refreshIpLimiter: limiter(60, 300),
     ...(process.env.CB_PROJECT_DOMAIN ? { projectDomain: process.env.CB_PROJECT_DOMAIN } : {}),
     // Must match what the worker signed the project's keys with (CB_JWT_ISSUER
     // there), or every apikey fails its issuer check.

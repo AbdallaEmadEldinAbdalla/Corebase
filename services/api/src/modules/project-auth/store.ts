@@ -288,3 +288,272 @@ export async function findUserById(
     `SELECT ${USER_COLUMNS} FROM auth.users WHERE id = $1 AND deleted_at IS NULL`, [id]);
   return rows[0];
 }
+
+// ── refresh rotation and sessions (P4e, D-112/D-113) ────────────────────────
+
+export interface RefreshRow {
+  id: string;
+  userId: string;
+  sessionId: string;
+  usedAt: Date | null;
+  revoked: boolean;
+  sessionRevokedAt: Date | null;
+  lastRefreshedAt: Date | null;
+  sessionCreatedAt: Date;
+}
+
+/**
+ * Find a presented refresh token, with everything needed to judge it.
+ *
+ * One query, joined to the session, because every one of the protocol's early
+ * exits needs both rows and a second round trip between them is a window in which
+ * the session can be revoked underneath us.
+ */
+export async function findRefreshToken(
+  client: Client, hash: Buffer,
+): Promise<RefreshRow | undefined> {
+  const { rows } = await client.query<{
+    id: string; user_id: string; session_id: string; used_at: Date | null;
+    revoked: boolean; session_revoked_at: Date | null;
+    last_refreshed_at: Date | null; session_created_at: Date;
+  }>(
+    `SELECT r.id::text AS id, r.user_id, r.session_id, r.used_at, r.revoked,
+            s.revoked_at AS session_revoked_at, s.last_refreshed_at,
+            s.created_at AS session_created_at
+       FROM auth.refresh_tokens r
+       JOIN auth.sessions s ON s.id = r.session_id
+      WHERE r.token_hash = $1`, [hash]);
+  const r = rows[0];
+  return r ? {
+    id: r.id, userId: r.user_id, sessionId: r.session_id, usedAt: r.used_at,
+    revoked: r.revoked, sessionRevokedAt: r.session_revoked_at,
+    lastRefreshedAt: r.last_refreshed_at, sessionCreatedAt: r.session_created_at,
+  } : undefined;
+}
+
+/**
+ * Spend a token and mint its child, atomically.
+ *
+ * `used_at IS NULL` is inside the UPDATE, so two concurrent refreshes with the
+ * same token cannot both succeed — the loser gets no row back and falls into the
+ * already-spent branch, where the grace window turns it into an idempotent replay
+ * rather than a false theft signal. Doing the check as its own SELECT would let
+ * both mint a child, which produces two live lineages from one token: the exact
+ * state reuse detection exists to make impossible.
+ */
+export async function rotateRefreshToken(
+  client: Client, a: { tokenId: string; sessionId: string; userId: string; childHash: Buffer },
+): Promise<{ childId: string } | undefined> {
+  await client.query('BEGIN');
+  try {
+    const { rows: spent } = await client.query<{ id: string }>(
+      `UPDATE auth.refresh_tokens SET used_at = now()
+        WHERE id = $1 AND used_at IS NULL AND revoked = false
+        RETURNING id::text AS id`, [a.tokenId]);
+    if (!spent[0]) { await client.query('ROLLBACK'); return undefined; }
+
+    const { rows: child } = await client.query<{ id: string }>(
+      `INSERT INTO auth.refresh_tokens (token_hash, user_id, session_id, parent_id)
+       VALUES ($1, $2, $3, $4::bigint) RETURNING id::text AS id`,
+      [a.childHash, a.userId, a.sessionId, a.tokenId]);
+    await client.query(
+      `UPDATE auth.sessions SET last_refreshed_at = now() WHERE id = $1`, [a.sessionId]);
+    await client.query('COMMIT');
+    return { childId: child[0]!.id };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  }
+}
+
+/**
+ * The child a spent token already produced, for the grace-window replay.
+ *
+ * Returns the child's *hash*, and that is the whole problem with replaying a
+ * refresh: we store only digests, so the plaintext of an already-issued child
+ * cannot be recovered to hand back a second time. Hence `graceRotate` below.
+ */
+export async function findChildToken(
+  client: Client, parentId: string,
+): Promise<{ id: string; usedAt: Date | null; revoked: boolean } | undefined> {
+  const { rows } = await client.query<{ id: string; used_at: Date | null; revoked: boolean }>(
+    `SELECT id::text AS id, used_at, revoked FROM auth.refresh_tokens
+      WHERE parent_id = $1::bigint ORDER BY id LIMIT 1`, [parentId]);
+  return rows[0] ? { id: rows[0].id, usedAt: rows[0].used_at, revoked: rows[0].revoked } : undefined;
+}
+
+/**
+ * Replace the unspent child of a spent token with a fresh one, inside the grace
+ * window.
+ *
+ * The doc says to "return the already-issued child", and that is impossible as
+ * written: the child's plaintext was handed to the client and only its sha256 was
+ * kept, so it cannot be handed to anyone a second time. What is achievable — and
+ * what actually delivers the property the grace window exists for — is to issue a
+ * *replacement* child under the same parent and kill the one that was never
+ * successfully delivered.
+ *
+ * The observable behaviour is the one the doc wants: a client that retried because
+ * the first response was lost gets a working token instead of a forced logout, and
+ * no second lineage is created. What differs is that the first child's plaintext
+ * stops working — which is correct, because the only party who might hold it is
+ * whoever received a response the retrying client did not.
+ *
+ * `revoked = true` on the old child rather than deletion, so the lineage stays
+ * legible: a family walk after a later theft signal must still see that this link
+ * existed.
+ */
+export async function graceRotate(
+  client: Client,
+  a: { parentId: string; oldChildId: string; sessionId: string; userId: string; childHash: Buffer },
+): Promise<{ childId: string } | undefined> {
+  await client.query('BEGIN');
+  try {
+    // Conditional on the old child still being unspent: if it has been used in
+    // the meantime, this is no longer a lost-response retry — it is a real replay
+    // and the caller must fall through to the theft path.
+    const { rows: killed } = await client.query<{ id: string }>(
+      `UPDATE auth.refresh_tokens SET revoked = true
+        WHERE id = $1::bigint AND used_at IS NULL AND revoked = false
+        RETURNING id::text AS id`, [a.oldChildId]);
+    if (!killed[0]) { await client.query('ROLLBACK'); return undefined; }
+
+    const { rows: child } = await client.query<{ id: string }>(
+      `INSERT INTO auth.refresh_tokens (token_hash, user_id, session_id, parent_id)
+       VALUES ($1, $2, $3, $4::bigint) RETURNING id::text AS id`,
+      [a.childHash, a.userId, a.sessionId, a.parentId]);
+    await client.query(
+      `UPDATE auth.sessions SET last_refreshed_at = now() WHERE id = $1`, [a.sessionId]);
+    await client.query('COMMIT');
+    return { childId: child[0]!.id };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  }
+}
+
+/**
+ * Kill a session and every token in its lineage.
+ *
+ * Used for the theft signal and for logout, and it is the same operation for both
+ * because "this session is over" has one meaning. The token update is not
+ * decoration: a session row alone would leave the family's tokens looking valid to
+ * any code path that forgets to join the session — and one such path is all it
+ * takes for a revoked session to keep refreshing.
+ */
+export async function revokeSessionFamily(
+  client: Client, sessionId: string,
+): Promise<void> {
+  await client.query('BEGIN');
+  try {
+    await client.query(
+      `UPDATE auth.sessions SET revoked_at = COALESCE(revoked_at, now()) WHERE id = $1`,
+      [sessionId]);
+    await client.query(
+      `UPDATE auth.refresh_tokens SET revoked = true
+        WHERE session_id = $1 AND revoked = false`, [sessionId]);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  }
+}
+
+/**
+ * Revoke a user's sessions: this one, all of them, or all but this one.
+ *
+ * Returns how many were revoked, which is what makes `?scope=global` reportable
+ * and what a test can assert on.
+ */
+export async function revokeUserSessions(
+  client: Client, userId: string,
+  scope: 'local' | 'global' | 'others', currentSessionId: string,
+): Promise<number> {
+  const predicate = scope === 'local' ? 'AND s.id = $2'
+    : scope === 'others' ? 'AND s.id <> $2'
+    : '';
+  // The parameter list follows the predicate, not the other way round. `global`
+  // names no `$2`, and sending one anyway is a bind error — "bind message
+  // supplies 2 parameters, but prepared statement requires 1" — which surfaced
+  // as a 500 from `?scope=global` while `local` and `others` worked, because
+  // those two reference it. Passing an unused parameter is not harmless in
+  // Postgres the way it is in some drivers.
+  const params = predicate ? [userId, currentSessionId] : [userId];
+  await client.query('BEGIN');
+  try {
+    const { rows } = await client.query<{ id: string }>(
+      `UPDATE auth.sessions s SET revoked_at = now()
+        WHERE s.user_id = $1 AND s.revoked_at IS NULL ${predicate}
+        RETURNING s.id`, params);
+    if (rows.length) {
+      await client.query(
+        `UPDATE auth.refresh_tokens SET revoked = true
+          WHERE session_id = ANY($1::uuid[]) AND revoked = false`,
+        [rows.map((r) => r.id)]);
+    }
+    await client.query('COMMIT');
+    return rows.length;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  }
+}
+
+export interface SessionRow {
+  id: string;
+  createdAt: Date;
+  lastRefreshedAt: Date | null;
+  userAgent: string | null;
+  ip: string | null;
+}
+
+/** A user's live sessions, newest first. Revoked ones are gone, not listed dead. */
+export async function listSessions(
+  client: Client, userId: string,
+): Promise<SessionRow[]> {
+  const { rows } = await client.query<{
+    id: string; created_at: Date; last_refreshed_at: Date | null;
+    user_agent: string | null; ip: string | null;
+  }>(
+    `SELECT id, created_at, last_refreshed_at, user_agent, host(ip) AS ip
+       FROM auth.sessions
+      WHERE user_id = $1 AND revoked_at IS NULL
+      ORDER BY COALESCE(last_refreshed_at, created_at) DESC`, [userId]);
+  return rows.map((r) => ({
+    id: r.id, createdAt: r.created_at, lastRefreshedAt: r.last_refreshed_at,
+    userAgent: r.user_agent, ip: r.ip,
+  }));
+}
+
+/**
+ * Is this session still usable by its bearer?
+ *
+ * The user id is part of the predicate, not just the session id. A bearer token
+ * naming a session that belongs to somebody else is either a bug or an attack, and
+ * either way it must not resolve — checking only the session id would let a forged
+ * `sub` claim operate on a session it does not own.
+ */
+export async function liveSession(
+  client: Client, sessionId: string, userId: string,
+): Promise<{ id: string } | undefined> {
+  const { rows } = await client.query<{ id: string }>(
+    `SELECT s.id FROM auth.sessions s
+       JOIN auth.users u ON u.id = s.user_id
+      WHERE s.id = $1 AND s.user_id = $2 AND s.revoked_at IS NULL
+        AND u.deleted_at IS NULL`, [sessionId, userId]);
+  return rows[0];
+}
+
+/** Revoke one session by id, but only if it belongs to this user. */
+export async function revokeOwnSession(
+  client: Client, sessionId: string, userId: string,
+): Promise<boolean> {
+  const { rows } = await client.query<{ id: string }>(
+    `UPDATE auth.sessions SET revoked_at = now()
+      WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL RETURNING id`,
+    [sessionId, userId]);
+  if (!rows[0]) return false;
+  await client.query(
+    `UPDATE auth.refresh_tokens SET revoked = true WHERE session_id = $1`, [sessionId]);
+  return true;
+}

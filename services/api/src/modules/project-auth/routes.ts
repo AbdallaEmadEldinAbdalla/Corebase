@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { Client } from 'pg';
 import { z } from 'zod';
 import { AUTH_ERROR_CODES } from '@corebase/types';
@@ -14,14 +14,20 @@ import {
   resolveProject, withProjectDb, AuthContextError,
   type ResolveDeps, type ProjectContext,
 } from './context.ts';
-import { mintAccessToken, newRefreshToken, newOneTimeToken, oneTimeHash } from './tokens.ts';
+import {
+  mintAccessToken, newRefreshToken, newOneTimeToken, oneTimeHash,
+  refreshHash, looksLikeRefreshToken, REFRESH_GRACE_MS,
+} from './tokens.ts';
 import {
   findUserByEmail, findUserById, createUser, updatePasswordHash, markSignedIn,
   openSession, writeAuthAudit, publicUser,
   issueOneTimeToken, consumeOneTimeToken, markEmailConfirmed,
+  findRefreshToken, rotateRefreshToken, findChildToken, graceRotate,
+  revokeSessionFamily, revokeUserSessions, listSessions, revokeOwnSession,
   type TokenType, type AuthUser,
 } from './store.ts';
 import { resolveRedirect, withTokenFragment } from './redirect.ts';
+import { bearerFrom, requireLiveSession, type Bearer } from './bearer.ts';
 import { createNullMailer, type AuthMailer } from './mail.ts';
 
 /**
@@ -76,6 +82,8 @@ export interface ProjectAuthDeps extends ResolveDeps {
   recoverIpLimiter: RateLimiter;
   /** `POST /verify`: 10/hour per IP. Mail-scanner prefetch counts, so it is generous. */
   verifyIpLimiter: RateLimiter;
+  /** `POST /token?grant_type=refresh_token`: 60/5min per IP (P4e). */
+  refreshIpLimiter: RateLimiter;
   /** Absent means owed emails are recorded and not sent — the state until P4d. */
   mailer?: AuthMailer;
 }
@@ -83,6 +91,14 @@ export interface ProjectAuthDeps extends ResolveDeps {
 const tooMany = (retryAfterSeconds: number) =>
   new ApiError(429, AUTH_ERROR_CODES.OVER_RATE_LIMIT,
     `Too many attempts. Try again in ${retryAfterSeconds}s.`);
+
+/**
+ * One answer for every way a refresh can fail: unknown, spent, revoked, expired,
+ * banned. Distinguishing them tells an attacker holding a stolen token which of
+ * those it is, which is exactly the information that would let them use it.
+ */
+const badGrant = () =>
+  new ApiError(401, AUTH_ERROR_CODES.INVALID_GRANT, 'Invalid refresh token.');
 
 /** Same generic answer for a wrong password, an unknown email and a ban. */
 const badCredentials = () =>
@@ -285,13 +301,7 @@ export function registerProjectAuth(app: FastifyInstance, deps: ProjectAuthDeps)
    */
   app.post('/auth/v1/token', async (req, reply) => {
     const grant = (req.query as { grant_type?: unknown } | undefined)?.grant_type;
-    if (grant === 'refresh_token') {
-      // Named rather than a generic 400: a client sending this is doing the right
-      // thing against a server that has not built it yet, and `invalid_grant`
-      // would send them looking for a bad token they do not have.
-      throw new ApiError(501, AUTH_ERROR_CODES.INVALID_GRANT,
-        'The refresh_token grant is not available in this build yet.');
-    }
+    if (grant === 'refresh_token') return refreshGrant(req, reply);
     if (grant !== 'password') {
       throw new ApiError(400, AUTH_ERROR_CODES.VALIDATION_FAILED,
         'Set `grant_type=password` in the query string.');
@@ -660,6 +670,227 @@ export function registerProjectAuth(app: FastifyInstance, deps: ProjectAuthDeps)
     });
     return new Date();
   }
+
+  /**
+   * Flow 4 — `POST /token?grant_type=refresh_token` (D-112).
+   *
+   * The protocol in one place, because every branch of it is a security decision:
+   *
+   *  - unknown, revoked, or a revoked session → `401 invalid_grant`, one code for
+   *    all of them;
+   *  - idle-expired session → revoke it, same 401;
+   *  - unspent → rotate: spend it, mint a child, bump `last_refreshed_at`;
+   *  - **spent within 10 s** → a network race, not an attack. Mobile clients on
+   *    flaky networks genuinely retry, and two SPA tabs race. Zero tolerance turns
+   *    those into forced logouts at a rate that teaches developers to switch
+   *    rotation off, which is strictly worse than the window;
+   *  - **spent longer ago** → theft. Somebody is replaying an old token, and
+   *    whether it is the attacker or the victim who trips it is unknowable and
+   *    irrelevant: the whole session family dies and both must re-authenticate.
+   *    The attacker's stolen lineage dies with it.
+   */
+  async function refreshGrant(req: FastifyRequest, reply: FastifyReply) {
+    const ctx = await project(deps, req);
+    const hit = await deps.refreshIpLimiter.hit(projKey(ctx, 'refresh-ip', req.ip ?? 'unknown'));
+    if (!hit.allowed) throw tooMany(hit.retryAfterSeconds);
+
+    const body = (req.body ?? {}) as { refresh_token?: unknown };
+    const presented = body.refresh_token;
+    // A cheap shape reject before any database work: a value that is not one of
+    // ours cannot match a hash, and hashing it to find that out costs a connect.
+    if (!looksLikeRefreshToken(presented)) throw badGrant();
+
+    const meta = clientMeta(req);
+    return withProjectDb(ctx, async (db) => {
+      const row = await findRefreshToken(db, refreshHash(presented));
+      if (!row || row.revoked || row.sessionRevokedAt) {
+        await writeAuthAudit(db, {
+          action: 'refresh_failed', ...meta,
+          ...(row ? { userId: row.userId } : {}),
+          payload: { reason: !row ? 'unknown' : row.revoked ? 'token_revoked' : 'session_revoked' },
+        });
+        throw badGrant();
+      }
+
+      // Idle expiry measured from the last refresh, falling back to session
+      // creation: a session that has never been refreshed is as old as it looks,
+      // and treating a NULL as "never idle" would make an unrefreshed session
+      // immortal.
+      const idleFrom = row.lastRefreshedAt ?? row.sessionCreatedAt;
+      if (Date.now() - idleFrom.getTime() > ctx.config.sessionIdleSeconds * 1000) {
+        await revokeSessionFamily(db, row.sessionId);
+        await writeAuthAudit(db, {
+          action: 'refresh_failed', userId: row.userId, ...meta,
+          payload: { reason: 'session_idle_expired' } });
+        throw badGrant();
+      }
+
+      const user = await findUserById(db, row.userId);
+      if (!user) {
+        // Deleted or banned since the session began. Refresh is where a ban is
+        // enforced in V1 (D-113): there is no per-request session check, so a
+        // banned user survives at most one access-token lifetime.
+        await revokeSessionFamily(db, row.sessionId);
+        await writeAuthAudit(db, {
+          action: 'refresh_failed', userId: row.userId, ...meta,
+          payload: { reason: 'user_gone' } });
+        throw badGrant();
+      }
+      if (user.banned_until && user.banned_until.getTime() > Date.now()) {
+        await revokeSessionFamily(db, row.sessionId);
+        await writeAuthAudit(db, {
+          action: 'refresh_failed_banned', userId: row.userId, ...meta });
+        throw badGrant();
+      }
+
+      const fresh = newRefreshToken();
+
+      if (row.usedAt === null) {
+        const rotated = await rotateRefreshToken(db, {
+          tokenId: row.id, sessionId: row.sessionId, userId: row.userId,
+          childHash: fresh.hash });
+        // No row back means another request spent it between our read and our
+        // write. Not an error and not a theft signal: fall through to the
+        // already-spent handling, which is where the race belongs.
+        if (rotated) {
+          const access = mintAccessToken({
+            ctx, userId: user.id, email: user.email, sessionId: row.sessionId,
+            ttlSeconds: ctx.config.accessTtlSeconds });
+          await writeAuthAudit(db, { action: 'token_refreshed', userId: user.id, ...meta });
+          return reply.status(200).send({
+            access_token: access.token, token_type: 'bearer',
+            expires_in: access.expiresIn,
+            expires_at: Math.floor(Date.now() / 1000) + access.expiresIn,
+            refresh_token: fresh.token, user: publicUser(user),
+          });
+        }
+        // Re-read, so the grace decision below is made against the row as it now
+        // is rather than as it was.
+        const again = await findRefreshToken(db, refreshHash(presented));
+        if (!again || again.usedAt === null) throw badGrant();
+        row.usedAt = again.usedAt;
+      }
+
+      const spentAgo = Date.now() - row.usedAt.getTime();
+      if (spentAgo <= REFRESH_GRACE_MS) {
+        const child = await findChildToken(db, row.id);
+        if (child && !child.usedAt && !child.revoked) {
+          const replaced = await graceRotate(db, {
+            parentId: row.id, oldChildId: child.id,
+            sessionId: row.sessionId, userId: row.userId, childHash: fresh.hash });
+          if (replaced) {
+            const access = mintAccessToken({
+              ctx, userId: user.id, email: user.email, sessionId: row.sessionId,
+              ttlSeconds: ctx.config.accessTtlSeconds });
+            await writeAuthAudit(db, {
+              action: 'token_refresh_replayed', userId: user.id, ...meta,
+              payload: { spent_ago_ms: spentAgo } });
+            return reply.status(200).send({
+              access_token: access.token, token_type: 'bearer',
+              expires_in: access.expiresIn,
+              expires_at: Math.floor(Date.now() / 1000) + access.expiresIn,
+              refresh_token: fresh.token, user: publicUser(user),
+            });
+          }
+        }
+        // The child is already spent (or gone), so this is not a lost-response
+        // retry — the lineage has moved on and something is replaying an old
+        // link in it. Fall through.
+      }
+
+      // Theft. Which party tripped it is unknowable — the attacker used the
+      // stolen token first and the client's next legitimate refresh lands here,
+      // or the reverse — and it does not matter: the family dies either way.
+      await revokeSessionFamily(db, row.sessionId);
+      await writeAuthAudit(db, {
+        action: 'token_reuse_detected', userId: row.userId, ...meta,
+        payload: { spent_ago_ms: spentAgo, session_id: row.sessionId } });
+      throw badGrant();
+    });
+  }
+
+  /**
+   * Flow 5 — `POST /logout[?scope=local|global|others]`.
+   *
+   * 204 even when the session is already revoked. Logout is the one operation a
+   * client must be able to complete unconditionally: an error here leaves an
+   * application unable to sign a user out, and there is nothing to protect —
+   * revoking an already-revoked session changes nothing.
+   */
+  app.post('/auth/v1/logout', async (req, reply) => {
+    const ctx = await project(deps, req);
+    const bearer = bearerFrom(req, ctx);
+    const scopeParam = (req.query as { scope?: unknown } | undefined)?.scope;
+    const scope = scopeParam === 'global' || scopeParam === 'others' ? scopeParam : 'local';
+    const meta = clientMeta(req);
+
+    await withProjectDb(ctx, async (db) => {
+      const revoked = await revokeUserSessions(db, bearer.userId, scope, bearer.sessionId);
+      await writeAuthAudit(db, {
+        action: 'logout', userId: bearer.userId, ...meta,
+        payload: { scope, sessions_revoked: revoked } });
+    });
+    // No body. The client discards both tokens; the access token it just threw
+    // away stays cryptographically valid until `exp` (D-113) and its session is
+    // dead from this instant, which is the honest description.
+    return reply.status(204).send();
+  });
+
+  /**
+   * `GET /auth/v1/sessions` — the bearer's own live sessions.
+   *
+   * This is the screen a user checks after a scare, so the fields are the ones
+   * that let them recognise a device they do not own: when it started, when it was
+   * last used, its user agent and its address. The current session is flagged,
+   * because "which of these is me" is otherwise unanswerable and revoking the
+   * wrong one is a self-inflicted logout.
+   */
+  app.get('/auth/v1/sessions', async (req, reply) => {
+    const ctx = await project(deps, req);
+    const bearer = bearerFrom(req, ctx);
+    return withProjectDb(ctx, async (db) => {
+      await requireLiveSession(db, bearer);
+      const rows = await listSessions(db, bearer.userId);
+      return reply.status(200).send({
+        sessions: rows.map((s) => ({
+          id: s.id,
+          created_at: s.createdAt.toISOString(),
+          last_refreshed_at: s.lastRefreshedAt?.toISOString() ?? null,
+          user_agent: s.userAgent,
+          ip: s.ip,
+          current: s.id === bearer.sessionId,
+        })),
+      });
+    });
+  });
+
+  /**
+   * `DELETE /auth/v1/sessions/:id` — revoke one.
+   *
+   * 404 for a session that is not the caller's, rather than 403. The two are
+   * distinguishable only to someone probing for which session ids exist, and a
+   * session id is not a secret worth confirming.
+   */
+  app.delete('/auth/v1/sessions/:id', async (req, reply) => {
+    const ctx = await project(deps, req);
+    const bearer = bearerFrom(req, ctx);
+    const { id } = req.params as { id: string };
+    if (!/^[0-9a-f-]{36}$/i.test(id)) {
+      throw new ApiError(400, AUTH_ERROR_CODES.VALIDATION_FAILED, 'That is not a session id.');
+    }
+    const meta = clientMeta(req);
+    return withProjectDb(ctx, async (db) => {
+      await requireLiveSession(db, bearer);
+      const done = await revokeOwnSession(db, id, bearer.userId);
+      if (!done) {
+        throw new ApiError(404, AUTH_ERROR_CODES.VALIDATION_FAILED, 'No such session.');
+      }
+      await writeAuthAudit(db, {
+        action: 'session_revoked', userId: bearer.userId, ...meta,
+        payload: { session_id: id, self: id === bearer.sessionId } });
+      return reply.status(204).send();
+    });
+  });
 }
 
 /**
