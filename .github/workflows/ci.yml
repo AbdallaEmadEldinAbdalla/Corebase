@@ -113,6 +113,9 @@ jobs:
           ./scripts/staging.sh kek
           ./scripts/staging.sh app-role
 
+      - name: seed the project image onto the data node
+        run: ./scripts/staging.sh seed-images
+
       # Phase 3's suites all refuse to run without an object store, on purpose
       # (D-223: a suite that needs infrastructure fails rather than skips). This
       # step was missing from the moment the object store was added in P3a, so
@@ -120,11 +123,12 @@ jobs:
       # precondition here while passing locally — the exact gap the "verified live"
       # rule exists to close, missed because the README was updated and this file
       # was not.
+      #
+      # After `seed-images`, not before: its egress probe runs a container from the
+      # project image on the node, and without the image it fails claiming the
+      # network is unreachable.
       - name: object store — bucket, TLS, and egress from a project network
         run: ./scripts/staging.sh backup-store
-
-      - name: seed the project image onto the data node
-        run: ./scripts/staging.sh seed-images
 
       - name: verify the substitute is actually usable
         # Ten checks including "plaintext :2375 refused" and "node can run a

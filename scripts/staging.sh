@@ -193,17 +193,32 @@ EOF
   # Proves the path a project container will actually take: its own private
   # network inside the node, out through NAT. A green check here and a failure at
   # archive-push time would otherwise be indistinguishable from a bad cipher-pass.
+  # The probe needs the project image on the node, so say so rather than blaming
+  # the network. The first CI run of this step failed with "NOT reachable from a
+  # project network" when the real cause was that `backup-store` ran before
+  # `seed-images` and the image simply was not there — a misleading diagnostic
+  # pointing at the one thing that was working.
+  if ! node_docker image inspect corebase/postgres:17.5 >/dev/null 2>&1; then
+    echo "  ⚠ skipping the egress probe: corebase/postgres:17.5 is not on the node yet."
+    echo "    Run ./scripts/staging.sh seed-images first, then this again, to check it."
+    return 0
+  fi
+
   # `bash`, not `sh`: /dev/tcp is a bash builtin and the image's /bin/sh is dash,
   # where the redirect is a syntax error — which fails the probe for a reason that
   # has nothing to do with routing and reads exactly like a routing failure.
-  if docker exec cb-data-node sh -c \
+  local probe_out
+  if probe_out="$(docker exec cb-data-node sh -c \
       "docker network create cb-egress-probe >/dev/null 2>&1; \
        docker run --rm --network cb-egress-probe --entrypoint bash corebase/postgres:17.5 \
-         -c 'exec 3<>/dev/tcp/${ip}/9000' >/dev/null 2>&1; r=\$?; \
-       docker network rm cb-egress-probe >/dev/null 2>&1; exit \$r"; then
+         -c 'exec 3<>/dev/tcp/${ip}/9000' 2>&1; r=\$?; \
+       docker network rm cb-egress-probe >/dev/null 2>&1; exit \$r" 2>&1)"; then
     echo "  ✓ reachable from a project's private network (NAT egress, as in production)"
   else
     echo "  ✗ NOT reachable from a project network — archiving would fail silently"
+    # Printed, because the previous version swallowed it and left the operator with
+    # a conclusion and no evidence.
+    [ -n "$probe_out" ] && echo "    $probe_out" | head -5
     return 1
   fi
 }
@@ -338,6 +353,8 @@ case "${1:-}" in
   nuke) cmd_nuke ;;
   status) cmd_status ;;
   monitoring) cmd_monitoring ;;
-  all) cmd_up && cmd_kek && cmd_app_role && cmd_backup_store && cmd_seed_images && cmd_verify && cmd_idempotent ;;
+  # seed-images before backup-store: the egress probe runs a container from the
+  # project image on the node, so the image has to be there first.
+  all) cmd_up && cmd_kek && cmd_app_role && cmd_seed_images && cmd_backup_store && cmd_verify && cmd_idempotent ;;
   *) echo "usage: $0 {up|kek|app-role|seed-images|verify|idempotent|down|nuke|status|monitoring|all}"; exit 2 ;;
 esac

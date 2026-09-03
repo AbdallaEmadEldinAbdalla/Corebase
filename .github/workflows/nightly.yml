@@ -49,8 +49,8 @@ jobs:
           ./scripts/migrate-staging.sh
           ./scripts/staging.sh kek
           ./scripts/staging.sh app-role
-          ./scripts/staging.sh backup-store
           ./scripts/staging.sh seed-images
+          ./scripts/staging.sh backup-store
           ./scripts/staging.sh verify
 
       # Each drill asserts its own invariants and exits non-zero on failure, so
