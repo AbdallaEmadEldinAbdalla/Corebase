@@ -29,3 +29,29 @@ export function appDatabaseUrl(root: string, port = 55433): string {
 export const ownerDatabaseUrl = (): string =>
   process.env.CB_CONTROL_DATABASE_URL
   ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
+
+/**
+ * The object-store settings that `./scripts/staging.sh backup-store` writes.
+ *
+ * Every harness that provisions a project needs these, because `configure_backups`
+ * refuses to finish without them (`CB_REQUIRE_BACKUPS`) — and that refusal is
+ * right: a project whose backups were never configured is a project whose data is
+ * not protected, and provisioning it anyway would be the silent failure D-038
+ * exists to prevent.
+ *
+ * Read from the file rather than required in the environment, for the same reason
+ * the e2e suites do it: a harness that only works when somebody remembered to
+ * export four variables is a harness that silently stops working. Returned rather
+ * than assigned to `process.env`, so a caller spawning a child process can decide
+ * what that child sees.
+ */
+export function backupStoreEnv(root: string): Record<string, string> {
+  const file = join(root, 'infra/docker/staging/backup-store.env');
+  if (!existsSync(file)) return {};
+  const out: Record<string, string> = {};
+  for (const line of readFileSync(file, 'utf8').split('\n')) {
+    const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
+    if (m) out[m[1]!] = m[2]!;
+  }
+  return out;
+}

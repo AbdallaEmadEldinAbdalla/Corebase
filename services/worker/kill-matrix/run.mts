@@ -28,7 +28,7 @@ import { join, resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { request as httpsRequest } from 'node:https';
 import { Pool, Client } from 'pg';
-import { appDatabaseUrl, ownerDatabaseUrl } from '../bench/staging-env.mts';
+import { appDatabaseUrl, ownerDatabaseUrl, backupStoreEnv } from '../bench/staging-env.mts';
 
 const ROOT = resolve(import.meta.dirname, '../../..');
 const PORT = Number(process.env.CB_KM_API_PORT ?? 8097);
@@ -38,8 +38,26 @@ const CERT_DIR = process.env.CB_DOCKER_CERT_DIR ?? join(ROOT, 'infra/docker/stag
 const DOCKER_HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
 const DOCKER_PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
 
+/**
+ * The object store. Without these, `configure_backups` refuses to finish
+ * (`CB_REQUIRE_BACKUPS`) and every scenario dead-letters at 5/5 attempts having
+ * completed five steps — which is what this drill has been doing since P3a added
+ * that step, reporting it as "DID NOT CONVERGE" with the actual error four lines
+ * out of reach.
+ */
+const backupEnv = backupStoreEnv(ROOT);
+if (!backupEnv['CB_BACKUP_S3_ENDPOINT']) {
+  // Loud and up front. A drill that runs for twenty minutes and then reports
+  // eleven mysterious failures is worse than one that refuses to start.
+  throw new Error(
+    'no object-store settings found at infra/docker/staging/backup-store.env — '
+    + 'run ./scripts/staging.sh backup-store. Every scenario provisions a project, '
+    + 'and provisioning requires a backup repo (CB_REQUIRE_BACKUPS).');
+}
+
 const env = {
   ...process.env,
+  ...backupEnv,
   CB_CONTROL_DATABASE_URL: appDatabaseUrl(ROOT),
   CB_REDIS_URL: process.env.CB_REDIS_URL ?? 'redis://127.0.0.1:56379',
   CB_DOCKER_HOST: DOCKER_HOST,
@@ -185,10 +203,12 @@ async function checkInvariants(ref: string, projectId: string): Promise<Invarian
   const { rows } = await pool.query<{
     placements: number; secrets: number; booked: number; status: string;
     port: number | null; container_id: string | null; conn_host: string | null;
-    secret_versions: number;
+    secret_versions: number; secret_names: number;
   }>(`SELECT (SELECT count(*)::int FROM project_databases WHERE project_id = $1) AS placements,
              (SELECT count(*)::int FROM project_secrets
                WHERE project_id = $1 AND state = 'active') AS secrets,
+             (SELECT count(DISTINCT name)::int FROM project_secrets
+               WHERE project_id = $1 AND state = 'active') AS secret_names,
              (SELECT count(*)::int FROM project_secrets WHERE project_id = $1) AS secret_versions,
              (SELECT ram_reserved_mb FROM nodes ORDER BY created_at LIMIT 1) AS booked,
              (SELECT status::text FROM projects WHERE id = $1) AS status,
@@ -201,8 +221,25 @@ async function checkInvariants(ref: string, projectId: string): Promise<Invarian
   if (containers !== 1) problems.push(`${containers} containers named cb-${ref} (want 1)`);
   if (volumes !== 1) problems.push(`${volumes} volumes named cb-${ref}-pgdata (want 1)`);
   if (r.placements !== 1) problems.push(`${r.placements} project_databases rows (want 1)`);
-  if (r.secrets !== 3) problems.push(`${r.secrets} active credentials (want 3)`);
-  if (r.secret_versions !== 3) problems.push(`${r.secret_versions} credential rows total (want 3 — a duplicate version means a regenerated password)`);
+  // Duplication, not a total. This checked for exactly 3 — the number a project
+  // had at Milestone 0 — and a project now legitimately carries 11: the pooler's
+  // own credential (P2b), the signing keypair and both API keys (P1e), the repo
+  // cipher-pass (P3a) and the auth role's password (P4a). The count was never the
+  // property; the property is that a resumed saga did not regenerate a password
+  // it had already stored, and that is a *duplicate* — which `count(*)` against
+  // `count(DISTINCT name)` catches whatever the fleet's credential set grows to.
+  //
+  // Same lesson as D-350: assert what the mechanism guarantees, not the number
+  // some version of it happened to produce.
+  if (r.secrets === 0) problems.push('no active credentials at all');
+  if (r.secrets !== r.secret_names) {
+    problems.push(`${r.secrets} active credentials for ${r.secret_names} distinct names ` +
+      '— a second active row for one name means a regenerated password');
+  }
+  if (r.secret_versions !== r.secrets) {
+    problems.push(`${r.secret_versions} credential rows for ${r.secrets} active ` +
+      '— an extra version means a credential was stored twice (store-then-apply ran twice)');
+  }
   // One Free project booked exactly once. A double-booking is the failure mode
   // that silently shrinks the node's capacity for every future project.
   if (r.booked !== 350) problems.push(`node booked ${r.booked} MB (want 350 for one Free project)`);
@@ -267,6 +304,34 @@ const SCENARIOS: Scenario[] = [
   midStep('wait_healthy', 'database accepting connections', 'wait_healthy/after-probe'),
 ];
 
+/**
+ * The organization the drill's projects belong to.
+ *
+ * The bootstrap org, by its slug rather than by "the only one there is" — the
+ * API's own encoding of the id is what `POST /v1/projects` expects, so this asks
+ * the platform API for it instead of constructing it here and guessing at the
+ * scheme.
+ */
+let cachedOrgId: string | undefined;
+async function bootstrapOrgId(): Promise<string> {
+  if (cachedOrgId) return cachedOrgId;
+  const res = await fetch(`http://127.0.0.1:${PORT}/v1/orgs`, { headers: auth });
+  if (!res.ok) {
+    throw new Error(`cannot list organizations (${res.status}): ${await res.text()}`);
+  }
+  // `orgs`, not `organizations` — the platform API's key, checked rather than
+  // assumed. A wrong key here would read as "belongs to no organization", which
+  // is a confident and completely wrong diagnosis.
+  const body = (await res.json()) as { orgs?: Array<{ id: string; slug: string }> };
+  const orgs = body.orgs ?? [];
+  const dev = orgs.find((o) => o.slug === 'dev') ?? orgs[0];
+  if (!dev) {
+    throw new Error('the bootstrap user belongs to no organization — did the API boot?');
+  }
+  cachedOrgId = dev.id;
+  return dev.id;
+}
+
 async function resetWorld(): Promise<void> {
   await pool.query(
     'truncate provisioning_jobs, project_secrets, project_databases, projects, nodes cascade');
@@ -312,9 +377,42 @@ async function runScenario(sc: Scenario, i: number, total: number): Promise<Resu
 
   const res = await fetch(`http://127.0.0.1:${PORT}/v1/projects`, {
     method: 'POST', headers: { ...auth, 'idempotency-key': `km-${Date.now()}-${i}` },
-    body: JSON.stringify({ name: `km-${Date.now()}-${i}`, region: 'eu-central' }),
+    // `org_id` named explicitly. Omitting it works only while the bootstrap user
+    // belongs to exactly one organization, and the API refuses to guess when
+    // there are several — correctly, since picking one silently is how a project
+    // lands in the wrong org. That made this drill depend on global state it does
+    // not own: any earlier suite that creates an org (P1d's do) breaks every
+    // scenario with a message about the worker.
+    body: JSON.stringify({
+      name: `km-${Date.now()}-${i}`, region: 'eu-central', org_id: await bootstrapOrgId() }),
   });
-  const { ref, id: projectId } = (await res.json()) as { ref: string; id: string };
+  const body = await res.text();
+  // Checked, and it was not. An unchecked status here destroyed four nights of
+  // this drill: a rejected create left `ref` and `projectId` as `undefined`, the
+  // scenario carried on, and the worker — correctly having nothing to do — was
+  // reported as "never reached the kill point". The diagnosis pointed at the one
+  // component that was working.
+  if (!res.ok) {
+    throw new Error(
+      `the API refused to create the project (${res.status}): ${body}\n` +
+      'Every scenario depends on this, so the drill stops here rather than ' +
+      'reporting eleven mysterious worker failures.');
+  }
+  // `{project: {...}, job: {...}}`, not a flat object. The drill destructured
+  // `{ref, id}` from the top level, which has been `undefined` since P1d wrapped
+  // the response — so every convergence check polled for a project whose ref it
+  // never captured, and reported "DID NOT CONVERGE" while provisioning was
+  // succeeding perfectly. That is what four nights of nightly failures were.
+  //
+  // The ids are prefixed (`prj_…`), and the database column is not, so the
+  // prefix comes off here. Reaching into the database with a prefixed id
+  // silently matches nothing, which is the same failure one layer down.
+  const parsed = JSON.parse(body) as { project?: { id?: string; ref?: string } };
+  const ref = parsed.project?.ref;
+  const projectId = parsed.project?.id?.replace(/^prj_/, '');
+  if (!ref || !projectId) {
+    throw new Error(`the API accepted the create but returned no project ref/id: ${body}`);
+  }
 
   // Wait for the chosen moment, then kill with no warning at all.
   let killed = false;
@@ -323,6 +421,15 @@ async function runScenario(sc: Scenario, i: number, total: number): Promise<Resu
     w1.kill();
     killed = true;
   } catch (err) {
+    // Print what the worker actually said. This path held the entire log in
+    // `w1.lines` and reported only "no matching log line within 90000ms", which
+    // is the least useful true statement available: the whole question is *what
+    // it did instead*, and the answer was already in memory. Four nightly runs
+    // failed here with nothing to go on.
+    const tail = w1.lines.slice(-25);
+    console.log(`\n        the worker's last ${tail.length} lines before giving up:`);
+    for (const l of tail) console.log(`        ${l}`);
+    if (!tail.length) console.log('        (the worker printed nothing at all)');
     w1.kill();
     return { scenario: sc.name, kind: sc.kind, killed: false, convergeMs: null,
       resumedSteps: [], inv: null, error: `never reached the kill point: ${(err as Error).message}` };
@@ -356,9 +463,21 @@ async function runScenario(sc: Scenario, i: number, total: number): Promise<Resu
   await new Promise((r) => setTimeout(r, 200));
 
   if (convergeMs === null) {
-    const tail = w2.lines.slice(-4).join('\n        ');
     console.log(`DID NOT CONVERGE in ${CONVERGE_BUDGET_MS / 1000}s`);
-    console.log(`        ${tail}`);
+    // The *whole* replacement worker's log, and the job row. Four lines was a
+    // window onto the last two seconds of a two-minute failure — enough to see
+    // that something was wrong and never enough to see what, which is how this
+    // stayed unexplained across four nightly runs.
+    console.log(`        replacement worker (${w2.lines.length} lines):`);
+    for (const l of w2.lines) console.log(`        ${l}`);
+    const { rows: job } = await pool.query(
+      `select id, state, attempts, max_attempts, last_error,
+              checkpoint, heartbeat_at, started_at
+         from provisioning_jobs where project_id = $1`, [projectId]);
+    console.log(`        job row: ${JSON.stringify(job[0] ?? null)}`);
+    const { rows: proj } = await pool.query(
+      `select status from projects where id = $1`, [projectId]);
+    console.log(`        project status: ${JSON.stringify(proj[0] ?? null)}`);
     return { scenario: sc.name, kind: sc.kind, killed, convergeMs: null, resumedSteps, inv: null,
       error: `no convergence within ${CONVERGE_BUDGET_MS}ms` };
   }
