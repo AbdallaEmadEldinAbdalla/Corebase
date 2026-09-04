@@ -81,7 +81,30 @@ export interface SecretStore {
    * a minted JWT. Idempotent: a retry keeps the first value, because the second
    * would be a different key with the same name.
    */
+  /**
+   * **Create-if-absent, not a setter.** An existing name is left untouched and
+   * the call succeeds silently.
+   *
+   * That is the right shape for provisioning — a keypair generated once, stored
+   * once, and a retried saga step that must not mint a second one — and it is a
+   * trap for anything else. P4h's key rotation called it expecting a swap, got a
+   * no-op, and produced a rotation in which nothing rotated: JWKS published both
+   * keys, the cut-over reported success, and every token still carried the old
+   * kid. Use `replace` to change a value that already exists.
+   */
   put(projectId: string, name: string, value: string): Promise<void>;
+  /**
+   * Store a **caller-supplied** value as the new active version, demoting the
+   * previous one to `retiring`.
+   *
+   * `rotate` for a value we did not generate: same transaction, same locking,
+   * same version arithmetic — the difference is only where the bytes come from.
+   * A keypair, an API key or any other secret we mint ourselves needs this and
+   * cannot use `rotate`, which generates a random string.
+   */
+  replace(projectId: string, name: string, value: string): Promise<{
+    previous: string | undefined; version: number;
+  }>;
   /**
    * The active secret for `name`, generating and persisting one if absent.
    * Concurrent callers converge on a single value — the partial unique index on
@@ -144,6 +167,56 @@ export function createSecretStore(pool: Pool, envelope: Envelope): SecretStore {
          VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (project_id, name, version) DO NOTHING`,
         [projectId, name, version, sealed.ciphertext, sealed.dekWrapped, sealed.kekId]);
+    },
+
+    async replace(projectId, name, value) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        // The same lock, arithmetic and ordering as `rotate` below, for the same
+        // reasons: two racing replacements must not both demote one active row
+        // and both claim version n+1, and the version is bound into the AAD so
+        // reusing a number would make two ciphertexts claim to be the same
+        // secret.
+        const current = await client.query<SecretRow>(
+          `SELECT version, ciphertext, dek_wrapped, kek_id
+             FROM project_secrets
+            WHERE project_id = $1 AND name = $2 AND state = 'active'
+              FOR UPDATE`, [projectId, name]);
+        const cur = current.rows[0];
+        const previous = cur
+          ? envelope.decrypt(
+              { ciphertext: cur.ciphertext, dekWrapped: cur.dek_wrapped, kekId: cur.kek_id },
+              { projectId, name, version: cur.version })
+          : undefined;
+
+        const { rows: top } = await client.query<{ v: number }>(
+          `SELECT COALESCE(max(version), 0) AS v FROM project_secrets
+            WHERE project_id = $1 AND name = $2`, [projectId, name]);
+        const version = (top[0]?.v ?? 0) + 1;
+
+        if (cur) {
+          await client.query(
+            `UPDATE project_secrets SET state = 'retiring', rotated_at = now()
+              WHERE project_id = $1 AND name = $2 AND state = 'active'`,
+            [projectId, name]);
+        }
+
+        const sealed = envelope.encrypt(value, { projectId, name, version });
+        await client.query(
+          `INSERT INTO project_secrets
+             (project_id, name, version, ciphertext, dek_wrapped, kek_id, state)
+           VALUES ($1, $2, $3, $4, $5, $6, 'active')`,
+          [projectId, name, version, sealed.ciphertext, sealed.dekWrapped, sealed.kekId]);
+
+        await client.query('COMMIT');
+        return { previous, version };
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
     },
 
     async rotate(projectId, name) {
