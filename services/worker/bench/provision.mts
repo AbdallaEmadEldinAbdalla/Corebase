@@ -55,6 +55,15 @@ const env = {
   ...process.env,
   // The services run as the least-privilege app role (P1b); this harness's own
   // queries below use the owner, because fixtures are admin work.
+  // The per-org project ceiling, raised for this run. P1d added a limit of 20
+  // *after* this bench was written to make 20 measured creates plus a warm-up —
+  // so the twenty-first create returned 409 and the whole drill failed having
+  // measured nineteen successful provisions perfectly. `density.mts` already does
+  // this; provision.mts never did, and nothing ran it to notice.
+  //
+  // What is being measured here is provisioning, not quota enforcement, and the
+  // bench knows exactly how many projects it will ask for.
+  CB_PROJECTS_PER_ORG: String(COUNT + 5),
   CB_CONTROL_DATABASE_URL: appDatabaseUrl(ROOT),
   CB_REDIS_URL: process.env.CB_REDIS_URL ?? 'redis://127.0.0.1:56379',
   CB_DOCKER_HOST: process.env.CB_DOCKER_HOST ?? '127.0.0.1',

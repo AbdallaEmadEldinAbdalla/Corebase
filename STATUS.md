@@ -2610,6 +2610,17 @@ and T8 had churned roughly fifty provisions and a node reboot on one host, T5f
 hit `driver failed programming external connectivity` — bridge and port state
 exhausted by the drills before it, not a fault in anything being measured.
 
+On its own fresh runner T5f then got all the way to **19 of 20 creates
+succeeding** — p50 9.5 s, none within a mile of the 60 s budget — and failed on
+the twenty-first with `409: This organization already has 20 projects`. P1d added
+a per-org ceiling of 20 *after* this bench was written to make a warm-up plus 20
+measured creates, and nothing ran it to notice. It now raises the ceiling for its
+own run, the way `density.mts` already did: what is being measured is
+provisioning, not quota enforcement, and the bench knows how many it will ask
+for. That is the fifth harness-vs-product drift this repair turned up, and every
+one has the same shape — the product grew a rule and a harness written before it
+kept assuming the old world.
+
 **T5f's other failure was a product finding, not a harness one** — which is
 what the drill is for. On a loaded runner:
 
