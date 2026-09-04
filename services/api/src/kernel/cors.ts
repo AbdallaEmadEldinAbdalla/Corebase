@@ -44,6 +44,18 @@ const ALLOWED_HEADERS = [
   'authorization',
   // A client that wants its own correlation id to appear in our logs.
   'x-request-id',
+  /**
+   * The project key every `/auth/v1/*` endpoint requires (D-029).
+   *
+   * Missing until P4i, and the omission made the **entire data plane unreachable
+   * from a browser**: a custom header forces a preflight, the preflight lists
+   * only these, and `apikey` was not among them — so every signup and login from
+   * a customer's frontend failed before it left the browser. This list was
+   * written for the dashboard, which talks to the control plane and never sends
+   * one, and the data plane inherited it. Found by writing the phase's demo page,
+   * which is the first browser client the auth API has ever had.
+   */
+  'apikey',
 ].join(', ');
 
 /**
@@ -54,7 +66,10 @@ const ALLOWED_HEADERS = [
  */
 const EXPOSED_HEADERS = 'x-request-id';
 
-const ALLOWED_METHODS = 'GET, POST, PATCH, DELETE, OPTIONS';
+// PUT alongside PATCH: `PUT /auth/v1/user` is how a user changes their password,
+// their email or their metadata, and without it that endpoint is unreachable from
+// a browser for the same reason `apikey` was.
+const ALLOWED_METHODS = 'GET, POST, PUT, PATCH, DELETE, OPTIONS';
 
 /** Ten minutes. Long enough to save the preflight round-trip on a page of calls,
  *  short enough that an allowlist change takes effect within a coffee break. */

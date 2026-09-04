@@ -61,6 +61,26 @@ describe('P1g — CORS', () => {
     expect(String(res.headers['access-control-allow-methods'])).toContain('DELETE');
   });
 
+  it('answers a preflight with what a *data-plane* client needs (P4i)', async () => {
+    // This suite only ever asserted the dashboard's needs, and the dashboard
+    // talks to the control plane. So `apikey` — required on every `/auth/v1/*`
+    // endpoint (D-029) — was absent from the allowlist for the whole of Phase 4,
+    // which made the entire data plane unreachable from a browser: a custom
+    // header forces a preflight, the preflight lists only the allowed ones, and
+    // every signup and login from a customer's frontend failed before it left
+    // the browser. Found by writing the phase's demo page, the auth API's first
+    // browser client.
+    const res = await app().inject({
+      method: 'OPTIONS', url: '/auth/v1/signup',
+      headers: { origin: DASH, 'access-control-request-method': 'POST' },
+    });
+    expect(res.statusCode).toBe(204);
+    expect(String(res.headers['access-control-allow-headers'])).toContain('apikey');
+    // `PUT /auth/v1/user` is how a user changes their password, their email or
+    // their metadata, and PATCH is not a substitute for it.
+    expect(String(res.headers['access-control-allow-methods'])).toContain('PUT');
+  });
+
   it('refuses a preflight from an unknown origin without saying why', async () => {
     const res = await app().inject({
       method: 'OPTIONS', url: '/v1/projects',
