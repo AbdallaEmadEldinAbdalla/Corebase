@@ -2595,9 +2595,28 @@ past — but a missing import or a renamed export is caught at commit time inste
 of at 03:17.
 
 **All four drills pass locally**: T6 11/11, T7 2 cycles clean, T8 node rebooted
-with no human, T5f 1/1 ready and usable with its per-step breakdown intact
-(`wait_healthy` 5.4 s and `verify_archiving` 1.2 s dominate; everything else is
-under 600 ms).
+with no human, T5f 2/2 ready and usable (~7 s each) with its per-step breakdown
+intact — `wait_healthy` ~5.4 s and `verify_archiving` ~1.2 s dominate, everything
+else under 600 ms. In CI, **T6, T7 and T8 all pass**; T5f found one more thing.
+
+**T5f's remaining failure was a product finding, not a harness one** — which is
+what the drill is for. On a loaded runner:
+
+```
+pgbackrest stanza-create failed (exit 50): unable to acquire lock on
+'/tmp/pgbackrest/main-archive-1.lock': Resource temporarily unavailable
+```
+
+`stanza-create` is the one pgBackRest command that runs while the archiver is
+*failing in a loop*: the container archives from the moment it is healthy,
+`archive-push` cannot succeed until the stanza exists, and async retries keep
+re-taking that lock throughout. Every other command runs against a working repo
+where the lock is held only for a real push — so D-267's general 6 s budget was
+right for them and never right for this one. It now waits 30 s (**D-364**), still
+bounded because a lock held that long really is stuck; what changes is that a slow
+object store stops looking like one, and the saga stops spending a whole retry on
+it. The ordering cannot avoid the race — the container has to be healthy before
+anything can exec into it.
 
 **Also fixed: the PITR test's intermittent failure** (**D-362**), which CI
 surfaced on P4g as `expected [ 1 ] to include 2`. The test took its restore target

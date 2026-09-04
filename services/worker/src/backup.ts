@@ -293,7 +293,21 @@ export function pgbackrestFailure(output: string, limit = 600): string {
 export async function stanzaCreate(
   docker: Docker, container: string,
 ): Promise<{ created: boolean; output: string }> {
-  const r = await withLockRetry(() => pgbackrest(docker, container, ['stanza-create']));
+  // A longer lock budget than every other command, and for a reason specific to
+  // this one: `stanza-create` runs while the archiver is *failing in a loop*.
+  // The container archives from the moment it is healthy, `archive-push` cannot
+  // succeed until the stanza exists, and async retries keep re-taking
+  // `main-archive-1.lock` the whole time. Every other pgBackRest command runs
+  // against a working repo, where the lock is held only for the length of a real
+  // push.
+  //
+  // The default 6 s was enough on a quiet machine and not on a loaded CI runner,
+  // where it surfaced as `stanza-create failed (exit 50): unable to acquire lock`
+  // and cost the saga a whole retry. 30 s is still bounded — a lock held that
+  // long really is stuck — and it removes the retry rather than hiding it.
+  const r = await withLockRetry(
+    () => pgbackrest(docker, container, ['stanza-create']),
+    { attempts: 20, delayMs: 1500 });
   const out = (r.stdout + r.stderr).trim();
   const alreadyThere = /already exists|is already up to date/i.test(out);
   // Exit 0 alone does not mean "created": pgBackRest is idempotent here and
