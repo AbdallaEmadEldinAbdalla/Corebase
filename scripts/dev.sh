@@ -54,12 +54,49 @@ export CB_SECURE_COOKIES="${CB_SECURE_COOKIES:-false}"
 # The dashboard runs on its own origin, so every call it makes is cross-origin
 # and carries the session cookie. Set explicitly here rather than defaulted in
 # the service — see services/api/src/kernel/cors.ts.
-export CB_DASHBOARD_ORIGINS="${CB_DASHBOARD_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}"
+# 8123 is the auth demo (./scripts/auth-demo.sh). It is a separate origin from
+# the dashboard's and every call it makes is cross-origin, so leaving it out means
+# the browser refuses the preflight and the console says only "CORS" — a long way
+# from "add this to CB_DASHBOARD_ORIGINS".
+export CB_DASHBOARD_ORIGINS="${CB_DASHBOARD_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000,http://127.0.0.1:8123}"
 export CB_RECONCILE_INTERVAL_MS="${CB_RECONCILE_INTERVAL_MS:-30000}"
 # The purge scan defaults to an hour, which is right in production and wrong for a
 # dev loop: `demo.sh --purge` expires the recovery window and then waits for this
 # scan, so an hour makes the flag look broken. Fifteen seconds here.
 export CB_PURGE_SCAN_MS="${CB_PURGE_SCAN_MS:-15000}"
+
+# The mail sink, so auth email actually leaves the worker (P4d). Loaded from the
+# file `./scripts/staging.sh mail-sink` writes rather than required in the
+# environment — the same rule the e2e suites follow, and for the same reason: a
+# dev loop that only sends mail when somebody remembered to export three
+# variables is one where "the confirmation email never arrives" is the normal
+# state. Without the file the worker warns at boot and queues without sending,
+# which is honest and is not what a demo needs.
+MAIL_ENV="$ROOT/infra/docker/staging/mail-sink.env"
+if [ -f "$MAIL_ENV" ]; then
+  set -a; . "$MAIL_ENV"; set +a
+else
+  echo "▸ note   no mail-sink.env — auth emails will queue and nothing will send"
+  echo "         them. Run ./scripts/staging.sh mail-sink."
+fi
+
+# The object store, without which **no project can be created at all**:
+# `configure_backups` refuses to finish (CB_REQUIRE_BACKUPS) and the job
+# dead-letters at 5/5 having completed five steps. That refusal is right — a
+# project whose backups were never configured is a project whose data is not
+# protected — but a dev loop that cannot provision is not a dev loop, and this
+# script has been missing the file since P3a added that step.
+#
+# The same omission broke all four nightly harnesses (D-358). This is its seventh
+# instance, and the first one in the path a person actually types.
+BACKUP_ENV="$ROOT/infra/docker/staging/backup-store.env"
+if [ -f "$BACKUP_ENV" ]; then
+  set -a; . "$BACKUP_ENV"; set +a
+else
+  echo "✗ no backup-store.env — provisioning will dead-letter at configure_backups." >&2
+  echo "  Run ./scripts/staging.sh backup-store." >&2
+  exit 1
+fi
 
 if [ ! -d "$CB_KEK_DIR" ] || ! ls "$CB_KEK_DIR"/*.key >/dev/null 2>&1; then
   echo "✗ no master key in $CB_KEK_DIR — run ./scripts/staging.sh kek" >&2
