@@ -18,7 +18,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { Client } from 'pg';
-import { backupStoreEnv, bootstrapOrgId } from './staging-env.mts';
+import { appDatabaseUrl, backupStoreEnv, bootstrapOrgId } from './staging-env.mts';
 
 const ROOT = resolve(import.meta.dirname, '../../..');
 const COUNT = Number(process.env.CB_BENCH_COUNT ?? 20);
@@ -233,7 +233,18 @@ async function main() {
   // is a different thing being measured.
   const warmT0 = Date.now();
   const warmRef = await createProject(0);
-  await pollReady(warmRef, BUDGET_MS);
+  try {
+    await pollReady(warmRef, BUDGET_MS);
+  } catch (err) {
+    // The warm-up was the one create outside the loop's try, so its failure
+    // escaped to `main` and printed a bare "still creating after 60000ms" with
+    // none of the worker log the loop's own handler would have shown. The first
+    // failure of a run is the one most worth explaining.
+    console.error(`\n  warm-up FAILED: ${(err as Error).message}`);
+    console.error(`  worker log (${logLines.worker!.length} lines):\n    `
+      + logLines.worker!.join('\n    '));
+    throw err;
+  }
   const warmupMs = Date.now() - warmT0;
   console.log(`  warm-up  ${warmRef}  ready ${warmupMs}ms (reported, not averaged in)\n`);
 
@@ -257,7 +268,8 @@ async function main() {
     } catch (err) {
       failed++;
       console.log(`  ${String(i).padStart(2)}/${COUNT}  FAILED: ${(err as Error).message}`);
-      console.error('    worker log tail:\n      ' + logLines.worker!.slice(-6).join('\n      '));
+      console.error(`    worker log (${logLines.worker!.length} lines):\n      `
+        + logLines.worker!.join('\n      '));
     }
   }
 

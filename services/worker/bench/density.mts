@@ -31,6 +31,7 @@ import { Client } from 'pg';
 import { appDatabaseUrl, ownerDatabaseUrl } from './staging-env.mts';
 import { createDocker } from '../src/docker.ts';
 import { PLAN_RAM_MB, FILL_CEILING } from '../src/placement.ts';
+import { IMAGE } from '../src/container-spec.ts';
 
 const ROOT = resolve(import.meta.dirname, '../../..');
 const TARGET = Number(process.env.CB_DN_PROJECTS ?? 100);
@@ -225,7 +226,11 @@ async function nodeMemory(): Promise<{ mem_total_mib: number; mem_available_mib:
   await docker.removeContainer(probe, true, true).catch(() => {});
   try {
     const id = await docker.createContainer(probe, {
-      Image: env.CB_PG_IMAGE ?? 'corebase/postgres:17.5',
+      // The same constant the product reads, rather than this harness's own
+      // `env` object — which never carried `CB_PG_IMAGE`, so the `??` always
+      // took its fallback and the probe silently pinned an image the fleet may
+      // have moved off. Caught the moment these files were added to `tsc`.
+      Image: IMAGE,
       Env: [], Labels: { 'com.corebase.role': 'density-probe' },
       Cmd: ['sh', '-c', 'grep -E "^(MemTotal|MemAvailable|MemFree|Cached):" /proc/meminfo'],
       HostConfig: {
