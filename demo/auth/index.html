@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Corebase Auth — demo</title>
+<!--
+  Phase 4's demo (roadmap §Phase 4): "a plain HTML page signs a user up against a
+  project, verifies email, logs in, shows the JWT claims."
+
+  Plain on purpose. No build step, no framework, no dependency — the same rule the
+  rest of the repository follows outside the dashboard, and here it earns its keep
+  twice over: this page is the auth API's **first browser client**, and anything
+  that fails in it is a thing a customer's own frontend would hit. It found two
+  before it was finished, both in CORS: `apikey` was not an allowed request header
+  and `PUT` was not an allowed method, so the whole data plane was unreachable from
+  a browser and `PUT /auth/v1/user` doubly so.
+
+  It talks to the API exactly as a customer's app would: the project's **anon**
+  key in the `apikey` header, and the user's access token in `Authorization`.
+  Nothing here is privileged — there is no service_role key on this page, and
+  there must never be one, because everything a browser holds is public.
+-->
+<style>
+  :root {
+    --ink: #1a1a1a; --ink-soft: #5c5c5c; --line: #e2ded8;
+    --bg: #f7f6f3; --card: #ffffff; --accent: #1a1a1a;
+    --ok: #14663a; --bad: #8c2318; --wait: #7a5a10;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 16px 64px;
+    background: var(--bg); color: var(--ink);
+    font: 15px/1.55 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  main { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--ink-soft); margin: 0 0 24px; font-size: 14px; }
+  section {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 18px 20px; margin: 0 0 16px;
+  }
+  h2 { font-size: 14px; margin: 0 0 12px; letter-spacing: .01em; }
+  label { display: block; font-size: 13px; color: var(--ink-soft); margin: 10px 0 4px; }
+  input {
+    width: 100%; padding: 9px 11px; font: inherit; color: inherit;
+    border: 1px solid var(--line); border-radius: 6px; background: #fff;
+  }
+  button {
+    font: inherit; font-weight: 600; padding: 9px 15px; margin: 14px 8px 0 0;
+    border: 1px solid var(--accent); border-radius: 6px;
+    background: var(--accent); color: #fff; cursor: pointer;
+  }
+  button.ghost { background: #fff; color: var(--ink); }
+  button:disabled { opacity: .45; cursor: default; }
+  pre {
+    background: #fbfaf8; border: 1px solid var(--line); border-radius: 6px;
+    padding: 12px; overflow-x: auto; font-size: 12.5px; margin: 12px 0 0;
+  }
+  .msg { margin: 12px 0 0; font-size: 13.5px; }
+  .msg.ok { color: var(--ok); } .msg.bad { color: var(--bad); }
+  .msg.wait { color: var(--wait); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .row > div { flex: 1 1 220px; }
+  code { background: #f0eee9; padding: 1px 4px; border-radius: 3px; font-size: 12.5px; }
+  .hint { color: var(--ink-soft); font-size: 13px; margin: 10px 0 0; }
+  .claims th { text-align: left; color: var(--ink-soft); font-weight: 500;
+               padding: 2px 14px 2px 0; vertical-align: top; font-size: 13px; }
+  .claims td { padding: 2px 0; font-family: ui-monospace, SFMono-Regular, monospace;
+               font-size: 12.5px; word-break: break-all; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Corebase Auth</h1>
+  <p class="sub" id="target">…</p>
+
+  <section>
+    <h2>1 · Sign up</h2>
+    <div class="row">
+      <div><label for="su-email">Email</label><input id="su-email" type="email" autocomplete="off"></div>
+      <div><label for="su-pass">Password</label><input id="su-pass" type="password" autocomplete="new-password"></div>
+    </div>
+    <button id="su-go">Create account</button>
+    <p class="msg" id="su-msg"></p>
+  </section>
+
+  <section>
+    <h2>2 · Verify the email address</h2>
+    <p class="hint">
+      The worker rendered the mail and sent it over SMTP to the local sink. Press
+      below and this page reads the message that was actually delivered and pulls
+      the token out of it — no copy-paste, and nothing skipped.
+    </p>
+    <button id="v-find" class="ghost">Find it in the inbox</button>
+    <p class="msg" id="v-find-msg"></p>
+    <p class="hint">
+      The link inside that mail points at
+      <code>https://&lt;ref&gt;.&lt;domain&gt;/auth/v1/verify</code> — correct for
+      production, and not reachable from a laptop without wildcard DNS and a TLS
+      terminator. The token is the same either way, and posting it is exactly what
+      an SDK does. <a id="mailpit" href="#" target="_blank" rel="noreferrer">Open
+      the inbox</a> to read the mail yourself.
+    </p>
+    <div class="row">
+      <div><label for="v-token">Token</label><input id="v-token" autocomplete="off"></div>
+    </div>
+    <button id="v-go" class="ghost">Verify</button>
+    <p class="msg" id="v-msg"></p>
+  </section>
+
+  <section>
+    <h2>3 · Log in</h2>
+    <div class="row">
+      <div><label for="li-email">Email</label><input id="li-email" type="email" autocomplete="off"></div>
+      <div><label for="li-pass">Password</label><input id="li-pass" type="password" autocomplete="current-password"></div>
+    </div>
+    <button id="li-go">Log in</button>
+    <button id="lo-go" class="ghost" disabled>Log out</button>
+    <p class="msg" id="li-msg"></p>
+  </section>
+
+  <section>
+    <h2>4 · The access token, decoded</h2>
+    <p class="hint" id="claims-empty">Nothing yet — finish a step above.</p>
+    <table class="claims" id="claims"></table>
+    <pre id="raw" hidden></pre>
+    <p class="hint" id="verified"></p>
+  </section>
+</main>
+
+<script src="./config.js"></script>
+<script>
+(() => {
+  'use strict';
+  const cfg = window.COREBASE_DEMO || {};
+  const api = (cfg.apiBase || 'http://127.0.0.1:8099').replace(/\/$/, '');
+  const key = cfg.anonKey || '';
+  const $ = (id) => document.getElementById(id);
+
+  $('target').textContent = cfg.ref
+    ? `project ${cfg.ref} · ${api}/auth/v1`
+    : 'No project configured — run ./scripts/auth-demo.sh';
+  $('mailpit').href = cfg.mailpit || 'http://127.0.0.1:58025';
+
+  let session = null;
+
+  const say = (el, text, kind) => {
+    const n = $(el);
+    n.textContent = text;
+    n.className = 'msg' + (kind ? ' ' + kind : '');
+  };
+
+  /**
+   * Every call carries the anon key, and that is the whole shape of the data
+   * plane: the key says *which project*, the bearer token says *which user*, and
+   * a request with only the first is anonymous rather than rejected.
+   */
+  async function call(path, opts = {}) {
+    const headers = { 'content-type': 'application/json', apikey: key };
+    if (opts.auth && session) headers.authorization = `Bearer ${session.access_token}`;
+    const res = await fetch(api + path, {
+      method: opts.method || 'GET', headers,
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+    const text = await res.text();
+    let body = null;
+    try { body = text ? JSON.parse(text) : null; } catch { body = { raw: text }; }
+    // The request id is surfaced on every failure, because it is the one thing
+    // that lets somebody find this exact request in the platform's logs.
+    return { ok: res.ok, status: res.status, body, requestId: res.headers.get('x-request-id') };
+  }
+
+  const fail = (el, r) => say(el,
+    `${r.status} ${r.body?.error?.code || ''} — ${r.body?.error?.message || 'request failed'}`
+    + (r.requestId ? `  (request ${r.requestId})` : ''), 'bad');
+
+  /** Decode without verifying, which is all a client can do and should say so. */
+  function decode(token) {
+    const [h, p] = token.split('.');
+    const un = (s) => JSON.parse(atob(s.replace(/-/g, '+').replace(/_/g, '/')));
+    return { header: un(h), claims: un(p) };
+  }
+
+  const WHY = {
+    iss: 'Verifiers pin this per project',
+    ref: 'Which project this token is for',
+    sub: 'The user id — what auth.uid() reads in every RLS policy',
+    aud: 'Audience, enforced by PostgREST',
+    role: 'Maps to a Postgres role of the same name',
+    email: 'Convenience only; never trust it for authorization',
+    session_id: 'Ties this stateless token to a revocable row',
+    amr: 'How the holder proved who they are',
+    iat: 'Issued at',
+    exp: 'Expires at',
+  };
+
+  function showToken(token) {
+    const { header, claims } = decode(token);
+    const t = $('claims');
+    t.innerHTML = '';
+    const add = (k, v, note) => {
+      const tr = t.insertRow();
+      tr.insertCell().outerHTML = `<th>${k}</th>`;
+      const val = /^(iat|exp)$/.test(k)
+        ? `${v}  (${new Date(v * 1000).toISOString().replace('T', ' ').slice(0, 19)}Z)`
+        : (Array.isArray(v) ? v.join(', ') : String(v));
+      tr.insertCell().textContent = val;
+      if (note) {
+        const tr2 = t.insertRow();
+        tr2.insertCell();
+        const c = tr2.insertCell();
+        c.textContent = note;
+        c.style.cssText = 'color:#5c5c5c;font-family:inherit;font-size:12.5px;padding-bottom:8px';
+      }
+    };
+    add('alg', header.alg, 'ES256 — asymmetric, so a verifier needs only the public key');
+    add('kid', header.kid, 'Which published key signed it (see the project JWKS)');
+    for (const [k, v] of Object.entries(claims)) add(k, v, WHY[k]);
+    $('claims-empty').hidden = true;
+    $('raw').hidden = false;
+    $('raw').textContent = token;
+    $('lo-go').disabled = false;
+    $('verified').textContent =
+      'Decoded in the browser, not verified — a client cannot verify its own token '
+      + 'and should not pretend to. The signature is checked by the API, and by '
+      + 'anything else holding the project’s JWKS.';
+  }
+
+  function adopt(body, el, what) {
+    session = body;
+    say(el, `${what} — session ${decode(body.access_token).claims.session_id}`, 'ok');
+    showToken(body.access_token);
+  }
+
+  $('su-go').onclick = async () => {
+    const email = $('su-email').value.trim();
+    say('su-msg', 'working…', 'wait');
+    const r = await call('/auth/v1/signup', {
+      method: 'POST', body: { email, password: $('su-pass').value },
+    });
+    if (!r.ok) return fail('su-msg', r);
+    $('li-email').value = email;
+    $('li-pass').value = $('su-pass').value;
+    if (r.body.access_token) {
+      // The project has autoconfirm on, so signup returns a session directly.
+      return adopt(r.body, 'su-msg', 'signed up and signed in (autoconfirm)');
+    }
+    // The response is byte-identical whether or not the address already existed,
+    // which is deliberate: signup is the classic enumeration oracle.
+    say('su-msg',
+      'Signed up. Confirmation mail queued — the response is the same shape '
+      + 'whether or not that address already had an account, on purpose. '
+      + 'Now do step 2.', 'ok');
+  };
+
+  /**
+   * Pull the newest confirmation link out of the sink, same-origin via `/inbox`.
+   *
+   * Both MIME parts are base64 in the wire format, so this decodes them rather
+   * than searching the raw source — which would find nothing and look like an
+   * empty inbox.
+   */
+  $('v-find').onclick = async () => {
+    say('v-find-msg', 'reading the inbox…', 'wait');
+    try {
+      const list = await (await fetch('/inbox/api/v1/messages')).json();
+      if (!list.messages || !list.messages.length) {
+        return say('v-find-msg', 'The inbox is empty — sign up first.', 'bad');
+      }
+      const id = list.messages[0].ID;
+      const raw = await (await fetch(`/inbox/api/v1/message/${id}/raw`)).text();
+      const decoded = raw.split('Content-Transfer-Encoding: base64').slice(1)
+        .map((part) => {
+          try { return atob(part.split('--')[0].replace(/[^A-Za-z0-9+/=]/g, '')); }
+          catch { return ''; }
+        }).join('\n');
+      const link = decoded.match(/https:\/\/[^\s"<]+verify\?[^\s"<]+/);
+      if (!link) {
+        return say('v-find-msg', 'Found a message with no verification link in it.', 'bad');
+      }
+      const url = new URL(link[0].replace(/&amp;/g, '&'));
+      $('v-token').value = url.searchParams.get('token') || '';
+      say('v-find-msg',
+        `Token pulled from the message sent to ${list.messages[0].To[0]?.Address}. `
+        + 'Press Verify.', 'ok');
+    } catch (err) {
+      say('v-find-msg',
+        `Could not read the inbox: ${err.message}. Is the sink running `
+        + '(./scripts/staging.sh mail-sink)?', 'bad');
+    }
+  };
+
+  $('v-go').onclick = async () => {
+    say('v-msg', 'working…', 'wait');
+    const r = await call('/auth/v1/verify', {
+      method: 'POST', body: { token: $('v-token').value.trim(), type: 'signup' },
+    });
+    if (!r.ok) return fail('v-msg', r);
+    adopt(r.body, 'v-msg', 'email confirmed');
+  };
+
+  $('li-go').onclick = async () => {
+    say('li-msg', 'working…', 'wait');
+    const r = await call('/auth/v1/token?grant_type=password', {
+      method: 'POST',
+      body: { email: $('li-email').value.trim(), password: $('li-pass').value },
+    });
+    if (!r.ok) return fail('li-msg', r);
+    adopt(r.body, 'li-msg', 'logged in');
+  };
+
+  $('lo-go').onclick = async () => {
+    const r = await call('/auth/v1/logout', { method: 'POST', auth: true });
+    // 204 has no body. Anything else is worth showing.
+    if (!r.ok) return fail('li-msg', r);
+    session = null;
+    $('claims').innerHTML = '';
+    $('claims-empty').hidden = false;
+    $('raw').hidden = true;
+    $('lo-go').disabled = true;
+    say('li-msg',
+      'Logged out. Refresh is dead from this instant; the access token this page '
+      + 'just discarded stays cryptographically valid until it expires, and the '
+      + 'auth endpoints refuse it because they check the session.', 'ok');
+    $('verified').textContent = '';
+  };
+
+  /**
+   * A session handed back in the URL fragment, by `GET /verify`.
+   *
+   * The fragment and not the query string, which is the point: a fragment is
+   * never sent to a server, so these tokens are not in this page's access log,
+   * any proxy's, or a `Referer` header. Cleared from the address bar immediately
+   * afterwards so a copied URL is not a copied session.
+   */
+  (function fromFragment() {
+    if (!location.hash || location.hash.length < 2) return;
+    const f = new URLSearchParams(location.hash.slice(1));
+    const err = f.get('error');
+    if (err) {
+      say('v-msg', `The link was rejected: ${err}. One code for unknown, spent and `
+        + 'expired — telling them apart would say whether an address is registered.', 'bad');
+    } else if (f.get('access_token')) {
+      adopt({
+        access_token: f.get('access_token'),
+        refresh_token: f.get('refresh_token'),
+        expires_in: Number(f.get('expires_in')),
+      }, 'v-msg', 'email confirmed from the link');
+    } else if (f.get('email_change')) {
+      say('v-msg', `Email change: ${f.get('email_change')}.`, 'ok');
+    }
+    history.replaceState(null, '', location.pathname + location.search);
+  })();
+})();
+</script>
+</body>
+</html>

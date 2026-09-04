@@ -24,3 +24,4 @@ infra/docker/staging/backup-store.env
 infra/docker/staging/mail-sink.env
 # The object store's self-signed TLS material — generated per environment.
 infra/docker/staging/object-store-certs/
+demo/auth/config.js
