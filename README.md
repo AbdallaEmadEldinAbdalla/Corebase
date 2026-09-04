@@ -138,6 +138,12 @@ This surface deliberately breaks the rule every other one follows. It's authoris
 
 Deletion keeps the id and nothing else. The customer's own tables reference `auth.users(id)` under their foreign-key semantics and Corebase doesn't cascade into app schemas, so a hard delete would either break those references or force a decision about someone else's data. The address becomes `deleted+<id>@invalid` — valid syntax, reserved TLD, can never receive mail — which frees the real address for re-registration. Password, both metadata halves and the confirmation timestamp are scrubbed, and every session, refresh lineage and outstanding one-time token goes with them: **a deleted user whose recovery link still works is a deleted user who can be signed back in from an inbox.**
 
+**The drill that proves crash-resume had not completed a single provision in four nights.** Found while checking CI on something else. The nightly said `DID NOT CONVERGE` for all eleven kill points and printed four lines of worker log; the error explaining everything was in memory, just outside that window — `backups are required (CB_REQUIRE_BACKUPS) but no repo is configured`, naming the exact variables and the command to run.
+
+Five faults, four in the drill and none in the product. Its environment never carried the object-store settings, so a step added later failed every scenario. It never checked the status of the call it depended on. It read `{ref, id}` out of a response that has been `{project: …, job: …}` for two phases — so every convergence poll watched a project that did not exist while provisioning succeeded perfectly. Its failure path printed four lines of a two-minute failure. And its credential invariant asserted a stale total: exactly 3, the number a project had at Milestone 0, against the 11 it legitimately carries now.
+
+Crash-resume was working the entire time. **T6 now passes 11/11 with zero duplicates**, resuming in 31 seconds at the median. The two rules that came out of it are in STATUS: a harness checks what it is told, and a failure path prints everything it already holds — five separate bugs here have been prolonged by a diagnostic that had the answer and showed a window that excluded it.
+
 ## Run it
 
 ```bash

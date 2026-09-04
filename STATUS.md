@@ -2518,6 +2518,67 @@ full tombstone with the address freed and a new id on re-registration, a second
 delete answering 404, a malformed id answering 400, and one project's service_role
 key seeing none of another's users. Both mutations above were run and both failed
 as they should.
+### Nightly repair — the T6 kill matrix had not completed a provision since P3a · 11/11 · 5 fixes
+
+**The nightly workflow had been red for four consecutive nights** and nobody was
+reading it. Found while checking CI on P4g; it predates all of Phase 4. This is
+the second unwatched-signal failure of the phase, and the more embarrassing one:
+T6 is the drill that proves crash-resume works, and STATUS has been claiming that
+as verified.
+
+The output said `DID NOT CONVERGE in 120s` for every kill point, with four lines
+of worker log. **The error that explained everything was in memory and outside
+that window:**
+
+```
+backups are required (CB_REQUIRE_BACKUPS) but no repo is configured —
+set CB_BACKUP_S3_ENDPOINT/_BUCKET/_KEY/_SECRET (./scripts/staging.sh backup-store)
+job row: state=dead_letter, attempts=5/5
+checkpoint: allocate_node … wait_healthy
+```
+
+**Five distinct faults, four of them in the drill and none in the product:**
+
+1. **The drill's environment never carried the object-store settings**
+   (**D-358**), so `configure_backups` — a step P3a added *after* T6 was written —
+   failed every scenario. It now loads `backup-store.env` the way the e2e suites
+   do, and refuses to start without it: a drill that runs for twenty minutes and
+   then reports eleven mysterious failures is worse than one that will not begin.
+2. **The create-project call's status was never checked** (**D-359**), so an API
+   refusal left `ref` and `projectId` as `undefined` and the scenario carried on.
+   This is what hid the *local* symptom, which was different again: the API
+   correctly refuses to guess an organization when the caller belongs to several,
+   and my own auth suites had created some.
+3. **It destructured `{ref, id}` from a `{project, job}` response** (**D-359**) —
+   the shape has been wrapped since P1d. So even a successful create yielded
+   `undefined`, and every convergence poll watched a project that did not exist
+   while provisioning succeeded perfectly. *That is what CI was actually
+   reporting.*
+4. **The failure paths printed four lines of a two-minute failure** (**D-360**).
+   They now print the whole replacement worker's log, the `provisioning_jobs` row
+   and the project's status. Fifth instance in this repository of a diagnostic
+   that discards what it knows, and the cheapest of them to have prevented.
+5. **The credential invariant asserted a stale total** — exactly 3, the number a
+   project had at Milestone 0, against the 11 it legitimately carries now (the
+   pooler's credential from P2b, the signing keypair and both API keys from P1e,
+   the repo cipher-pass from P3a, the auth role from P4a). The count was never the
+   property: the property is that a resumed saga did not regenerate a password it
+   had already stored, which is a *duplicate*, and `count(*)` against
+   `count(DISTINCT name)` catches that whatever the credential set grows to. Same
+   lesson as D-350.
+
+**Result: T6 PASS, 11/11, zero duplicates**, resume time min 30.9 s / p50 31.9 s /
+max 39.7 s. Crash-resume was working the whole time — the drill could not see it.
+
+**Also fixed: the PITR test's intermittent failure** (**D-362**), which CI
+surfaced on P4g as `expected [ 1 ] to include 2`. The test took its restore target
+from `now()` (microsecond precision) through a JS `Date` and `toISOString()`
+(millisecond), and **truncation moves a target backwards** — past the commit it
+was meant to include. Row 2 committed at `…22.123456`, `now()` returned
+`…22.123789`, the target became `…22.123`, and the restore correctly came back one
+transaction short. Green whenever the microseconds happened to be small. It is
+**D-295 one order of magnitude down**, the identical class of bug; the target is
+now rounded up to the next whole millisecond, which cannot lose a transaction.
 
 ## 5. Rules the code follows
 
@@ -2536,6 +2597,18 @@ leaves a database whose password does not exist anywhere.
 reach staging used to skip silently, and a skip looks like a pass — which is exactly
 how a BullMQ queue-name bug survived a green suite. They now throw, with the reason
 and the command that fixes it.
+
+**A harness checks what it is told.** Every HTTP status, every response shape,
+every precondition it depends on — because a harness that does not will
+confidently blame the one component that is working (**D-359**). The T6 drill spent
+four nights reporting a worker fault that did not exist, twice over: once from an
+unchecked status and once from reading `{ref, id}` out of a `{project, job}`
+response.
+
+**A failure path prints everything it already holds.** Five separate bugs in this
+repository have been prolonged by a diagnostic that had the answer in memory and
+printed a window that excluded it (**D-360**). If a harness keeps a log, its
+failure path prints the log.
 
 **A branch that never runs where it was written is untested.** Both CI failures of
 Phase 4 were tests whose conditional half only executes on the *other* machine —
