@@ -8,6 +8,7 @@ import { createEnvelope } from '@corebase/crypto';
 import { createSecretStore, SECRET_NAMES } from '@corebase/secrets';
 import { verify as verifyJwt, decodeUnverified, sign as signJwt } from '@corebase/jwt';
 import { buildApp } from '@corebase/api';
+import { createPgStore } from '@corebase/api/modules/control-plane/store.pg.ts';
 import { createMemoryRateLimiter } from '@corebase/api/kernel/rate-limit.ts';
 import { createNullMailer } from '@corebase/api/modules/project-auth/mail.ts';
 import { createMailer } from '@corebase/api/modules/project-auth/mailer.ts';
@@ -2575,3 +2576,309 @@ describe('P4g — /admin/users', () => {
     await app.close();
   });
 });
+
+/**
+ * P4h — the signing-key rotation runbook, executed end to end.
+ *
+ * Phase 4's second exit criterion is "JWKS rotation runbook executed once in
+ * staging, sessions survive per design". *Sessions survive* is the load-bearing
+ * half and the reason the runbook has waits in it: cutting over to a key that
+ * cached verifiers do not hold yet, or dropping the old key while a customer's
+ * deployed frontend still carries an anon key signed by it, are both ways to turn
+ * routine credential hygiene into an outage.
+ *
+ * So each step is asserted for what it must *not* break, not only for what it
+ * changes.
+ */
+describe('P4h — signing-key rotation', () => {
+  const password = 'correct horse battery';
+
+  async function rotationDeps(p: Fixture) {
+    const { beginRotation, cutOver, retire, publishedKeys, privateKeyName } =
+      await import('./key-rotation.ts');
+    const deps = { pool, secrets, log: () => {} };
+    return { deps, beginRotation, cutOver, retire, publishedKeys, privateKeyName, p };
+  }
+
+  t('EXIT CRITERION: the runbook runs, and a session created before it survives',
+    async () => {
+      const p = await provision();
+      await autoconfirm(p.id);
+      const app = api();
+      const { deps, beginRotation, cutOver } = await rotationDeps(p);
+
+      // A signed-in user, and a project key, both minted under the *old* kid.
+      const signup = await app.inject({
+        method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+        payload: { email: 'survivor@example.com', password } });
+      expect(signup.statusCode).toBe(200);
+      const oldSession = signup.json() as { access_token: string; refresh_token: string };
+      const oldKid = (await secrets.get(p.id, SECRET_NAMES.jwtKid))!;
+
+      // ── step 1–2: publish, without signing anything ──────────────────────
+      const begun = await beginRotation(deps, p.id);
+      expect(begun.created).toBe(true);
+      expect(begun.kid).not.toBe(oldKid);
+
+      // JWKS now carries both, which is the entire mechanism: a verifier that
+      // caches this document must already hold the new key before a token signed
+      // with it can arrive.
+      const jwks1 = await app.inject({
+        method: 'GET', url: `/auth/v1/.well-known/jwks.json?ref=${p.ref}` });
+      const kids1 = (jwks1.json().keys as Array<{ kid: string }>).map((k) => k.kid);
+      expect(kids1).toEqual([oldKid, begun.kid]);
+
+      // …and nothing has changed about signing yet. A token minted now must
+      // still carry the old kid, or the wait between the steps bought nothing.
+      const midLogin = await app.inject({
+        method: 'POST', url: '/auth/v1/token?grant_type=password',
+        headers: { apikey: p.anonKey },
+        payload: { email: 'survivor@example.com', password } });
+      expect(midLogin.statusCode).toBe(200);
+      const kidOf = (tok: string) => JSON.parse(
+        Buffer.from(tok.split('.')[0]!, 'base64url').toString()).kid;
+      expect(kidOf(midLogin.json().access_token)).toBe(oldKid);
+
+      // ── step 4: cut over ─────────────────────────────────────────────────
+      // `force`, because the real wait is ten minutes and a test that took ten
+      // minutes would be a test nobody runs. The wait itself is asserted
+      // separately below, on the guard that enforces it.
+      const cut = await cutOver(deps, p.id, { force: true });
+      expect(cut.from).toBe(oldKid);
+      expect(cut.to).toBe(begun.kid);
+
+      // New tokens carry the new kid…
+      const newLogin = await app.inject({
+        method: 'POST', url: '/auth/v1/token?grant_type=password',
+        headers: { apikey: p.anonKey },
+        payload: { email: 'survivor@example.com', password } });
+      expect(newLogin.statusCode).toBe(200);
+      expect(kidOf(newLogin.json().access_token)).toBe(begun.kid);
+
+      // …and JWKS still carries the old one, now retiring. Dropping it here
+      // would kill every token issued in the last hour.
+      const jwks2 = await app.inject({
+        method: 'GET', url: `/auth/v1/.well-known/jwks.json?ref=${p.ref}` });
+      const kids2 = (jwks2.json().keys as Array<{ kid: string }>).map((k) => k.kid);
+      expect(kids2).toContain(oldKid);
+      expect(kids2).toContain(begun.kid);
+
+      // **The criterion.** The session from before the rotation still works: its
+      // access token verifies against the retiring key, and its refresh token is
+      // opaque so the rotation never touched it.
+      const stillIn = await app.inject({
+        method: 'GET', url: '/auth/v1/sessions',
+        headers: { apikey: p.anonKey, authorization: `Bearer ${oldSession.access_token}` } });
+      expect(stillIn.statusCode).toBe(200);
+      const refreshed = await app.inject({
+        method: 'POST', url: '/auth/v1/token?grant_type=refresh_token',
+        headers: { apikey: p.anonKey },
+        payload: { refresh_token: oldSession.refresh_token } });
+      expect(refreshed.statusCode).toBe(200);
+      // And the renewed token is signed by the new key — the session moved across
+      // the rotation rather than being pinned to a dying one.
+      expect(kidOf(refreshed.json().access_token)).toBe(begun.kid);
+
+      // The *old anon key* also still works, which is the swap window's reason
+      // for existing: it is deployed in a customer's frontend and only they can
+      // ship a replacement.
+      const oldKeyStillWorks = await app.inject({
+        method: 'GET', url: '/auth/v1/user',
+        headers: { apikey: p.anonKey, authorization: `Bearer ${refreshed.json().access_token}` } });
+      expect(oldKeyStillWorks.statusCode).toBe(200);
+      await app.close();
+    }, 300_000);
+
+  t('the cut-over refuses to run before the JWKS cache could have expired', async () => {
+    const p = await provision();
+    const { deps, beginRotation, cutOver } = await rotationDeps(p);
+    await beginRotation(deps, p.id);
+    // The wait is the runbook's most important instruction. Skipping it silently
+    // would leave it as a comment, so it is a refusal with both numbers in it —
+    // the operator's next question is "how much longer".
+    await expect(cutOver(deps, p.id)).rejects.toThrow(/only been published for/);
+    await expect(cutOver(deps, p.id)).rejects.toThrow(/force/);
+    // And with an explicit force it proceeds, which is the emergency path for a
+    // confirmed leak where every outstanding token dying at once is the intent.
+    await expect(cutOver(deps, p.id, { force: true })).resolves.toMatchObject({});
+  }, 300_000);
+
+  t('the new API keys are minted under the new kid, and the old ones still verify',
+    async () => {
+      const p = await provision();
+      const app = api();
+      const { deps, beginRotation, cutOver } = await rotationDeps(p);
+      const oldAnon = p.anonKey;
+      const oldService = p.serviceKey;
+
+      await beginRotation(deps, p.id);
+      await cutOver(deps, p.id, { force: true });
+
+      const newAnon = (await secrets.get(p.id, SECRET_NAMES.anonKey))!;
+      const newService = (await secrets.get(p.id, SECRET_NAMES.serviceRoleKey))!;
+      // Re-minted, because D-029's keys *are* JWTs under this keypair — a signing
+      // rotation is an API-key rotation whether or not anyone planned for it.
+      expect(newAnon).not.toBe(oldAnon);
+      expect(newService).not.toBe(oldService);
+
+      // Both generations work during the window. That is what makes it a window.
+      for (const key of [oldAnon, newAnon]) {
+        expect(await keyResolves(app, key)).toBe(true);
+      }
+      for (const key of [oldService, newService]) {
+        const res = await app.inject({
+          method: 'GET', url: '/auth/v1/admin/users', headers: { apikey: key } });
+        expect(res.statusCode).toBe(200);
+      }
+      await app.close();
+    }, 300_000);
+
+  t('EXIT CRITERION: retiring the old key kills exactly what it signed', async () => {
+    const p = await provision();
+    await autoconfirm(p.id);
+    const app = api();
+    const { deps, beginRotation, cutOver, retire } = await rotationDeps(p);
+    const oldAnon = p.anonKey;
+    const oldKid = (await secrets.get(p.id, SECRET_NAMES.jwtKid))!;
+
+    const signup = await app.inject({
+      method: 'POST', url: '/auth/v1/signup', headers: { apikey: p.anonKey },
+      payload: { email: 'doomed@example.com', password } });
+    const oldAccess = signup.json().access_token as string;
+
+    await beginRotation(deps, p.id);
+    await cutOver(deps, p.id, { force: true });
+    const newAnon = (await secrets.get(p.id, SECRET_NAMES.anonKey))!;
+
+    // The window is open, so retiring is refused with the days remaining and the
+    // consequence spelled out — this is the command that breaks a customer's
+    // deployed frontend, not just their sessions.
+    const tooEarly = await retire(deps, p.id, oldKid);
+    expect(tooEarly.retired).toBe(false);
+    expect(tooEarly.reason).toMatch(/swap window has \d+ day\(s\) left/);
+    expect(tooEarly.reason).toMatch(/deployed frontend/);
+
+    expect((await retire(deps, p.id, oldKid, { force: true })).retired).toBe(true);
+
+    // Now the old key's tokens and API keys are dead — all of them, at once.
+    expect(await keyResolves(app, oldAnon)).toBe(false);
+    expect((await app.inject({
+      method: 'GET', url: '/auth/v1/user',
+      headers: { apikey: newAnon, authorization: `Bearer ${oldAccess}` } })).statusCode)
+      .toBe(401);
+
+    // And the new generation is untouched.
+    expect(await keyResolves(app, newAnon)).toBe(true);
+    const jwks = await app.inject({
+      method: 'GET', url: `/auth/v1/.well-known/jwks.json?ref=${p.ref}` });
+    expect((jwks.json().keys as Array<{ kid: string }>).map((k) => k.kid))
+      .not.toContain(oldKid);
+    await app.close();
+  }, 300_000);
+
+  t('both JWKS endpoints publish the same key set', async () => {
+    const p = await provision();
+    const { deps, beginRotation } = await rotationDeps(p);
+    await beginRotation(deps, p.id);
+    const app = api();
+
+    // A verifier that fetched from one endpoint and met a token minted against
+    // the other would reject a valid token, so the two documents agreeing is not
+    // a nicety.
+    const dataPlane = await app.inject({
+      method: 'GET', url: `/auth/v1/.well-known/jwks.json?ref=${p.ref}` });
+    const controlPlane = await controlPlaneJwks(p);
+    expect((dataPlane.json().keys as Array<{ kid: string }>).map((k) => k.kid).sort())
+      .toEqual(controlPlane.map((k) => k.kid).sort());
+    expect(controlPlane).toHaveLength(2);
+    await app.close();
+  }, 300_000);
+
+  t('beginRotation twice returns the key already waiting', async () => {
+    const p = await provision();
+    const { deps, beginRotation } = await rotationDeps(p);
+    const first = await beginRotation(deps, p.id);
+    const second = await beginRotation(deps, p.id);
+    // A second keypair would orphan the first — published to verifiers now
+    // caching a key nothing will ever sign with — and an operator who ran the
+    // command twice because the output scrolled away should not have done that.
+    expect(second.created).toBe(false);
+    expect(second.kid).toBe(first.kid);
+  }, 300_000);
+
+  t('the retirement sweep only closes windows that have actually closed', async () => {
+    const p = await provision();
+    const { deps, beginRotation, cutOver } = await rotationDeps(p);
+    const { dueForRetirement } = await import('./key-rotation.ts');
+    await beginRotation(deps, p.id);
+    await cutOver(deps, p.id, { force: true });
+
+    // Nothing due: the window is 30 days old at most a second ago.
+    expect((await dueForRetirement(deps)).filter((d) => d.projectId === p.id)).toHaveLength(0);
+
+    await pool.query(
+      `update project_signing_keys set retire_after = now() - interval '1 day'
+        where project_id = $1 and status = 'retiring'`, [p.id]);
+    const due = (await dueForRetirement(deps)).filter((d) => d.projectId === p.id);
+    expect(due).toHaveLength(1);
+  }, 300_000);
+});
+
+/**
+ * Does this project key resolve?
+ *
+ * `POST /auth/v1/recover` for an address that does not exist: the project is
+ * resolved on the handler's first line, and the flow is enumeration-safe, so a
+ * key that verifies gets a same-shape 200 and one that does not gets 401.
+ *
+ * Two earlier versions of this probe were wrong in the same way, and both were
+ * *green*:
+ *
+ *   - `/auth/v1/health` resolves no project at all — an operator asking whether
+ *     auth is up is not asking whether one tenant's key is valid — so it ignores
+ *     the `apikey` header and answers 200 to anything.
+ *   - `POST /auth/v1/token` with no `grant_type` checks the grant *before*
+ *     resolving the project, so it 400s without ever looking at the key.
+ *
+ * Both made "the old key still works during the window" pass without testing
+ * anything. Only the retirement assertion — which needs the key to *stop*
+ * working — could tell the difference, which is the useful property of writing
+ * the negative case.
+ */
+async function keyResolves(
+  app: { inject: (o: Record<string, unknown>) => Promise<{ statusCode: number }> },
+  apikey: string,
+): Promise<boolean> {
+  const res = await app.inject({
+    method: 'POST', url: '/auth/v1/recover', headers: { apikey },
+    payload: { email: 'nobody-probe@example.test' } });
+  if (res.statusCode === 200) return true;
+  if (res.statusCode === 401) return false;
+  throw new Error(`unexpected ${res.statusCode} probing an apikey — neither 200 nor 401`);
+}
+
+/** The control plane's own JWKS for a project, which must agree with the data plane's. */
+async function controlPlaneJwks(p: Fixture): Promise<Array<{ kid: string }>> {
+  const app = buildApp({
+    store: createPgStore({ pool, organizationId: orgId, secrets }),
+    signingKeys: {
+      published: async (projectId: string) => {
+        const { rows } = await pool.query<{ kid: string; public_key_pem: string }>(
+          `SELECT kid, public_key_pem FROM project_signing_keys
+            WHERE project_id = $1 AND status IN ('next','retiring') ORDER BY published_at`,
+          [projectId]);
+        return rows.map((r) => ({ kid: r.kid, publicKeyPem: r.public_key_pem }));
+      },
+    },
+    projectSecrets: { secrets },
+    staticToken: 'unused-but-long-enough-for-the-boot-check',
+  });
+  try {
+    const res = await app.inject({
+      method: 'GET', url: `/v1/projects/${p.ref}/.well-known/jwks.json` });
+    if (res.statusCode !== 200) {
+      throw new Error(`control-plane JWKS returned ${res.statusCode}: ${res.body}`);
+    }
+    return res.json().keys as Array<{ kid: string }>;
+  } finally { await app.close(); }
+}
