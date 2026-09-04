@@ -8,7 +8,7 @@ Corebase is a developer-focused Backend-as-a-Service: a developer creates a proj
 
 ## Status
 
-**Milestone 0, Phase 1, Phase 2 and Phase 3 complete; Phase 4 (auth) in progress.**
+**Milestone 0 and Phases 1–4 complete.** Phase 4 met two of its three exit criteria; the third needs a real sending domain and cannot be met on Docker.
 
 **The provisioning spine (Milestone 0).** `POST /v1/projects` returns a real, isolated PostgreSQL 17.5 database on a data node about **2.5 seconds** later, with its own volume, cgroup limits, the full role model, envelope-encrypted credentials, and a connection string you can `psql` into immediately. Twenty consecutive creates are measured end to end.
 
@@ -154,6 +154,14 @@ One trap found in our own secret store, producing the worst available failure mo
 
 And two of my own test probes were green for the wrong reason, which only the *negative* assertion could reveal: "the old key still works during the window" passed while testing nothing at all, twice. Only "retiring it kills it" — which needs the key to stop working — could tell the difference.
 
+**Phase 4 ends with a demo, and the demo found a bug before it was finished.** `demo/auth/` is a plain HTML page — no build, no framework, no dependency — that signs a user up, verifies the address from a genuinely delivered email, logs in, and shows what each JWT claim is *for*. `./scripts/auth-demo.sh` creates the project, points its `site_url` at the page, hands it the anon key and serves it.
+
+It is the auth API's first browser client, and that is the point of asking for it: **`apikey` was not in the allowed CORS request headers.** It's required on every `/auth/v1/*` endpoint, a custom header forces a preflight, and the browser refuses before the request leaves — so every signup and login from a customer's frontend had been failing for the whole phase. `PUT` was missing too, which is how a user changes their password. The allowlist was written for the dashboard, which talks to the control plane and never sends an apikey; the CORS suite only ever preflighted a control-plane route, so it asserted exactly the wrong client's needs.
+
+`./scripts/dev.sh` also couldn't create a project — it never loaded the object store's settings, so provisioning dead-lettered. Seventh instance of the same drift, and the first one in the path a person actually types.
+
+The demo doesn't skip the verification step. Its server proxies the mail sink's read API under its own origin, so one click pulls the token out of the message the worker really sent over SMTP — `autoconfirm` stays off, which is both the default and the point. Driven end to end in a real browser: four steps, zero console errors.
+
 ## Run it
 
 ```bash
@@ -246,6 +254,7 @@ Staging is Docker Compose plus Docker-in-Docker standing in for a control node a
 | `infra/docker/staging` | The local stand-in for staging, including Prometheus, Loki, Alloy and Grafana with the dashboard provisioned as code |
 | `packages/metrics` | A Prometheus registry — counters, gauges, histograms, with label sets declared up front so the cardinality budget is hard to break |
 | `apps/dashboard` | The dashboard shell: login, signup, org switcher, projects grid, create-project flow, project overview — Next.js App Router, TanStack Query, session cookies, no BFF |
+| `demo/auth` | The Phase 4 demo: a plain HTML page that signs up, verifies from a real email, logs in and explains the JWT claims — the auth API's first browser client |
 | `.github/workflows` | CI in two lanes — a one-minute unit lane run against dead database ports, and an integration lane that stands up the whole Docker stack — plus the nightly crash, lifecycle and reboot drills |
 
 ## The planning corpus

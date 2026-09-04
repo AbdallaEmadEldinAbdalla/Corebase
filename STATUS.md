@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-09-03 · **Phase:** Phase 4 (auth) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 complete** (P3a–P3h; **all four exit criteria met**) · **Phase 4 in progress** (P4a–P4h done; the API surface is complete and 2 of 3 exit criteria are met)
+**Last updated:** 2026-09-04 · **Phase:** Phase 4 (auth) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 complete** (P3a–P3h; **all four exit criteria met**) · **Phase 4 complete** (P4a–P4i; 2 of 3 exit criteria met — the third needs a real domain and provider)
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -103,6 +103,13 @@ Start the services, then see the whole thing work in about five seconds:
 
 ```bash
 ./scripts/demo.sh
+```
+
+And the auth demo — a browser signing a user up against a real project, verifying
+from a real email, and reading its own token's claims:
+
+```bash
+./scripts/auth-demo.sh
 ```
 
 That creates a project, waits for it, connects to the database it made with the
@@ -2716,6 +2723,57 @@ key generations working during the window and the old generation dying exactly a
 retirement, `begin` twice returning the key already waiting, and the sweep
 selecting only closed windows. Both mutations were run and both failed as they
 should.
+### P4i — the Phase 4 demo · done · Phase 4 complete
+
+The roadmap's demo for this phase: *a plain HTML page signs a user up against a
+project, verifies email, logs in, shows the JWT claims.* `demo/auth/` plus
+`./scripts/auth-demo.sh`, which creates the project, points its `site_url` at the
+page, hands it the anon key and serves it.
+
+**It found a bug before it was finished, which is why the plan asks for it.**
+`apikey` — required on every `/auth/v1/*` endpoint (D-029) — was **not in the
+allowed CORS request headers**, and `PUT` was not in the allowed methods. A custom
+header forces a preflight, the preflight lists only the allowed ones, and the
+browser refuses before the request leaves: **every signup and login from a
+customer's frontend had been failing for the whole of Phase 4** (**D-371**). The
+allowlist was written for the dashboard, which talks to the control plane and
+never sends an apikey, and the data plane inherited it — and the CORS suite only
+ever preflighted `/v1/projects`, so it asserted exactly the wrong client's needs
+and could not notice. There is now a case that preflights `/auth/v1/signup`, and
+removing `apikey` again makes it fail.
+
+**And `./scripts/dev.sh` could not create a project at all** — the seventh
+instance of D-358's drift and the first one in the path a person actually types.
+It never loaded `backup-store.env`, so `configure_backups` refused to finish and
+every locally created project dead-lettered at 5/5 having completed five steps.
+It now loads both env files and **exits** when the backup one is missing
+(**D-373**), because the one thing the script exists for is a working dev loop.
+
+The page is plain — no build, no framework, no dependency — and that earns its
+keep twice: it is the auth API's first browser client, so anything that fails in
+it is a thing a customer's own frontend would hit. It carries the **anon** key
+only, and the generated config says why a service_role key must never be added
+where somebody would be tempted to add one.
+
+Step 2 uses a **genuinely delivered** message rather than skipping the step
+(**D-372**): `serve.py` proxies the sink's read API under `/inbox` on the same
+origin, so one click pulls the token out of the mail the worker actually sent over
+SMTP. The proxy forwards `GET` to two allowlisted prefixes and nothing else — a
+dev tool that forwards arbitrary methods to an arbitrary host is an open proxy,
+and this one runs beside a credentialed API. `autoconfirm` stays **off**, which is
+both the default and the point.
+
+The mailed link points at `https://<ref>.<domain>/auth/v1/verify` — correct for
+production, unreachable from a laptop without wildcard DNS and a TLS terminator.
+The page says so rather than bending the product to be locally convenient.
+
+**Verification:** driven end to end in a real browser — signup, one-click inbox,
+verify, login, logout, four steps and zero console errors, with the claims table
+showing `sub`, `aud`, `role`, `ref`, `session_id`, `kid` and what each is *for*.
+Two bugs in my own `serve.py` were found that way: a `log_message` override that
+crashed on `send_error`'s int status and answered an empty reply instead of the
+403 it had just decided on, and the path allowlist — now proven against a
+traversal attempt and a non-allowlisted path, both 403.
 
 ## 5. Rules the code follows
 
@@ -3044,11 +3102,10 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   customers could migrate a user table from GoTrue without a mass password reset;
   it needs a dependency of its own and nobody is migrating in yet. Recorded because
   D-004's portability is supposed to cut both ways.
-- **The auth API surface is complete** (P4b–P4g, all thirteen endpoints) and the
-  **rotation runbook is built and executed** (P4h). Two of Phase 4's three exit
-  criteria are met. What remains is the phase's **demo** — a plain HTML page that
-  signs a user up, verifies, logs in and shows the JWT claims — which is not
-  written.
+- **Phase 4 is complete** (P4a–P4i) with **two of its three exit criteria met**.
+  The third — mail delivering to Gmail, Outlook and Yahoo with SPF, DKIM and DMARC
+  green — needs a real domain at a real provider and cannot be met on Docker at
+  all; it is unmet rather than waived.
 - **Step 3 of the rotation runbook is not built**, and cannot be yet: reloading
   PostgREST's configured public-key set needs PostgREST (Phase 5), and the gateway
   half needs a gateway. So a rotation today is complete for everything that
