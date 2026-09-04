@@ -56,20 +56,30 @@ export function verifyBearer(ctx: ProjectContext, header: string | undefined): B
     throw unauthenticated('This endpoint needs an access token in `Authorization: Bearer …`.');
   }
   const token = header.replace(/^Bearer\s+/i, '').trim();
+  // The project's *own* published keys and the auth issuer, both pinned. A token
+  // signed by another project cannot act here even though the claim shape is
+  // identical — which is the only thing separating tenants on this path.
+  //
+  // Every published key, not just the signing one (P4h): a token minted minutes
+  // before a key rotation must keep working until it expires, or cutting over
+  // logs every signed-in user out at that instant. The issuer stays pinned on
+  // each attempt — accepting more keys is not accepting more issuers.
   let claims;
-  try {
-    // The project's *own* public key and the auth issuer, both pinned. A token
-    // signed by another project cannot act here even though the claim shape is
-    // identical — which is the only thing separating tenants on this path.
-    claims = verifyJwt(token, {
-      publicKeyPem: ctx.signing.publicKeyPem, issuer: ctx.issuer });
-  } catch (err) {
-    if (err instanceof JwtError) {
-      // One message for expired, forged, wrong-project and malformed. Which it
-      // was is in the audit log; telling the caller lets them probe.
-      throw unauthenticated('That access token is not valid.');
+  let jwtError: unknown;
+  for (const k of ctx.publicKeys) {
+    try {
+      claims = verifyJwt(token, { publicKeyPem: k.publicKeyPem, issuer: ctx.issuer });
+      break;
+    } catch (err) {
+      if (!(err instanceof JwtError)) throw err;
+      jwtError = err;
     }
-    throw err;
+  }
+  if (!claims) {
+    // One message for expired, forged, wrong-project and malformed. Which it was
+    // is in the audit log; telling the caller lets them probe.
+    void jwtError;
+    throw unauthenticated('That access token is not valid.');
   }
 
   const sub = typeof claims['sub'] === 'string' ? claims['sub'] : '';

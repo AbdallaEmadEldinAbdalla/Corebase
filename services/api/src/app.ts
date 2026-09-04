@@ -44,6 +44,12 @@ export interface BuildOptions {
    */
   projectSecrets?: { secrets: NonNullable<ControlPlaneDeps['secrets']> };
   /**
+   * Lets the control plane's JWKS endpoint dual-publish during a key rotation
+   * (P4h). Absent means it serves the signing key alone, which is correct for
+   * every project that is not mid-rotation.
+   */
+  signingKeys?: NonNullable<ControlPlaneDeps['signingKeys']>;
+  /**
    * Origins allowed to call this API from a browser (P1g). Absent or empty means
    * none — see kernel/cors.ts for why that is the default rather than localhost.
    */
@@ -95,6 +101,7 @@ export function buildApp(opts: BuildOptions = {}): FastifyInstance {
     ...(opts.actorUserId ? { actorUserId: opts.actorUserId } : {}),
     ...(opts.projects ? { orgs: opts.projects.orgs, principals: opts.projects.principals } : {}),
     ...(opts.projectSecrets ? { secrets: opts.projectSecrets.secrets } : {}),
+    ...(opts.signingKeys ? { signingKeys: opts.signingKeys } : {}),
     ...(opts.auth ? { pool: opts.auth.pool } : {}),
     ...(opts.projectsPerOrgLimit !== undefined
       ? { projectsPerOrgLimit: opts.projectsPerOrgLimit } : {}),

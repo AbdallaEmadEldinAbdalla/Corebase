@@ -30,6 +30,17 @@ export interface ControlPlaneDeps {
   store: ControlPlaneStore;
   /** Optional: without it the sweeper is the only delivery path (slower, still correct). */
   enqueue?: Enqueue;
+  /**
+   * The keys a project publishes but is not signing with (P4h).
+   *
+   * Optional, and absent means "this project publishes only its signing key" —
+   * which is true of every project that is not mid-rotation, so the JWKS endpoint
+   * stays correct without it rather than failing closed on a table it cannot
+   * read.
+   */
+  signingKeys?: {
+    published(projectId: string): Promise<Array<{ kid: string; publicKeyPem: string }>>;
+  };
   onEnqueueError?: (err: Error) => void;
   /** M0: one static token (T4). Real dual-mode auth is D-062. */
   staticToken?: string;
@@ -500,9 +511,21 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
       deps.secrets.get(project.id, SECRET_NAMES.jwtKid).catch(() => undefined),
     ]);
     if (!pem || !kid) throw ApiError.notFound('Project keys');
+    // Dual-publish (P4h): the incoming key appears here *before* it signs
+    // anything and the outgoing one stays *after* it has stopped, so a verifier
+    // caching this document never meets a token whose key it lacks. Both
+    // endpoints that serve a JWKS have to agree — the data plane's
+    // `/auth/v1/.well-known/jwks.json` does the same query — because a verifier
+    // that fetched from one and met a token minted against the other would
+    // reject a valid token.
+    const extra = deps.signingKeys
+      ? await deps.signingKeys.published(project.id)
+      : [];
     // Cacheable: verifiers fetch this on every cold start, and rotation is a
     // dual-publish window measured in days (credentials §4b).
-    return reply.header('cache-control', 'public, max-age=300').send({ keys: [toJwk(pem, kid)] });
+    return reply.header('cache-control', 'public, max-age=300').send({
+      keys: [toJwk(pem, kid), ...extra.map((k) => toJwk(k.publicKeyPem, k.kid))],
+    });
   });
 
 

@@ -177,15 +177,28 @@ export function registerProjectAuth(app: FastifyInstance, deps: ProjectAuthDeps)
       `SELECT id FROM projects WHERE ref = $1 AND deleted_at IS NULL`, [ref]);
     const row = rows[0];
     if (!row) throw new ApiError(404, AUTH_ERROR_CODES.VALIDATION_FAILED, 'No such project.');
-    const [pem, kid] = await Promise.all([
+    const [pem, kid, extra] = await Promise.all([
       deps.secrets.get(row.id, SECRET_NAMES.jwtPublicKey),
       deps.secrets.get(row.id, SECRET_NAMES.jwtKid),
+      // Dual-publish (P4h). During a rotation this serves the incoming key
+      // *before* anything is signed with it and the outgoing one *after* it has
+      // stopped — which is the entire mechanism: a verifier that caches this
+      // document for ten minutes must never meet a token whose key it lacks.
+      deps.pool.query<{ kid: string; public_key_pem: string }>(
+        `SELECT kid, public_key_pem FROM project_signing_keys
+          WHERE project_id = $1 AND status IN ('next', 'retiring')
+          ORDER BY published_at`, [row.id]),
     ]);
     if (!pem || !kid) {
       throw new ApiError(503, AUTH_ERROR_CODES.UNAVAILABLE, 'This project has no keys yet.');
     }
     return reply.header('cache-control', 'public, max-age=300')
-      .send({ keys: [toJwk(pem, kid)] });
+      .send({
+        keys: [
+          toJwk(pem, kid),
+          ...extra.rows.map((r) => toJwk(r.public_key_pem, r.kid)),
+        ],
+      });
   });
 
   /**

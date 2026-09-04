@@ -69,6 +69,15 @@ export interface ProjectContext {
   port: number;
   /** The project's signing key, for minting access tokens. */
   signing: { privateKeyPem: string; publicKeyPem: string; kid: string };
+  /**
+   * Every key the project currently publishes, active first (P4h).
+   *
+   * More than one only during a rotation, and that is the whole point: a token
+   * or an API key minted under the previous key must keep verifying for the
+   * length of the swap window, or a routine key rotation logs every user out and
+   * breaks every deployed frontend at the same moment.
+   */
+  publicKeys: ReadonlyArray<{ kid: string; publicKeyPem: string }>;
   /** `corebase_auth`'s password in this project's database. */
   dbPassword: string;
   /** `https://<ref>.corebase.co/auth/v1` — the `iss` every *access token* carries. */
@@ -167,10 +176,16 @@ export async function resolveProject(
   // probe for which refs exist.
   if (!row) throw new AuthContextError(401, 'That API key is not valid for this deployment.');
 
-  const [priv, pub, kid] = await Promise.all([
+  const [priv, pub, kid, extra] = await Promise.all([
     deps.secrets.get(row.id, SECRET_NAMES.jwtPrivateKey),
     deps.secrets.get(row.id, SECRET_NAMES.jwtPublicKey),
     deps.secrets.get(row.id, SECRET_NAMES.jwtKid),
+    // The published-but-not-signing keys (P4h). `next` and `retiring` only —
+    // `retired` is excluded by the query, which is what retiring a key means.
+    deps.pool.query<{ kid: string; public_key_pem: string }>(
+      `SELECT kid, public_key_pem FROM project_signing_keys
+        WHERE project_id = $1 AND status IN ('next', 'retiring')
+        ORDER BY published_at`, [row.id]),
   ]);
   if (!priv || !pub || !kid) {
     throw new AuthContextError(503,
@@ -180,15 +195,30 @@ export async function resolveProject(
   const domain = deps.projectDomain ?? process.env['CB_PROJECT_DOMAIN'] ?? 'corebase.co';
   const issuer = issuerFor(row.ref, domain);
   const keyIssuer = deps.keyIssuer ?? keyIssuerFor(row.ref, domain);
-  try {
-    // The real check. The issuer is pinned, so a key minted for a different
-    // deployment of the same project ref does not pass either.
-    verifyJwt(apikey, { publicKeyPem: pub, issuer: keyIssuer });
-  } catch (err) {
-    if (err instanceof JwtError) {
-      throw new AuthContextError(401, 'That API key is not valid for this deployment.');
+  const publicKeys = [
+    { kid, publicKeyPem: pub },
+    ...extra.rows.map((r) => ({ kid: r.kid, publicKeyPem: r.public_key_pem })),
+  ];
+
+  // The real check, against **every published key** rather than only the signing
+  // one (P4h). During a rotation's swap window a customer's deployed frontend is
+  // still holding the anon key minted under the previous kid — for as long as it
+  // takes them to ship — so verifying against the active key alone would make a
+  // routine key rotation break every deployed application at the moment of
+  // cut-over. The issuer stays pinned on every attempt: accepting more keys is
+  // not accepting more issuers.
+  let verified = false;
+  for (const k of publicKeys) {
+    try {
+      verifyJwt(apikey, { publicKeyPem: k.publicKeyPem, issuer: keyIssuer });
+      verified = true;
+      break;
+    } catch (err) {
+      if (!(err instanceof JwtError)) throw err;
     }
-    throw err;
+  }
+  if (!verified) {
+    throw new AuthContextError(401, 'That API key is not valid for this deployment.');
   }
 
   if (row.status !== 'ready') {
@@ -212,6 +242,7 @@ export async function resolveProject(
     projectId: row.id, ref: row.ref, keyRole: claimedRole,
     host: row.host, port: row.port,
     signing: { privateKeyPem: priv, publicKeyPem: pub, kid },
+    publicKeys,
     dbPassword, issuer, keyIssuer,
     config: {
       autoconfirm: row.autoconfirm ?? AUTH_CONFIG_DEFAULTS.autoconfirm,

@@ -258,6 +258,25 @@ const app = buildApp({
   ...(auth ? { auth } : {}),
   ...(orgs ? { orgs } : {}),
   ...(secretsForApi ? { projectSecrets: { secrets: secretsForApi } } : {}),
+  // Dual-publish for the control plane's JWKS (P4h). A plain query rather than a
+  // service, because the only thing this endpoint needs is the published set and
+  // the rotation itself is driven from the worker.
+  // Reuses the data-plane auth pool rather than opening a third: it is already a
+  // control-plane pool, and it exists under exactly the condition that makes
+  // rotation possible at all (a configured secret store).
+  ...(projectAuth
+    ? {
+        signingKeys: {
+          published: async (projectId: string) => {
+            const { rows } = await projectAuth.pool.query<{ kid: string; public_key_pem: string }>(
+              `SELECT kid, public_key_pem FROM project_signing_keys
+                WHERE project_id = $1 AND status IN ('next', 'retiring')
+                ORDER BY published_at`, [projectId]);
+            return rows.map((r) => ({ kid: r.kid, publicKeyPem: r.public_key_pem }));
+          },
+        },
+      }
+    : {}),
   ...(projectAuth ? { projectAuth } : {}),
   ...(orgs && auth
     ? {
