@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-09-03 · **Phase:** Phase 4 (auth) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 complete** (P3a–P3h; **all four exit criteria met**) · **Phase 4 in progress** (P4a–P4g done; the API surface is complete)
+**Last updated:** 2026-09-03 · **Phase:** Phase 4 (auth) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 complete** (P3a–P3h; **all four exit criteria met**) · **Phase 4 in progress** (P4a–P4h done; the API surface is complete and 2 of 3 exit criteria are met)
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -2649,6 +2649,73 @@ was meant to include. Row 2 committed at `…22.123456`, `now()` returned
 transaction short. Green whenever the microseconds happened to be small. It is
 **D-295 one order of magnitude down**, the identical class of bug; the target is
 now rounded up to the next whole millisecond, which cannot lose a transaction.
+### P4h — the signing-key rotation runbook · done · 7 tests
+
+**Phase 4's second exit criterion is met**: the rotation runbook runs against
+staging and a session created before it survives it. `begin` → `cutOver` →
+`retire`, plus the verification changes that make the middle of that sequence
+survivable.
+
+**Three commands, not one function** (**D-367**), because the runbook's value is
+the *waiting* between its steps and a single `rotateKey()` would collapse exactly
+that. `begin` publishes the new key without signing anything, so a verifier
+caching JWKS for ten minutes already holds it before a token signed with it can
+arrive. `cutOver` refuses to run before that window has passed, naming both
+elapsed and required seconds — the operator's next question is "how much longer",
+and an error that makes them compute it is an error that gets forced past.
+`force` is the emergency path for a confirmed leak, where every outstanding token
+dying at once is the intent.
+
+**The signing key never moves** (**D-366**). `JWT_PRIVATE_KEY`, `JWT_PUBLIC_KEY`
+and `JWT_KID` keep their meaning exactly and an unrotated project is untouched;
+`project_signing_keys` holds only the keys a project publishes *without* signing
+with them. `project_secrets` could not express this — it enforces one active
+version per name, which is right for a password and wrong for a key set whose
+entire purpose is to have two members. Public keys sit in the clear there, which
+also turns JWKS from an envelope decryption per key into one query, on an endpoint
+every verifier hits on every cold start.
+
+**Every published key verifies, for API keys and access tokens alike**
+(**D-368**), and this is the change that makes rotation survivable rather than an
+outage. Step 4's parenthetical in the doc is the main event: D-029's anon and
+service_role keys *are* JWTs under this keypair, and a customer's deployed
+frontend holds one for as long as it takes them to ship. Restricting verification
+to the active key was run, and the old anon key stops resolving the instant of
+cut-over.
+
+**Retirement is gated on the API-key window, not on token expiry** (**D-369**).
+Tokens die within an hour; a deployed anon key does not. So the refusal reports
+the days remaining *and* that the consequence is a broken frontend rather than
+lost sessions. The scheduled sweep only ever closes a window an operator opened —
+it never begins or cuts over a rotation, because both are judgement calls with a
+wait in the middle and a scheduler making them would log a customer out on a
+timer.
+
+**One product-level trap found, and it produced the worst possible failure mode**
+(**D-370**). `SecretStore.put` is `ON CONFLICT DO NOTHING` at version 1 — a
+create-if-absent, right for provisioning and a trap everywhere else. The
+cut-over called it expecting a swap and got a silent no-op: **JWKS published both
+keys, the cut-over reported success, and every token still carried the old kid.**
+A rotation in which nothing rotates is worse than one that fails, because it
+reports success. `replace` now stores a caller-supplied value as the new active
+version with `rotate`'s transaction, locking and version arithmetic.
+
+**And two of my own probes were green for the wrong reason**, which only the
+*negative* assertion could reveal. "The old key still works during the window"
+passed while testing nothing, twice: first against `/auth/v1/health`, which
+resolves no project at all and so ignores the `apikey` header, and then against
+`POST /auth/v1/token` with no `grant_type`, which checks the grant *before*
+resolving the project. Only "retiring the old key kills it" — which needs the key
+to *stop* working — could tell the difference. That is the argument for writing
+the negative case even when the positive one looks sufficient.
+
+**Verification:** 7 integration tests — the full runbook with a pre-rotation
+session surviving cut-over and refreshing onto the new kid, both JWKS endpoints
+publishing the same set, the cut-over guard refusing and then forcing, both API
+key generations working during the window and the old generation dying exactly at
+retirement, `begin` twice returning the key already waiting, and the sweep
+selecting only closed windows. Both mutations were run and both failed as they
+should.
 
 ## 5. Rules the code follows
 
@@ -2977,13 +3044,18 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   customers could migrate a user table from GoTrue without a mass password reset;
   it needs a dependency of its own and nobody is migrating in yet. Recorded because
   D-004's portability is supposed to cut both ways.
-- **The auth API surface is complete** (P4b–P4g, all thirteen endpoints). What
-  remains in Phase 4 is not endpoints: the **JWKS rotation runbook** (exit
-  criterion 2) is entirely unbuilt — no `next`/`retired` key status in the control
-  plane, no dual-publish JWKS, and no re-derivation of the anon/service_role keys,
-  which matters because the same keypair signs both, so a signing-key rotation
-  *is* an API-key rotation. And the phase's demo — a plain HTML page that signs a
-  user up, verifies, logs in and shows the JWT claims — is not written.
+- **The auth API surface is complete** (P4b–P4g, all thirteen endpoints) and the
+  **rotation runbook is built and executed** (P4h). Two of Phase 4's three exit
+  criteria are met. What remains is the phase's **demo** — a plain HTML page that
+  signs a user up, verifies, logs in and shows the JWT claims — which is not
+  written.
+- **Step 3 of the rotation runbook is not built**, and cannot be yet: reloading
+  PostgREST's configured public-key set needs PostgREST (Phase 5), and the gateway
+  half needs a gateway. So a rotation today is complete for everything that
+  verifies *through the auth module* — which is everything that exists — and will
+  need that step before the data plane lands, or a rotation will leave PostgREST
+  verifying against a key the module has stopped signing with. OQ-112 owns the
+  mechanism.
 - **Self-serve deletion does not exist** (`DELETE /user`), which is V1.x by D-114:
   it needs a grace window and a data-export story that do not gate V1. So a user
   asking to be deleted is deleted *by the developer*, through `/admin/users/:id`,

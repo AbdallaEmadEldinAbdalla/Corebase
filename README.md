@@ -144,6 +144,16 @@ Five faults, four in the drill and none in the product. Its environment never ca
 
 Crash-resume was working the entire time. **T6 now passes 11/11 with zero duplicates**, resuming in 31 seconds at the median. The two rules that came out of it are in STATUS: a harness checks what it is told, and a failure path prints everything it already holds — five separate bugs here have been prolonged by a diagnostic that had the answer and showed a window that excluded it.
 
+**A signing key can be rotated without logging anyone out (P4h).** Phase 4's second exit criterion: the runbook runs against staging and a session created before it survives it.
+
+It's three commands rather than one function, because the runbook's value is the *waiting* between its steps. `begin` publishes the new key without signing anything, so a verifier caching the JWKS for ten minutes already holds it before a token signed with it can arrive. `cutOver` switches signing and refuses to run before that window has passed — naming both elapsed and required seconds, because the operator's next question is "how much longer", and an error that makes them compute it is an error that gets forced past. `retire` un-publishes, and it's gated on **30 days**, not on token expiry: user tokens die within an hour, but the anon key in a customer's deployed frontend does not, and only they can ship a replacement.
+
+That last point is the one that makes rotation survivable at all. A project's anon and service_role keys *are* JWTs under the same signing keypair, so a signing rotation is an API-key rotation whether or not anyone planned for it. Verification therefore accepts **every published key**, not just the active one — restricting it to the active key was tried, and the old anon key stops working the instant of cut-over.
+
+One trap found in our own secret store, producing the worst available failure mode: `put` is create-if-absent, not a setter. The cut-over called it expecting a swap and got a silent no-op — JWKS published both keys, the cut-over reported success, and every token still carried the old key id. A rotation in which nothing rotates is worse than one that fails, because it reports success.
+
+And two of my own test probes were green for the wrong reason, which only the *negative* assertion could reveal: "the old key still works during the window" passed while testing nothing at all, twice. Only "retiring it kills it" — which needs the key to stop working — could tell the difference.
+
 ## Run it
 
 ```bash

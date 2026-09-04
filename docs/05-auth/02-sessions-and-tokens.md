@@ -154,6 +154,30 @@ Routine (credential hygiene or suspected exposure without active abuse):
 4. **Cut over signing**: auth module signs new access JWTs (and the anon/service_role project keys are re-derived — D-029 keys are JWTs under the same keypair, so rotation here is also API-key rotation; the swap/overlap window is owned by [api-keys-and-roles](../04-data-api/03-api-keys-and-roles.md)).
 5. **Retire**: removal of the old `kid` is gated on the API-key swap window (default **30 days**, OQ-104) — because the same keypair signs the long-lived anon/service_role keys (D-029, D-107), user-token validity alone would allow retirement after `max(exp)` (default 1 h, worst-case configured 24 h) plus skew, but the API keys are the binding constraint. At window end, remove the old `kid` from JWKS; mark key `retired`, keep ciphertext for audit.
 
+**Built in P4h, as three operator-driven commands** — `begin` (steps 1–2), `cutOver`
+(step 4) and `retire` (step 5) — because the runbook's value is the waiting
+between them and one `rotateKey()` would collapse exactly that (**D-367**).
+`cutOver` refuses to run before the JWKS cache could have expired, naming both
+elapsed and required seconds; `force` is the emergency path below.
+
+Three things the numbered steps do not say:
+
+- The signing key **never moves** (**D-366**). `JWT_PRIVATE_KEY`,
+  `JWT_PUBLIC_KEY` and `JWT_KID` keep their meaning exactly and a project not
+  mid-rotation is untouched; a separate table holds the keys it publishes
+  *without* signing with them. `project_secrets` cannot express this — it enforces
+  one active version per name, which is right for a password and wrong for a key
+  set whose whole purpose is to have two members.
+- **Every published key verifies**, for API keys and access tokens alike
+  (**D-368**). Without it, cut-over breaks every deployed application at that
+  instant, because step 4's parenthetical is the main event: the anon and
+  service_role keys are JWTs under this keypair and a customer's frontend holds
+  one until they ship.
+- Step 3 — reloading PostgREST's configured key set — **is not built**, because
+  PostgREST is not (Phase 5). The gateway half of it depends on a gateway that
+  does not exist either. Recorded as a gap; the rotation is complete for
+  everything that verifies through the auth module.
+
 Emergency (private key confirmed leaked): steps 1, 3, 4 immediately; skip dual-publish patience; old `kid` removed at once. Every outstanding access token and both API keys die instantly — a project-wide forced re-auth, which is the point. Refresh tokens survive (they are opaque, not signed), so users transparently recover on next refresh.
 
 ### What goes in `raw_user_meta_data` vs app tables
