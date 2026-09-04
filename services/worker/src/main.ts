@@ -4,6 +4,7 @@ import {
 } from '@corebase/queue';
 import { createSmtpProvider } from '@corebase/email';
 import { createEmailSender } from './email-sender.ts';
+import { dueForRetirement, retire as retireKey } from './key-rotation.ts';
 import { emailSendsTotal, emailFailuresTotal } from './metrics.ts';
 import { createJobRepo } from './jobs/repo.ts';
 import { createRunner } from './jobs/runner.ts';
@@ -210,6 +211,38 @@ if (smtpHost) {
   log('info', 'auth email sender started', { host: smtpHost, tls: tlsMode });
 } else {
   log('warn', 'no CB_SMTP_HOST — auth emails will queue and nothing will send them');
+}
+
+/**
+ * The retirement sweep (P4h, step 5).
+ *
+ * Only ever *closes* a window an operator opened — it never begins a rotation or
+ * cuts one over, because both of those are judgement calls with a wait in the
+ * middle, and a scheduler that made them would be a scheduler that logs a
+ * customer out on a timer. What it does is the one step that is purely a
+ * deadline: drop a key whose 30-day API-key swap window has passed.
+ *
+ * Daily by default. The window is measured in weeks, so scanning faster buys
+ * nothing and a slow scan only leaves a dead key published slightly longer,
+ * which is harmless — an extra key in a JWKS costs a verifier one failed
+ * signature check.
+ */
+let keyRetireTimer: NodeJS.Timeout | undefined;
+if (secrets) {
+  const store = secrets;
+  const rotationDeps = { pool, secrets: store, log: (m: string, e?: Record<string, unknown>) => log('info', m, e) };
+  const retireMs = Number(process.env.CB_KEY_RETIRE_SCAN_MS ?? 86_400_000);
+  keyRetireTimer = setInterval(() => {
+    void (async () => {
+      for (const due of await dueForRetirement(rotationDeps)) {
+        const r = await retireKey(rotationDeps, due.projectId, due.kid);
+        if (!r.retired) {
+          log('warn', 'signing key due for retirement but not retired',
+            { project_id: due.projectId, kid: due.kid, reason: r.reason });
+        }
+      }
+    })().catch((e) => log('error', 'key retirement sweep failed', { error: (e as Error).message }));
+  }, retireMs);
 }
 
 // 10s locally; production runs the 5-minute reconciliation cadence of D-173
@@ -505,6 +538,11 @@ const shutdown = async (signal: string) => {
   if (walTimer) clearInterval(walTimer);
   if (backupTimer) clearInterval(backupTimer);
   if (reconcileTimer) clearTimeout(reconcileTimer);
+  // With the other timers, not after the awaits below — that is the whole point
+  // of the comment above this block, and putting it after `worker.close()` would
+  // let a sweep fire against a closing pool and log an error that points at the
+  // query instead of at the shutdown.
+  if (keyRetireTimer) clearInterval(keyRetireTimer);
   metricsServer.close();
   await worker.close();          // finishes in-flight work before exiting
   if (emailWorker) await emailWorker.close();
