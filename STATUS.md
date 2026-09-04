@@ -2599,7 +2599,18 @@ with no human, T5f 2/2 ready and usable (~7 s each) with its per-step breakdown
 intact — `wait_healthy` ~5.4 s and `verify_archiving` ~1.2 s dominate, everything
 else under 600 ms. In CI, **T6, T7 and T8 all pass**; T5f found one more thing.
 
-**T5f's remaining failure was a product finding, not a harness one** — which is
+**And the structural flaw behind the whole episode is fixed** (**D-365**): the
+nightly now runs **one job per drill** instead of four steps in one. Steps in a
+job are sequential and skip once one fails, so T6 breaking in P3a made the other
+three report "skipped" — which reads as "not reached" and is indistinguishable
+from "never once run". That is why four nights of red produced one visible
+failure and hid three. *A signal that hides three other signals behind it is
+worse than no signal.* A fresh runner each is also more faithful: after T6, T7
+and T8 had churned roughly fifty provisions and a node reboot on one host, T5f
+hit `driver failed programming external connectivity` — bridge and port state
+exhausted by the drills before it, not a fault in anything being measured.
+
+**T5f's other failure was a product finding, not a harness one** — which is
 what the drill is for. On a loaded runner:
 
 ```

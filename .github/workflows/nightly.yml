@@ -14,9 +14,34 @@ on:
 
 jobs:
   drills:
-    name: kill matrix · lifecycle · node reboot
+    # One job per drill, not four steps in one, and this is the fix for the flaw
+    # that made this workflow useless rather than merely red.
+    #
+    # Steps in a job are sequential and skip once one fails. T6 broke in P3a, and
+    # for four nights T7, T8 and T5f reported "skipped" — which reads as "not
+    # reached" and is indistinguishable from "never once run". When T6 was
+    # repaired, all three failed immediately, two of them for T6's own reasons and
+    # T5f for a missing import it had held since it was written. A signal that
+    # hides three other signals behind it is worse than no signal.
+    #
+    # A fresh runner each is also more faithful than sharing one. These drills are
+    # heavy — 11 provisions, 20 create+delete cycles, a node restart, 20
+    # consecutive creates — and by the fourth the runner's Docker was failing with
+    # "driver failed programming external connectivity", which is bridge and port
+    # state exhausted by the three before it. Production does not run four drills
+    # on one node either.
+    name: ${{ matrix.drill.name }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
+    strategy:
+      # Every drill runs even when one fails. That is the whole point of the split.
+      fail-fast: false
+      matrix:
+        drill:
+          - { name: 'T6 — crash-resume kill matrix', task: kill-matrix }
+          - { name: 'T7 — lifecycle residue loop',   task: lifecycle }
+          - { name: 'T8 — node reboot drill',        task: node-reboot }
+          - { name: 'T5f — provisioning measurement', task: bench }
     steps:
       - uses: actions/checkout@v7
       # No `version` here on purpose: package.json's `packageManager` field is
@@ -56,20 +81,15 @@ jobs:
 
       # Each drill asserts its own invariants and exits non-zero on failure, so
       # there is nothing to check here beyond letting them run.
-      - name: T6 — crash-resume kill matrix
-        run: pnpm --filter @corebase/worker kill-matrix
+      - name: ${{ matrix.drill.name }}
+        run: pnpm --filter @corebase/worker ${{ matrix.drill.task }}
 
-      - name: T7 — lifecycle residue loop
-        run: pnpm --filter @corebase/worker lifecycle
-
-      - name: T8 — node reboot drill
-        run: pnpm --filter @corebase/worker node-reboot
-
-      - name: T5f — provisioning measurement
-        run: pnpm --filter @corebase/worker bench
-
+      # Only T5f writes it, so only T5f has anything to print. In the other three
+      # jobs this used to cat a file the checkout happened to contain, which is
+      # the committed measurement rather than anything the run produced —
+      # numbers-for-the-record that were not this run's numbers.
       - name: numbers, for the record
-        if: always()
+        if: always() && matrix.drill.task == 'bench'
         run: cat docs/14-roadmap/measurements/m-002-provisioning.json || true
 
       - name: tear down
