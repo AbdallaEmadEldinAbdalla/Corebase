@@ -18,6 +18,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { Client } from 'pg';
+import { backupStoreEnv, bootstrapOrgId } from './staging-env.mts';
 
 const ROOT = resolve(import.meta.dirname, '../../..');
 const COUNT = Number(process.env.CB_BENCH_COUNT ?? 20);
@@ -26,7 +27,31 @@ const PORT = Number(process.env.CB_BENCH_API_PORT ?? 8098);
 const TOKEN = 'bench-token-harness-token-long-enough-for-the-boot-check';
 const OUT_DIR = process.env.CB_BENCH_OUT ?? join(ROOT, 'docs/14-roadmap/measurements');
 
+/**
+ * The object store. Every harness here provisions a project, and provisioning
+ * requires a backup repo (`CB_REQUIRE_BACKUPS`) since P3a added
+ * `configure_backups` — so a harness without these settings cannot complete a
+ * single cycle. All four of them were missing it, and the nightly reported it as
+ * "ready did not happen within 90000ms" for four nights (D-358).
+ *
+ * Refusing to start is deliberate: a bench that runs for minutes and then reports
+ * a timeout is worse than one that will not begin.
+ */
+/** Memoised: one lookup per run, not one per project. */
+let cachedOrg: string | undefined;
+const orgId = async () => (cachedOrg ??= await bootstrapOrgId(
+  `http://127.0.0.1:${PORT}`, auth as Record<string, string>));
+
+const backupEnv = backupStoreEnv(ROOT);
+if (!backupEnv['CB_BACKUP_S3_ENDPOINT']) {
+  throw new Error(
+    'no object-store settings at infra/docker/staging/backup-store.env — '
+    + 'run ./scripts/staging.sh backup-store. This harness provisions projects, '
+    + 'and provisioning requires a backup repo (CB_REQUIRE_BACKUPS).');
+}
+
 const env = {
+  ...backupEnv,
   ...process.env,
   // The services run as the least-privilege app role (P1b); this harness's own
   // queries below use the owner, because fixtures are admin work.
@@ -128,7 +153,8 @@ async function createProject(i: number): Promise<string> {
   const res = await fetch(`http://127.0.0.1:${PORT}/v1/projects`, {
     method: 'POST',
     headers: { ...auth, 'idempotency-key': `bench-${process.pid}-${String(i).padStart(3, '0')}` },
-    body: JSON.stringify({ name: `bench-${process.pid}-${i}`, region: 'eu-central' }),
+    body: JSON.stringify({
+      name: `bench-${process.pid}-${i}`, region: 'eu-central', org_id: await orgId() }),
   });
   if (res.status !== 202) throw new Error(`create returned ${res.status}: ${await res.text()}`);
   return ((await res.json()) as { project: { ref: string } }).project.ref;

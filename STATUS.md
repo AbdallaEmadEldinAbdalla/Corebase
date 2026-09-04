@@ -2570,6 +2570,21 @@ checkpoint: allocate_node … wait_healthy
 **Result: T6 PASS, 11/11, zero duplicates**, resume time min 30.9 s / p50 31.9 s /
 max 39.7 s. Crash-resume was working the whole time — the drill could not see it.
 
+**And T7 and T8 had the same two faults, which only became visible once T6
+stopped failing** — they had been *skipped* behind it, so four nights of "T7
+skipped" read as "not reached" rather than "never run". Both were missing the
+object-store settings (D-358) and both omitted `org_id` (D-361); `node-reboot`
+additionally never checked the create's status (D-359). All four harnesses now
+share one loader and one org resolver in `bench/staging-env.mts`, because four
+copies of a precondition is four places for it to rot. **T7 PASS** (2 cycles,
+node and control plane clean) and **T8 PASS** (node rebooted, every project came
+back with no human, the orphan reported rather than removed) locally.
+
+The harnesses are **not typechecked** — `services/worker/tsconfig.json` includes
+`src/**/*.ts` only, so `bench/` and `kill-matrix/` are compiled by nothing. That
+is part of how the `{ref, id}` / `{project, job}` drift survived two phases.
+Recorded in §8 rather than fixed here.
+
 **Also fixed: the PITR test's intermittent failure** (**D-362**), which CI
 surfaced on P4g as `expected [ 1 ] to include 2`. The test took its restore target
 from `now()` (microsecond precision) through a JS `Date` and `toISOString()`
@@ -2998,6 +3013,13 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   without a full restore (backups §7's last bullet) — is not scheduled. The
   restore-based verification is the stronger of the two and is the one the criterion
   names; the cheap one is still worth having.
+- **The nightly harnesses are typechecked by nothing.**
+  `services/worker/tsconfig.json` includes `src/**/*.ts`, so `bench/*.mts` and
+  `kill-matrix/*.mts` are outside every `tsc` pass — which is part of how the
+  kill matrix went on reading `{ref, id}` from a `{project, job}` response for two
+  phases. Adding them is not free (`res.json()` is `any`, so the specific drift
+  above would still have slipped through) but a missing import or a renamed export
+  would be caught at commit time instead of at 03:17.
 - **Provisioning a project per test is now the integration lane's binding
   constraint, and it stopped being merely slow.** `project-auth.e2e.test.ts` grew
   to 63 tests across P4b–P4f, each standing up a real Postgres container at ~6 s of

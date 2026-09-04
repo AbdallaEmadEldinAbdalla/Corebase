@@ -55,3 +55,34 @@ export function backupStoreEnv(root: string): Record<string, string> {
   }
   return out;
 }
+
+/**
+ * The organization a harness's projects belong to.
+ *
+ * `POST /v1/projects` refuses to guess when the caller belongs to several
+ * organizations — correctly, since picking one silently is how a project lands in
+ * the wrong org. Omitting `org_id` therefore works only while the bootstrap user
+ * belongs to exactly one, which made every harness depend on global state it does
+ * not own: any suite that creates an organization (P1d's do, and the Phase 4 auth
+ * suites do) broke them all with a message about something else entirely.
+ *
+ * Resolved through the platform API rather than the database, so the id comes back
+ * in the encoding `POST /v1/projects` expects instead of one constructed here from
+ * a guess at the scheme.
+ */
+export async function bootstrapOrgId(
+  baseUrl: string, headers: Record<string, string>,
+): Promise<string> {
+  const res = await fetch(`${baseUrl}/v1/orgs`, { headers });
+  if (!res.ok) {
+    throw new Error(`cannot list organizations (${res.status}): ${await res.text()}`);
+  }
+  // `orgs`, not `organizations` — the platform API's key, and a wrong one here
+  // would read as "belongs to no organization", which is a confident and
+  // completely wrong diagnosis.
+  const body = (await res.json()) as { orgs?: Array<{ id: string; slug: string }> };
+  const orgs = body.orgs ?? [];
+  const dev = orgs.find((o) => o.slug === 'dev') ?? orgs[0];
+  if (!dev) throw new Error('the bootstrap user belongs to no organization — did the API boot?');
+  return dev.id;
+}

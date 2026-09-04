@@ -28,7 +28,9 @@ import { join, resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { request as httpsRequest } from 'node:https';
 import { Pool, Client } from 'pg';
-import { appDatabaseUrl, ownerDatabaseUrl, backupStoreEnv } from '../bench/staging-env.mts';
+import {
+  appDatabaseUrl, ownerDatabaseUrl, backupStoreEnv, bootstrapOrgId,
+} from '../bench/staging-env.mts';
 
 const ROOT = resolve(import.meta.dirname, '../../..');
 const PORT = Number(process.env.CB_KM_API_PORT ?? 8097);
@@ -304,33 +306,10 @@ const SCENARIOS: Scenario[] = [
   midStep('wait_healthy', 'database accepting connections', 'wait_healthy/after-probe'),
 ];
 
-/**
- * The organization the drill's projects belong to.
- *
- * The bootstrap org, by its slug rather than by "the only one there is" — the
- * API's own encoding of the id is what `POST /v1/projects` expects, so this asks
- * the platform API for it instead of constructing it here and guessing at the
- * scheme.
- */
+/** Memoised: one lookup per run, not one per project. See bench/staging-env.mts. */
 let cachedOrgId: string | undefined;
-async function bootstrapOrgId(): Promise<string> {
-  if (cachedOrgId) return cachedOrgId;
-  const res = await fetch(`http://127.0.0.1:${PORT}/v1/orgs`, { headers: auth });
-  if (!res.ok) {
-    throw new Error(`cannot list organizations (${res.status}): ${await res.text()}`);
-  }
-  // `orgs`, not `organizations` — the platform API's key, checked rather than
-  // assumed. A wrong key here would read as "belongs to no organization", which
-  // is a confident and completely wrong diagnosis.
-  const body = (await res.json()) as { orgs?: Array<{ id: string; slug: string }> };
-  const orgs = body.orgs ?? [];
-  const dev = orgs.find((o) => o.slug === 'dev') ?? orgs[0];
-  if (!dev) {
-    throw new Error('the bootstrap user belongs to no organization — did the API boot?');
-  }
-  cachedOrgId = dev.id;
-  return dev.id;
-}
+const bootstrapOrg = async () =>
+  (cachedOrgId ??= await bootstrapOrgId(`http://127.0.0.1:${PORT}`, auth));
 
 async function resetWorld(): Promise<void> {
   await pool.query(
@@ -384,7 +363,7 @@ async function runScenario(sc: Scenario, i: number, total: number): Promise<Resu
     // not own: any earlier suite that creates an org (P1d's do) breaks every
     // scenario with a message about the worker.
     body: JSON.stringify({
-      name: `km-${Date.now()}-${i}`, region: 'eu-central', org_id: await bootstrapOrgId() }),
+      name: `km-${Date.now()}-${i}`, region: 'eu-central', org_id: await bootstrapOrg() }),
   });
   const body = await res.text();
   // Checked, and it was not. An unchecked status here destroyed four nights of

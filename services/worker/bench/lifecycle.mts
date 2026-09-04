@@ -24,7 +24,9 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { request as httpsRequest } from 'node:https';
-import { appDatabaseUrl, ownerDatabaseUrl } from './staging-env.mts';
+import {
+  appDatabaseUrl, ownerDatabaseUrl, backupStoreEnv, bootstrapOrgId,
+} from './staging-env.mts';
 import { Pool, Client } from 'pg';
 
 const ROOT = resolve(import.meta.dirname, '../../..');
@@ -36,7 +38,31 @@ const CERT_DIR = process.env.CB_DOCKER_CERT_DIR ?? join(ROOT, 'infra/docker/stag
 const DOCKER_HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
 const DOCKER_PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
 
+/**
+ * The object store. Every harness here provisions a project, and provisioning
+ * requires a backup repo (`CB_REQUIRE_BACKUPS`) since P3a added
+ * `configure_backups` — so a harness without these settings cannot complete a
+ * single cycle. All four of them were missing it, and the nightly reported it as
+ * "ready did not happen within 90000ms" for four nights (D-358).
+ *
+ * Refusing to start is deliberate: a bench that runs for minutes and then reports
+ * a timeout is worse than one that will not begin.
+ */
+/** Memoised: one lookup per run, not one per project. */
+let cachedOrg: string | undefined;
+const orgId = async () => (cachedOrg ??= await bootstrapOrgId(
+  `http://127.0.0.1:${PORT}`, auth as Record<string, string>));
+
+const backupEnv = backupStoreEnv(ROOT);
+if (!backupEnv['CB_BACKUP_S3_ENDPOINT']) {
+  throw new Error(
+    'no object-store settings at infra/docker/staging/backup-store.env — '
+    + 'run ./scripts/staging.sh backup-store. This harness provisions projects, '
+    + 'and provisioning requires a backup repo (CB_REQUIRE_BACKUPS).');
+}
+
 const env = {
+  ...backupEnv,
   ...process.env,
   // The services run as the least-privilege app role (P1b); this harness's own
   // queries below use the owner, because fixtures are admin work.
@@ -128,7 +154,8 @@ async function oneCycle(i: number): Promise<Cycle> {
   const created = await fetch(`http://127.0.0.1:${PORT}/v1/projects`, {
     method: 'POST',
     headers: { ...auth, 'idempotency-key': `lc-${process.pid}-${String(i).padStart(3, '0')}` },
-    body: JSON.stringify({ name: `lc-${process.pid}-${i}`, region: 'eu-central' }),
+    body: JSON.stringify({
+      name: `lc-${process.pid}-${i}`, region: 'eu-central', org_id: await orgId() }),
   });
   if (created.status !== 202) throw new Error(`create returned ${created.status}: ${await created.text()}`);
   const { project } = (await created.json()) as { project: { ref: string } };
