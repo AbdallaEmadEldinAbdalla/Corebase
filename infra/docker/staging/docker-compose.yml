@@ -110,6 +110,16 @@ services:
       # can reach a pooler, and the health gate would fail for a pooler that is
       # actually running perfectly.
       - "${POOLER_PORT_MIN:-6433}-${POOLER_PORT_MAX:-6462}:${POOLER_PORT_MIN:-6433}-${POOLER_PORT_MAX:-6462}"
+      # And the PostgREST range (P5b). A project is three listeners now, and this
+      # one is the data API itself — without it published, the health gate cannot
+      # ask `/ready` and the saga fails a PostgREST that is running perfectly. The
+      # failure is worth naming because it happened: the container logged
+      # "Schema cache loaded" and the probe timed out, which reads as a broken
+      # PostgREST rather than an unpublished port.
+      #
+      # Two ports per project, api and admin, so the range is twice as wide as the
+      # others for the same project count: 7433-7492 is 30 projects.
+      - "${POSTGREST_PORT_MIN:-7433}-${POSTGREST_PORT_MAX:-7492}:${POSTGREST_PORT_MIN:-7433}-${POSTGREST_PORT_MAX:-7492}"
     volumes:
       - data-node-certs:/certs
       - data-node-docker:/var/lib/docker

@@ -279,15 +279,17 @@ cmd_seed_images() {
   # download (D-071). Locally the data node has its own image store, so we push
   # the built images across explicitly — same intent, same effect on create time.
   #
-  # Both images, because a project is two containers now: Postgres and its pooler
-  # (D-015). A node missing the pooler image fails provisioning at start_pooler
-  # rather than at create time, which is a much worse diagnostic.
-  for image in corebase/postgres:17.5 corebase/pgbouncer:1.23; do
+  # Three images, because a project is three containers as of P5b: Postgres, its
+  # pooler (D-015) and its PostgREST (D-011). A node missing one of them fails
+  # provisioning at the step that starts it rather than at create time, which is a
+  # much worse diagnostic.
+  for image in corebase/postgres:17.5 corebase/pgbouncer:1.23 corebase/postgrest:12.2; do
     if ! docker image inspect "$image" >/dev/null 2>&1; then
       echo "  ✗ $image is not built locally — build it first:"
       case "$image" in
         *postgres*)  echo "      docker build -t $image infra/docker/postgres" ;;
         *pgbouncer*) echo "      docker build -t $image infra/docker/pgbouncer" ;;
+        *postgrest*) echo "      docker build -t $image infra/docker/postgrest" ;;
       esac
       exit 1
     fi
