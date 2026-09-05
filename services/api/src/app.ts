@@ -7,6 +7,7 @@ import { registerMetrics } from './kernel/metrics.ts';
 import { registerAuth, type AuthDeps } from './modules/auth/routes.ts';
 import { registerOrgs, type OrgDeps } from './modules/orgs/routes.ts';
 import { registerProjectAuth, type ProjectAuthDeps } from './modules/project-auth/routes.ts';
+import { registerGateway, type GatewayDeps } from './modules/gateway/routes.ts';
 import type { PrincipalDeps } from './kernel/principal.ts';
 
 export interface BuildOptions {
@@ -62,6 +63,12 @@ export interface BuildOptions {
    * answer for a deployment with no project databases to serve.
    */
   projectAuth?: ProjectAuthDeps;
+  /**
+   * The data-plane gateway at `/rest/v1/*` (P5c). Absent means the route does not
+   * exist — right for a deployment with no projects to route to, and better than
+   * a route that 503s every request.
+   */
+  gateway?: GatewayDeps;
 }
 
 /** Composition root: the only place that wires modules together. */
@@ -89,6 +96,11 @@ export function buildApp(opts: BuildOptions = {}): FastifyInstance {
   // `/auth/v1/*`, which is a different surface from `/v1/auth/*` above. See
   // modules/project-auth/routes.ts for why the two prefixes look alike.
   if (opts.projectAuth) registerProjectAuth(app, opts.projectAuth);
+  // After the auth module, which owns `/auth/v1/*` in-process (request pipeline
+  // hop 7): the gateway proxies `/rest/v1/*` and nothing else, so the two do not
+  // overlap — but registering it first would invite a future wildcard to swallow
+  // routes the monolith serves itself.
+  if (opts.gateway) registerGateway(app, opts.gateway);
 
   registerControlPlane(app, {
     store: opts.store ?? createMemoryStore(),
