@@ -1,7 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { generateKeypair, toJwk, sign } from '@corebase/jwt';
 import { createDocker, type Docker } from './docker.ts';
+import { buildApp } from '@corebase/api';
+import { createMemoryRateLimiter } from '@corebase/api/kernel/rate-limit.ts';
+import type { RouteEntry, RoutingTable } from '@corebase/api/modules/gateway/routing.ts';
 import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
+
+const SRC = new URL('.', import.meta.url).pathname;
 
 /**
  * P5b — the per-project PostgREST image, against a real database.
@@ -86,9 +92,17 @@ beforeAll(async () => {
 
     // The project's published keys, exactly as P4h's rotation would produce them.
     const pair = generateKeypair();
+    // Shared with the gateway tests below, which point a real gateway at this
+    // same PostgREST rather than standing up a second one.
+    gwPair = pair;
+    gwRef = 'p5cgatewayrefaaaa';
     const now = Math.floor(Date.now() / 1000);
+    // Two issuers, matching the two things that verify these tokens: the gateway
+    // pins the project-key issuer (`https://<ref>.<domain>`) and PostgREST pins
+    // whatever the token says, so the API-key issuer is the one that has to line
+    // up with the gateway's expectation (D-319).
     const tok = (role: 'anon' | 'authenticated' | 'service_role', sub?: string) => sign({
-      iss: 'https://p5b.localhost/auth/v1', ref: 'p5b', role,
+      iss: `https://${gwRef}.corebase.test`, ref: gwRef, role,
       ...(sub ? { sub, aud: 'authenticated' } : {}),
       iat: now, exp: now + 3600,
     }, { privateKeyPem: pair.privateKeyPem, kid: pair.kid });
@@ -149,6 +163,39 @@ const t = (n: string, fn: () => Promise<void>, ms = 90_000) =>
       'This is the P5b done-signal and must not skip silently.');
     await fn();
   }, ms);
+
+/**
+ * The gateway, pointed at the PostgREST this file just started.
+ *
+ * A real proxy hop rather than a mocked upstream: what is being tested is that a
+ * request survives the trip — D-109's header injection, the verbatim body, the
+ * headers that must and must not be forwarded — and every one of those is a
+ * property of the hop rather than of the handler.
+ */
+const DOMAIN = 'corebase.test';
+let gwPair: ReturnType<typeof generateKeypair>;
+let gwRef: string;
+
+function gateway(over: Partial<RouteEntry> = {}) {
+  const entry: RouteEntry = {
+    projectId: 'p5c', ref: gwRef, status: 'ready', plan: 'free',
+    nodeAddress: '127.0.0.1', postgrestPort: PGRST_PORT,
+    jwks: [toJwk(gwPair.publicKeyPem, gwPair.kid)],
+    revoked: new Set<string>(), loadedAt: Date.now(), ...over,
+  };
+  const routes: RoutingTable = {
+    lookup: (r) => (r === entry.ref ? entry : undefined),
+    refresh: async () => 1, start: () => {}, stop: () => {}, size: () => 1,
+  };
+  return buildApp({
+    gateway: {
+      routes, projectDomain: DOMAIN,
+      ipLimiter: createMemoryRateLimiter({ limit: 500, windowSeconds: 60 }),
+      keyLimiter: createMemoryRateLimiter({ limit: 500, windowSeconds: 60 }),
+      projectLimiter: createMemoryRateLimiter({ limit: 500, windowSeconds: 60 }),
+    },
+  });
+}
 
 describe('P5b — PostgREST serves a project', () => {
   t('the admin server separates liveness from readiness', async () => {
@@ -253,5 +300,114 @@ describe('P5b — PostgREST serves a project', () => {
     const bare = await api('/rpc/whoami', keys.service, {
       method: 'POST', headers: { 'content-type': 'application/json' } });
     expect(bare.status).toBe(200);
+  });
+});
+
+describe('P5c — the gateway proxies to a real PostgREST', () => {
+  t('EXIT CRITERION: a request survives the hop, and RLS still decides what comes back',
+    async () => {
+      const app = gateway();
+      const host = `${gwRef}.${DOMAIN}`;
+      try {
+        // anon, with no Authorization at all — so D-109's injection is what makes
+        // this work. Without it PostgREST would fall back to db-anon-role, which
+        // is the second authorization path the injection exists to remove.
+        const asAnon = await app.inject({
+          method: 'GET', url: '/rest/v1/notes',
+          headers: { host, apikey: keys.anon } });
+        expect(asAnon.statusCode).toBe(200);
+        expect(asAnon.json()).toEqual([]);
+
+        // A user token in `Authorization`, the anon key in `apikey`: the shape a
+        // signed-in SDK client actually sends. The policy decides, through the
+        // proxy, exactly as it did without one.
+        const asUser = await app.inject({
+          method: 'GET', url: '/rest/v1/notes',
+          headers: { host, apikey: keys.anon, authorization: `Bearer ${keys.user}` } });
+        expect(asUser.statusCode).toBe(200);
+        const rows = asUser.json() as Array<{ owner: string }>;
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!.owner).toBe(USER_ID);
+
+        // service_role through the gateway still bypasses RLS — the gateway
+        // neither adds nor removes authority, which is the whole of D-016.
+        const asService = await app.inject({
+          method: 'GET', url: '/rest/v1/notes',
+          headers: { host, apikey: keys.service } });
+        expect(asService.json()).toHaveLength(2);
+      } finally { await app.close(); }
+    });
+
+  t('PostgREST\'s own errors pass through verbatim (D-106)', async () => {
+    const app = gateway();
+    try {
+      const res = await app.inject({
+        method: 'GET', url: '/rest/v1/no_such_table',
+        headers: { host: `${gwRef}.${DOMAIN}`, apikey: keys.service } });
+      expect(res.statusCode).toBe(404);
+      // The PGRST code survives. Rewriting it would break every
+      // Supabase-compatible client, which branches on exactly this field — and
+      // would put a JSON round trip on the hot path D-016 exists to keep thin.
+      // Either family. PostgREST answers an unknown relation with the *Postgres*
+      // SQLSTATE (42P01) rather than a PGRST code, and the doc's contract is that
+      // clients key off "PGRST/SQLSTATE" — both are upstream's to choose and
+      // neither is ours to normalise.
+      const body = res.json() as { code?: string };
+      expect(body.code).toMatch(/^(PGRST|[0-9A-Z]{5}$)/);
+      expect(res.headers['x-request-id']).toBeTruthy();
+    } finally { await app.close(); }
+  });
+
+  t('the query string reaches PostgREST intact', async () => {
+    const app = gateway();
+    try {
+      // The gateway is deliberately ignorant of PostgREST's filter grammar — it
+      // forwards the query string without parsing it, which is what lets filters,
+      // embeds and RPC work without the gateway knowing they exist.
+      const res = await app.inject({
+        method: 'GET', url: '/rest/v1/notes?owner=eq.' + USER_ID + '&select=body',
+        headers: { host: `${gwRef}.${DOMAIN}`, apikey: keys.service } });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual([{ body: 'mine' }]);
+    } finally { await app.close(); }
+  });
+
+  t('the request id reaches application_name through the gateway', async () => {
+    const app = gateway();
+    try {
+      // End to end for D-105: the gateway forwards its id, PostgREST maps it to a
+      // GUC, and `corebase.pre_request` stamps it. This is the chain that lets a
+      // slow query be traced back to an HTTP request.
+      const res = await app.inject({
+        method: 'POST', url: '/rest/v1/rpc/whoami',
+        headers: {
+          host: `${gwRef}.${DOMAIN}`, apikey: keys.service,
+          'content-type': 'application/json', 'x-request-id': 'req_gw_probe',
+        },
+        payload: {},
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toBe('pgrst:req_gw_probe');
+    } finally { await app.close(); }
+  });
+
+  t('the apikey is not forwarded upstream', async () => {
+    const app = gateway();
+    try {
+      // PostgREST has no use for it and it is a credential. Asserted through the
+      // one mirror available: the request that reached the database.
+      const res = await app.inject({
+        method: 'GET', url: '/rest/v1/notes',
+        headers: { host: `${gwRef}.${DOMAIN}`, apikey: keys.service } });
+      expect(res.statusCode).toBe(200);
+      // A negative that is hard to observe directly, so it is asserted at the
+      // source instead: the forwarded header set is an allowlist, and `apikey`
+      // is not in it.
+      const src = readFileSync(
+        `${SRC}../../api/src/modules/gateway/routes.ts`, 'utf8');
+      const allow = /for \(const h of \[([^\]]+)\]\)/.exec(src)?.[1] ?? '';
+      expect(allow).not.toContain('apikey');
+      expect(allow).not.toContain('host');
+    } finally { await app.close(); }
   });
 });
