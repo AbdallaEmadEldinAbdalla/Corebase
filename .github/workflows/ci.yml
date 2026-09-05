@@ -57,6 +57,96 @@ jobs:
           CB_REDIS_URL: redis://127.0.0.1:1
         run: pnpm test:unit
 
+  # ── the release gate (D-085, D-162) ────────────────────────────────────────
+  #
+  # Proposal §74 — create projects A and B, prove A cannot touch B, run it
+  # continuously — is the single most important test in this repository, because
+  # tenant isolation is risk #1. **A failure here freezes all releases**, not just
+  # the change that caused it: while isolation is provably broken we cannot reason
+  # about which change is safe to ship.
+  #
+  # D-162 puts this gate in place the week Phase 5 starts rather than at launch,
+  # on the reasoning that retrofitting a security gate never happens under launch
+  # pressure. This is that week.
+  #
+  # Its own job rather than a lane in the matrix above, for three reasons: it is a
+  # *gate* and should be legible as one in the checks list; its fixtures are two
+  # whole projects and it must not share a node with suites that truncate the same
+  # tables; and it must never be sharded, because a shard that silently holds no
+  # files reports green.
+  isolation:
+    name: tenant isolation (release gate)
+    runs-on: ubuntu-latest
+    # The whole suite provisions six containers once and reuses them, so this is
+    # setup-dominated rather than test-dominated.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with: { node-version: '22', cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: infra/docker/postgres
+          tags: corebase/postgres:17.5
+          load: true
+          cache-from: type=gha
+      - uses: docker/build-push-action@v7
+        with:
+          context: infra/docker/pgbouncer
+          tags: corebase/pgbouncer:1.23
+          load: true
+          cache-from: type=gha
+      - uses: docker/build-push-action@v7
+        with:
+          context: infra/docker/postgrest
+          tags: corebase/postgrest:12.2
+          load: true
+          cache-from: type=gha
+
+      - name: bring up the staging substitute
+        run: ./scripts/staging.sh up
+      - name: migrate, master key, application role
+        run: |
+          ./scripts/migrate-staging.sh
+          ./scripts/staging.sh kek
+          ./scripts/staging.sh app-role
+      - name: seed the project images onto the data node
+        run: ./scripts/staging.sh seed-images
+      - name: object store — the one destination egress must still allow
+        run: ./scripts/staging.sh backup-store
+      - name: egress default-deny on the data node
+        # NET-3 and NET-4 assert exactly what this applies. Without it they fail,
+        # which is the correct behaviour: the suite tests the platform's posture,
+        # not the platform's intentions.
+        run: ./scripts/staging.sh harden-egress
+
+      - name: the isolation matrix
+        # No `--passWithNoTests`, unlike every other lane. A gate that passes when
+        # it found nothing to run is not a gate — and this is the one suite where
+        # "no tests ran" and "no attack succeeded" must never look the same.
+        run: pnpm --filter @corebase/isolation-tests exec vitest run --reporter=basic
+
+      - name: what a failure here means
+        if: failure()
+        run: |
+          echo '::error::TENANT ISOLATION FAILED — this freezes all releases (D-085).'
+          echo 'A red isolation suite is Sev-1. Any test returning another project'\''s'
+          echo 'rows or bytes is the highest severity there is.'
+          echo
+          echo 'The freeze is fleet-wide and covers every pending change, not only'
+          echo 'the one that turned this red: while isolation is provably broken we'
+          echo 'cannot reason about which change is safe to ship. It lifts when this'
+          echo 'job is green again.'
+          echo
+          echo 'An isolation test may never be marked flaky-skip. A nondeterministic'
+          echo 'one is itself a Sev-2 bug — in the test or in the boundary. Fix it or'
+          echo 'remove it, never mute it.'
+
   integration:
     # Sharded because the lane was sixteen minutes of almost entirely one thing:
     # ~130 tests that each provision a real Postgres container, at ~6s of `initdb`
@@ -173,6 +263,13 @@ jobs:
       - name: object store — bucket, TLS, and egress from a project network
         run: ./scripts/staging.sh backup-store
 
+      # D-081's egress default-deny. After `backup-store`, which is not an
+      # ordering nicety: the allowlist needs the object store's address, and
+      # applying the deny without it would block WAL archiving — a failure that is
+      # slow, silent and looks like a backup bug rather than a firewall one.
+      - name: egress default-deny on the data node
+        run: ./scripts/staging.sh harden-egress
+
       # The email sink (P4d). Its own step for the same reason backup-store is
       # one: it emits the environment the sender needs and it *proves the path* —
       # an SMTP conversation that ends with the message visible in the sink, not
@@ -206,6 +303,18 @@ jobs:
             exit 1
           fi
           echo "✓ every .e2e.test.ts lives in a package this matrix covers"
+          # The symmetric half, for the isolation suite. Its files are
+          # `.isolation.test.ts` and are run by the `isolation` job below, not by
+          # this matrix — so one written anywhere else would be a *release gate*
+          # that nothing runs, which is strictly worse than a missing test because
+          # the gate would report green.
+          strayiso="$(git ls-files '*.isolation.test.ts' | grep -v '^tests/isolation/' || true)"
+          if [ -n "$strayiso" ]; then
+            echo "These isolation tests are outside tests/isolation, so the gate never runs them:"
+            echo "$strayiso"
+            exit 1
+          fi
+          echo "✓ every .isolation.test.ts is inside the release gate"
 
       - name: run this lane
         run: |
