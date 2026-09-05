@@ -45,6 +45,22 @@ const PG = 'cb-p5d-pg';
 const PGRST = 'cb-p5d-pgrst';
 const PGRST_PORT = Number(process.env.CB_P5D_PORT ?? 7489);
 const ADMIN_PORT = PGRST_PORT + 1;
+/**
+ * The customer connection's host port, and it is deliberately **not**
+ * `PGRST_PORT + 2`.
+ *
+ * That arithmetic put it on 7491, which is `postgrest.e2e`'s PostgREST port —
+ * and both files run in the same package, so a shard holding both had two
+ * containers claiming one port. It also sat inside the allocator's own PostgREST
+ * range (7433–7492, P5b), so any provisioned project in the same lane could take
+ * it. On CI it surfaced as `Connection terminated unexpectedly`, which names
+ * nothing about ports.
+ *
+ * A Postgres listener belongs in the *project Postgres* range (5433–5462), and
+ * the top of it is the safest slot: the placement allocator fills bottom-up, so
+ * the last address is the last one a real project will be given.
+ */
+const PG_HOST_PORT = Number(process.env.CB_P5D_PG_PORT ?? 5462);
 const DOMAIN = 'corebase.test';
 const REF = 'p5dcookbookrefaa';
 
@@ -110,6 +126,29 @@ function expectStatus(
   }
 }
 
+/**
+ * Connects with a short retry, and says what it was doing if it never succeeds.
+ *
+ * The port is published by the data node, not by the container, so there is a
+ * gap between "the container is running" and "the host can reach it". A single
+ * attempt turns that gap into `Connection terminated unexpectedly` — a message
+ * that says nothing about which port, which role, or whether the database was
+ * even up.
+ */
+async function connectWithRetry(client: Client, who: string): Promise<void> {
+  let last: Error | undefined;
+  for (let i = 0; i < 20; i++) {
+    try { await client.connect(); return; } catch (err) {
+      last = err as Error;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+  throw new Error(
+    `could not connect as ${who} to 127.0.0.1:${PG_HOST_PORT} — ${last?.message}. `
+    + 'That port must be inside a range the data node publishes and must not be '
+    + 'claimed by another suite or by a provisioned project.');
+}
+
 /** As the superuser: this is the platform migration's voice, never a customer's. */
 async function sql(statements: string): Promise<string> {
   const r = await docker.execCapture(
@@ -135,7 +174,7 @@ beforeAll(async () => {
       HostConfig: {
         Memory: 512 * 1024 * 1024, MemorySwap: 512 * 1024 * 1024, NanoCpus: 1e9,
         RestartPolicy: { Name: 'no' }, Mounts: [],
-        PortBindings: { '5432/tcp': [{ HostPort: String(PGRST_PORT + 2) }] },
+        PortBindings: { '5432/tcp': [{ HostPort: String(PG_HOST_PORT) }] },
       },
       ExposedPorts: { '5432/tcp': {} },
       NetworkingConfig: { EndpointsConfig: { [NET]: {} } },
@@ -168,16 +207,16 @@ beforeAll(async () => {
     // subject of the posture block below, and a replica of that DDL here would be
     // free to drift away from the thing customers actually get.
     const su = new Client({
-      host: '127.0.0.1', port: PGRST_PORT + 2, database: 'postgres',
+      host: '127.0.0.1', port: PG_HOST_PORT, database: 'postgres',
       user: 'postgres', password: 'p5dsmoke', connectionTimeoutMillis: 8000 });
-    await su.connect();
+    await connectWithRetry(su, 'postgres');
     await ensureDeveloperRole(su);
     await su.query(`ALTER ROLE developer WITH PASSWORD 'p5ddev'`);
     await su.end();
     dev = new Client({
-      host: '127.0.0.1', port: PGRST_PORT + 2, database: 'postgres',
+      host: '127.0.0.1', port: PG_HOST_PORT, database: 'postgres',
       user: 'developer', password: 'p5ddev', connectionTimeoutMillis: 8000 });
-    await dev.connect();
+    await connectWithRetry(dev, 'developer');
 
     await docker.createContainer(PGRST, {
       Image: PGRST_IMAGE,
