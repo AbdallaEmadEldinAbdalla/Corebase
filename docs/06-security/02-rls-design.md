@@ -152,13 +152,19 @@ with check ( author_id = (select auth.uid()) );
 
 Policies are OR-combined per command: `authenticated` reads published articles *or* (with an additional own-rows select policy) their own drafts.
 
-**5. Soft-delete-aware.** With a `deleted_at` column, hide tombstones from reads while letting owners tombstone via UPDATE — and forbid resurrecting or hard-deleting:
+**5. Soft-delete-aware.** With a `deleted_at` column, hide tombstones from reads while letting owners tombstone via UPDATE — and forbid resurrecting or hard-deleting.
+
+**The obvious version of this pattern does not work through the API, and the reason generalises to every policy set** (D-386). Filtering tombstones in the *SELECT policy* — `using (deleted_at is null and user_id = ...)` — makes the tombstoning UPDATE fail with `new row violates row-level security policy`: PostgREST issues its writes with `RETURNING`, so Postgres also applies the **SELECT** policy to the **new** row, and the whole purpose of the update is to move that row out of the SELECT policy's reach. No `Prefer` value avoids it — `return=minimal`, `return=representation` and `count=none` all fail identically (verified).
+
+The rule to carry away: **an UPDATE may not move a row outside its own SELECT policy.** Hide rows in a view, not in the read policy:
 
 ```sql
-create policy "read live rows"
+-- Reads: own rows, in any state. Deliberately NOT filtered on deleted_at, or the
+-- tombstoning UPDATE below cannot return its own new row.
+create policy "read own notes"
 on public.notes for select
 to authenticated
-using ( deleted_at is null and user_id = (select auth.uid()) );
+using ( user_id = (select auth.uid()) );
 
 create policy "soft delete own"
 on public.notes for update
@@ -167,7 +173,16 @@ using      ( user_id = (select auth.uid()) and deleted_at is null )
 with check ( user_id = (select auth.uid()) );
 
 -- no DELETE policy at all: hard delete is impossible via the API
+
+-- Tombstones are hidden here instead. `security_invoker` (PG15+) makes the view
+-- run with the *caller's* RLS, so the policy above still applies through it —
+-- without it the view would run as its owner and become a bypass.
+create view public.live_notes with (security_invoker = true) as
+  select id, user_id, body from public.notes where deleted_at is null;
+grant select on public.live_notes to authenticated;
 ```
+
+Clients read `live_notes` and write `notes`. Resurrection is still impossible — the UPDATE policy's `USING` requires `deleted_at is null`, so a tombstoned row is not a legal target — and so is hard delete, because no DELETE policy exists at all.
 
 ### Performance pitfalls and fixes
 
