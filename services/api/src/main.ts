@@ -13,6 +13,9 @@ import { createRateLimiter, createMemoryRateLimiter } from './kernel/rate-limit.
 import type { ProjectAuthDeps } from './modules/project-auth/routes.ts';
 import { createMailer } from './modules/project-auth/mailer.ts';
 import { createTrafficMeter } from './modules/project-auth/traffic.ts';
+import { createRoutingTable } from './modules/gateway/routing.ts';
+import type { GatewayDeps } from './modules/gateway/routes.ts';
+import { SECRET_NAMES } from '@corebase/secrets';
 import { createAuthEmailQueue } from '@corebase/queue';
 import type { AuthDeps } from './modules/auth/routes.ts';
 import { createOrgStore } from './modules/orgs/store.ts';
@@ -258,6 +261,91 @@ if (process.env.CB_STATIC_TOKEN) {
   }
 }
 
+/**
+ * The data-plane gateway (P5c). Registered only with a control-plane database and
+ * a secret store, for the reason `projectAuth` is: with neither there are no
+ * projects to route to and no keys to validate against, and a `/rest/v1/*` that
+ * exists and 503s is worse than one that 404s — a client codes against it.
+ *
+ * It reuses `projectAuth`'s pool. The routing table refreshes on a timer and is
+ * off the hot path entirely (D-051), so its query load is one fleet-wide SELECT
+ * every ten seconds regardless of traffic; a second pool would buy nothing and
+ * spend connections the control plane needs.
+ */
+const gateway: GatewayDeps | undefined = await (async () => {
+  if (!projectAuth || !secretsForApi) return undefined;
+  const secrets = secretsForApi;
+  const limiter = (limit: number, windowSeconds: number) => (redisUrl
+    ? createRateLimiter(createRedis(redisUrl), { limit, windowSeconds })
+    : createMemoryRateLimiter({ limit, windowSeconds }));
+  const routes = createRoutingTable({
+    pool: projectAuth.pool,
+    // The active key is envelope-encrypted in the secret store, so unlike the
+    // published set it cannot come from the fleet query. Missing pieces yield
+    // `undefined` rather than throwing: a project mid-provision has rows before
+    // it has keys, and one such project must not fail the refresh for the fleet.
+    activeKey: async (projectId) => {
+      const [pem, kid] = await Promise.all([
+        secrets.get(projectId, SECRET_NAMES.jwtPublicKey),
+        secrets.get(projectId, SECRET_NAMES.jwtKid),
+      ]);
+      return pem && kid ? { pem, kid } : undefined;
+    },
+    onError: (err) => console.error(JSON.stringify({
+      level: 'error', service: 'api', msg: 'routing table refresh failed', error: err.message })),
+  });
+  await routes.refresh();
+  routes.start();
+  return {
+    routes,
+    // No default. A guessed domain would make every Host resolve to a wrong ref
+    // or none, and the failure ("no such project" for a project that exists) says
+    // nothing about the cause.
+    projectDomain: process.env.CB_PROJECT_DOMAIN ?? '',
+    // D-033's three layers. Per-IP catches a single noisy source, per-key catches
+    // one leaked credential, per-project is the plan's own ceiling — and they are
+    // separate because each answers a different question about who to slow down.
+    ipLimiter: limiter(Number(process.env['CB_GW_IP_RPS'] ?? 200), 10),
+    keyLimiter: limiter(Number(process.env['CB_GW_KEY_RPS'] ?? 500), 10),
+    projectLimiter: limiter(Number(process.env['CB_GW_PROJECT_RPS'] ?? 1000), 10),
+    // Shared with `/auth/v1/*` deliberately: one project's activity is one
+    // signal, and two meters would each see half the traffic and both conclude
+    // the project is quieter than it is.
+    ...(projectAuth.traffic ? { traffic: projectAuth.traffic } : {}),
+    /**
+     * Auto-resume (D-131) goes through the control plane's own lifecycle path
+     * rather than pushing a job. That path owns the `paused → resuming`
+     * transition, the in-flight dedupe that collapses a burst of requests into
+     * one job, and the audit row. A direct push would skip all three — and the
+     * burst arriving the instant a paused project is touched is exactly the case
+     * the dedupe exists for.
+     */
+    ...(enqueue && store.requestLifecycle
+      ? {
+          resume: async (ref: string) => {
+            const result = await store.requestLifecycle!(ref, 'resume');
+            // `undefined` is an unknown project and `conflict` a project already
+            // resuming or ready — both mean there is nothing to enqueue, and
+            // neither is an error worth logging on a data-plane hot path.
+            if (!result || 'conflict' in result || result.alreadyRequested) return;
+            await enqueue({
+              job_row_id: result.job.id, idempotency_key: result.job.idempotency_key,
+              job_type: result.job.kind, project_id: result.project.id,
+            });
+          },
+        }
+      : {}),
+    onError: (err, ctx) => console.error(JSON.stringify({
+      level: 'error', service: 'api', msg: 'gateway upstream error',
+      error: err.message, ...ctx })),
+  };
+})();
+if (gateway && !gateway.projectDomain) {
+  console.warn(JSON.stringify({ level: 'warn', service: 'api',
+    msg: 'CB_PROJECT_DOMAIN is unset — every /rest/v1 request will 404 because no '
+       + 'Host can resolve to a ref. Set it to the domain projects are served under.' }));
+}
+
 // Unset means no browser may call this API. See kernel/cors.ts: a localhost
 // default would be a production hole the first time someone forgot the variable.
 const corsOrigins = parseOrigins(process.env.CB_DASHBOARD_ORIGINS);
@@ -305,12 +393,18 @@ const app = buildApp({
     : {}),
   ...(actorUserId ? { actorUserId } : {}),
   ...(enqueue ? { enqueue } : {}),
+  ...(gateway ? { gateway } : {}),
 });
 // Said out loud at boot, because "the dashboard cannot log in" and "CORS is off"
 // look nothing alike from the browser's console.
 app.log.info({ corsOrigins }, corsOrigins.length
   ? 'browser origins allowed'
   : 'no browser origins allowed (set CB_DASHBOARD_ORIGINS)');
+
+// The routing table owns an interval. `unref` keeps it from holding the process
+// open on its own, but an explicit stop is what makes a close deterministic
+// rather than dependent on when the timer next fires.
+app.addHook('onClose', async () => { gateway?.routes.stop(); });
 
 app.listen({ port, host: '0.0.0.0' }).catch((err) => {
   app.log.error(err);

@@ -28,8 +28,15 @@ export interface GatewayDeps {
   ipLimiter: RateLimiter;
   keyLimiter: RateLimiter;
   projectLimiter: RateLimiter;
-  /** Wakes a paused project. Absent means a paused project stays 503 forever. */
-  resume?: ((projectId: string) => Promise<void>) | undefined;
+  /**
+   * Wakes a paused project. Absent means a paused project stays 503 forever.
+   *
+   * Keyed by `ref`, not id: the control plane's lifecycle path is keyed on ref,
+   * and it is that path — the state transition, the in-flight dedupe, the audit
+   * row — that a resume must go through. A raw queue push would skip all three
+   * and leave a project running with a status that says `paused`.
+   */
+  resume?: ((ref: string) => Promise<void>) | undefined;
   /** P5a's signal: this project served data-plane traffic. */
   traffic?: { seen(projectId: string): void } | undefined;
   /** Overridable so tests can point at a local PostgREST. */
@@ -125,7 +132,7 @@ export function registerGateway(app: FastifyInstance, deps: GatewayDeps) {
       // per-project idempotency key, so a burst collapses to one job rather than
       // one per request — the reason this sits *after* the rate limits.
       if (deps.resume) {
-        await deps.resume(entry.projectId).catch((err: Error) =>
+        await deps.resume(entry.ref).catch((err: Error) =>
           deps.onError?.(err, { ref: entry.ref, at: 'resume' }));
       }
       // 503 and not a held-open request: the gateway does not block in V1
