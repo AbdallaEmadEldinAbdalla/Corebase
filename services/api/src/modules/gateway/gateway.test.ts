@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { generateKeypair, toJwk, sign } from '@corebase/jwt';
 import { buildApp } from '../../app.ts';
 import { createMemoryRateLimiter } from '../../kernel/rate-limit.ts';
-import { refFromHost, type RouteEntry, type RoutingTable } from './routing.ts';
+import { createRoutingTable, refFromHost, type RouteEntry, type RoutingTable } from './routing.ts';
 
 /**
  * P5c — the gateway's admission pipeline (hops 3–6).
@@ -50,7 +50,7 @@ function fixture(over: Partial<RouteEntry> = {}, deps: Record<string, unknown> =
       keyLimiter: createMemoryRateLimiter({ limit: 100, windowSeconds: 60 }),
       projectLimiter: createMemoryRateLimiter({ limit: 100, windowSeconds: 60 }),
       traffic: { seen: (id) => seen.push(id) },
-      resume: async (id) => { resumed.push(id); },
+      resume: async (ref) => { resumed.push(ref); },
       upstreamFor: () => 'http://upstream.invalid',
       ...deps,
     },
@@ -153,7 +153,7 @@ describe('P5c — admission', () => {
     // Retry-After 5 puts an SDK's retries at ~5/10/15s, riding the p50 <5s /
     // p95 <15s resume targets so the first retry lands at the median.
     expect(res.headers['retry-after']).toBe('5');
-    expect(resumed).toEqual(['p1']);
+    expect(resumed).toEqual([REF]);
     // And the signal fired *before* the status check: traffic to a paused
     // project is still traffic, and it is the evidence pausing it was wrong.
     expect(seen).toEqual(['p1']);
@@ -193,5 +193,50 @@ describe('P5c — admission', () => {
     expect(res.statusCode).toBe(503);
     expect(res.json().error.code).toBe('service_unavailable');
     await app.close();
+  });
+});
+
+/**
+ * The routing table's own failure modes. Its SQL is exercised live against the
+ * staging schema rather than here (a fake pool proves nothing about column
+ * names), so what these cover is the part live traffic would only reveal as a
+ * mystery 401: what happens when one project's key cannot be loaded.
+ */
+describe('P5c — routing table resilience', () => {
+  const row = (id: string, ref: string) => ({
+    id, ref, status: 'ready', plan: 'free', node_address: '10.0.0.1',
+    postgrest_port: 7433, extra_keys: [], revoked: [],
+  });
+  const poolOf = (rows: unknown[]) =>
+    ({ query: async () => ({ rows }) }) as unknown as Parameters<typeof createRoutingTable>[0]['pool'];
+
+  it('reports a key that cannot be loaded instead of silently serving none', async () => {
+    const errors: string[] = [];
+    const table = createRoutingTable({
+      pool: poolOf([row('p1', 'aaaaaaaa')]),
+      activeKey: async () => { throw new Error('KEK unavailable'); },
+      onError: (e) => errors.push(e.message),
+    });
+    await table.refresh();
+    // The project is still routable — the alternative is a refresh that fails
+    // the fleet over one project — but the reason it has no key is now on the
+    // record rather than inferable only from a 401.
+    expect(table.lookup('aaaaaaaa')?.jwks).toHaveLength(0);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('aaaaaaaa');
+    expect(errors[0]).toContain('KEK unavailable');
+  });
+
+  it('one project\'s failure does not cost the fleet its refresh', async () => {
+    const table = createRoutingTable({
+      pool: poolOf([row('p1', 'aaaaaaaa'), row('p2', 'bbbbbbbb')]),
+      activeKey: async (id) => {
+        if (id === 'p1') throw new Error('nope');
+        return { pem: generateKeypair().publicKeyPem, kid: 'k2' };
+      },
+      onError: () => {},
+    });
+    expect(await table.refresh()).toBe(2);
+    expect(table.lookup('bbbbbbbb')?.jwks).toHaveLength(1);
   });
 });

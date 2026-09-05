@@ -105,7 +105,16 @@ export function createRoutingTable(deps: RoutingDeps): RoutingTable {
       const keys: Array<Record<string, unknown>> = [];
       // Active key first: it matches most tokens, and a verifier trying keys in
       // order should try the likely one first.
-      const active = await deps.activeKey?.(r.id).catch(() => undefined);
+      // Reported, not swallowed. A key load that *fails* — an unreachable KEK, a
+      // decrypt error — otherwise looks exactly like a project that has no key,
+      // and both present as every request to that project 401ing with nothing
+      // anywhere saying why. One project's failure must still not fail the
+      // fleet's refresh, so it is caught; it is just not caught silently.
+      const active = await deps.activeKey?.(r.id).catch((err: Error) => {
+        deps.onError?.(new Error(
+          `could not load the active signing key for ${r.ref}: ${err.message}`));
+        return undefined;
+      });
       if (active) keys.push(toJwk(active.pem, active.kid));
       for (const k of r.extra_keys ?? []) keys.push(toJwk(k.pem, k.kid));
 
