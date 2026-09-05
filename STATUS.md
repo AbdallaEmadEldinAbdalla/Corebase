@@ -2968,6 +2968,97 @@ dimensions, the ceiling and the percentage — one run to locate instead of a
 bisect. And `seed-images` refusing to start is why a missing image was a clear
 red rather than a mystery hang. Both are §5 rules paying for themselves.
 
+### P5e — the tenant-isolation suite · done · 38 tests · release-blocking
+
+Proposal §74 — "create projects A and B, prove A cannot touch B, run it
+continuously" — is the single most important test in this repository, because
+tenant isolation is risk #1. `tests/isolation/` turns that paragraph into 38
+executable rows, and **it is a release gate from today** (D-162: retrofitting a
+security gate never happens under launch pressure).
+
+**The suite found four real faults, two of them in controls that had never been
+built.** That is the whole argument for building it now rather than at launch.
+
+| Row | What it found |
+|---|---|
+| API-9 | `kid` was **decorative**. The verifier looped over every published key and ignored the header, so a token naming a kid that exists nowhere was accepted (**D-382**) |
+| API-5 | A claim naming another project was folded into 401. It is now **403**, and the signature is checked *before* the ref so the distinction cannot become an oracle (**D-383**) |
+| NET-4 | **Egress default-deny had never been built.** The open internet was reachable from every project container — exfiltration and mining both need outbound reach, and both had it. Not recorded as a gap anywhere (**D-384**) |
+| NET-3 | And with the FORWARD rules in place, the **Engine API was still reachable** at the default gateway: the node's own bridge address is a *local* destination, so it is INPUT, not FORWARD. Blocking the world while leaving the fleet's control surface open on the near side was the worse of the two holes |
+
+Neither of the last two permitted a cross-tenant read today, and neither would
+have been found by any test that asks the platform what it intends rather than
+what it does.
+
+**The rule that shapes the harness** (**D-380**): assertions may use only the
+surfaces an attacker has — HTTP, the pooler port, a psql session opened with the
+fixture's own advertised credentials. No test reads a container log or host
+firewall state to decide whether an attack was blocked, because a test that
+*observes* through privilege proves the rule exists rather than that it works.
+Privileged setup is legal and confined to the fixture phase: seeding the canary
+needs the superuser, and minting a forged token needs the project's private key.
+
+That minting is the harness's sharpest tool. An attacker cannot sign, so a
+correctly-signed forgery that is *still* refused shows the refusal rests on the
+design rather than on the attacker's inability to sign. API-4 and API-5 rewrite a
+claim to name another project and re-sign it with the real key; API-7 is the
+asymmetric-to-symmetric confusion, signing HS256 with a public key as the HMAC
+secret, which defeats any verifier that picks its algorithm from the token's own
+header.
+
+**Fixtures are provisioned by the real saga, every step in order** (**D-381**) —
+provisioning is part of what the suite claims is isolation-safe, so a fixture
+assembled by hand would test a platform that does not exist. Two projects, six
+containers, about 15 seconds, which is what makes running this per deploy
+affordable. They land on one node because co-tenancy is the interesting case
+(D-084): two projects on separate machines are isolated by the machines.
+
+**Every deny assertion has a positive control**, because this suite's real failure
+mode is passing for the wrong reason. A container with no networking at all
+satisfies every network row, so A must still reach its own database. A pooler that
+refuses everyone satisfies DB-1, so A's own pooler must still serve. The canaries
+assert an exact *set* of ids, never a count — a policy returning the wrong three
+rows passes any count assertion, and "the user saw someone else's row" is the
+entire failure mode.
+
+**Three tests were wrong before they were right, and each looked green or looked
+like a platform bug:**
+
+- The FORCE canary first read the seeded table as `developer` and passed on
+  *permission denied* — a missing grant, which never reaches RLS at all. FORCE
+  could have been off the whole time.
+- Rewritten to use a table the role owns, it then asserted FORCE was applied and
+  failed. That was the **test** being wrong: **D-191** supersedes the FORCE half of
+  D-083 deliberately, because FORCE affects the owner — the customer's own role —
+  and would break the first `INSERT` after the first `CREATE TABLE` on every ORM.
+  The decision log wins (CLAUDE.md), so the test now pins the *decided* posture in
+  both directions, including that the owner **can** read its own table — the half a
+  future change back to FORCE would break.
+- NET-3 read an **empty string** for the node's address twice (no iproute2 in the
+  image; then `strtonum`, a gawk extension, against the image's mawk). Either would
+  have made the reachability check probe nothing while reporting green. Only
+  asserting the *input* to the check caught it.
+
+**The gate** (**D-385**) is its own job, never sharded, and runs without
+`--passWithNoTests`: a shard that silently holds no files reports green, and this
+is the one suite where "no tests ran" and "no attack succeeded" must never look
+alike. A CI guard now also fails if any `*.isolation.test.ts` is written outside
+`tests/isolation/` — such a file would be a release gate nothing runs, which is
+worse than a missing test because the gate still reports green. The guard was
+proven by planting a stray file.
+
+**Verification:** 38/38 against two genuinely provisioned projects — 10 API rows,
+11 canaries, 9 database rows, 8 network rows. The egress hardening was
+regression-checked against the suites it could plausibly have broken: the object
+store is still reachable from a project network, and backup (8), postgrest (11),
+restore and wal (11) pass unchanged.
+
+**Not built, and honestly so:** the storage rows ST-1..4 need Phase 6 — there is
+no storage service to attack yet. The cross-node variant D-084 also wants cannot
+run on a single-node staging substitute. The persistent prod canaries (daily,
+non-destructive) need a prod fleet. All three are in §8 rather than quietly
+dropped from the matrix.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -3500,6 +3591,25 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
 - The projects list paginates with a Load-more rather than a cursor in the URL, so a
   second page of results is not linkable — acceptable while an org has tens of
   projects, and a real gap against gate question 3 at hundreds.
+
+**The isolation matrix is not complete, and the missing rows are named.** ST-1
+through ST-4 (storage-path isolation) need Phase 6: there is no storage service
+to attack. D-084 also asks for a **cross-node** variant alongside the same-node
+one — staging has a single data node, so adjacency is automatic and the cross-node
+path is untested. And the **persistent prod canaries** (daily, non-destructive,
+against the live fleet) need a prod fleet to live on; today only the ephemeral
+staging half of D-084 exists, which proves the build is isolation-safe but not
+that a running system has stayed that way.
+
+**The egress policy is applied by `staging.sh`, not by a node agent.** D-081 makes
+it part of the node baseline, so in production it belongs to the agent at join
+time. Today a node that is brought up without `./scripts/staging.sh harden-egress`
+has no egress control at all, and nothing detects that except the isolation suite
+failing — which is the right detector but the wrong moment. The DNS allowlist is
+also broader than it should be: any host on port 53, rather than the node's
+resolver.
+
+
 
 ## 9. Where to look when you pick this up
 

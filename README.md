@@ -8,7 +8,7 @@ Corebase is a developer-focused Backend-as-a-Service: a developer creates a proj
 
 ## Status
 
-**Milestone 0 and Phases 1–4 complete; Phase 5 in progress** (P5a–P5c: the traffic signal, PostgREST per project, and the gateway in front of it). Phase 4 met two of its three exit criteria; the third needs a real sending domain and cannot be met on Docker.
+**Milestone 0 and Phases 1–4 complete; Phase 5 in progress** (P5a–P5c and P5e: the traffic signal, PostgREST per project, the gateway in front of it, and the tenant-isolation suite now gating releases). Phase 4 met two of its three exit criteria; the third needs a real sending domain and cannot be met on Docker.
 
 **The provisioning spine (Milestone 0).** `POST /v1/projects` returns a real, isolated PostgreSQL 17.5 database on a data node about **2.5 seconds** later, with its own volume, cgroup limits, the full role model, envelope-encrypted credentials, and a connection string you can `psql` into immediately. Twenty consecutive creates are measured end to end.
 
@@ -203,6 +203,35 @@ Running the routing table's query against staging for the first time is what
 caught the fault the tests could not: a signing key that fails to *load* was being
 swallowed, making an unreachable KEK indistinguishable from a project with no key
 — both showing up as every request 401ing with nothing anywhere saying why.
+
+**And now A and B, continuously.** The proposal's §74 asks for two projects and a
+standing proof that one cannot touch the other. `tests/isolation/` is 38 rows of
+that — API, database, network and RLS canaries — and it is a **release gate**:
+red freezes every pending change, not just the one that broke it, because while
+isolation is provably broken there is no reasoning about which change is safe to
+ship.
+
+It is worth saying what it found on its first run, since that is the argument for
+building it now rather than at launch. Two of the four faults were in controls
+that had never been built at all. Arbitrary internet egress was open from every
+project container — exfiltration and mining both need outbound reach and both had
+it — and once that was closed, the node's own Docker API turned out to still be
+reachable at the container's default gateway, because the node's bridge address is
+a *local* destination and never traverses the chain the first fix used. Neither
+was recorded as a gap anywhere. The other two were in the gateway: `kid` was
+decorative, and a token whose claim named a different project was refused for the
+wrong reason.
+
+The harness may only use surfaces an attacker has: HTTP, the pooler port, a psql
+session with the project's own advertised credentials. It never reads a container
+log or a firewall rule to decide whether an attack was blocked — that would prove
+the rule exists, not that it works. What it *does* hold, in setup only, is each
+project's private key, so it can mint forgeries no attacker could: a claim
+rewritten to name the neighbour and re-signed correctly, refused anyway.
+
+Every deny has a positive control beside it, because the failure mode of a suite
+like this is passing for the wrong reason. A container with no networking passes
+every network row; a pooler that refuses everyone passes the credential row.
 
 ## Run it
 
