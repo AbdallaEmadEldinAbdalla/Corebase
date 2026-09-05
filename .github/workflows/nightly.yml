@@ -42,6 +42,14 @@ jobs:
           - { name: 'T7 — lifecycle residue loop',   task: lifecycle }
           - { name: 'T8 — node reboot drill',        task: node-reboot }
           - { name: 'T5f — provisioning measurement', task: bench }
+          # P5f. Nightly rather than per-PR, per the testing strategy: it wants a
+          # quiet machine and thirty seconds of sustained load, and neither
+          # belongs in the path of a pull request. Its blocking assertions are the
+          # hardware-independent ones — error rate, RLS correctness, and the
+          # gateway's *added* cost measured against a direct arm on the same box.
+          # The absolute p50/p99 are reported and not enforced here, because a
+          # shared runner is not a production node (D-388).
+          - { name: 'P5f — data-plane latency budget', task: load }
     steps:
       - uses: actions/checkout@v7
       # No `version` here on purpose: package.json's `packageManager` field is
@@ -98,6 +106,10 @@ jobs:
       - name: numbers, for the record
         if: always() && matrix.drill.task == 'bench'
         run: cat docs/14-roadmap/measurements/m-002-provisioning.json || true
+
+      - name: latency, for the record
+        if: always() && matrix.drill.task == 'load'
+        run: cat docs/14-roadmap/measurements/p5f-latency.json || true
 
       - name: tear down
         if: always()
