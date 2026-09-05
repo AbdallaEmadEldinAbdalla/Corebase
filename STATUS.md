@@ -2821,6 +2821,101 @@ Its first version ran a scan merely to assert the project *was* a candidate, and
 that scan paused it — a setup step with the very side effect the test exists to
 prevent. The comparison needs no such ordering and proves more.
 
+### P5b — PostgREST, a third container per project · done · 6 tests
+
+The data API itself. PostgREST 12.2.3 (D-011), one container per project (D-101,
+a direct connection rather than through the pooler), reloading its schema cache
+on `NOTIFY` (D-100) rather than on a timer.
+
+**Five failures in sequence, and the useful thing is that four were invisible to
+`docker build`.** An em dash in a config comment killed the process at startup —
+the base image's locale is POSIX, so a non-ASCII byte in a file it reads is
+`invalid argument`. An apostrophe inside a `${VAR:?message}` default broke the
+entrypoint at EOF while the image still built cleanly. `information_schema` was
+revoked from `PUBLIC` by P1b's hardening, so PostgREST could not introspect and
+answered 503 forever with a message about neither. Granting `USAGE` on the
+`corebase` schema turned out not to grant `EXECUTE` on the function in it, and
+the pre-request hook failed the request it was supposed to annotate. And the data
+node published no port for the range the placement had picked.
+
+Each was a build that succeeded and a container that would not serve. What made
+them tractable was making the failure path print what it already held —
+`waitPostgrestHealthy` now dumps PostgREST's own log on timeout, which turned
+"unhealthy" into the actual message in one run instead of five.
+
+**Verification:** 6 integration tests against a real container — the identity
+pipeline end to end (anon sees nothing, `authenticated` sees only its own rows,
+`service_role` bypasses), the schema-cache reload firing on DDL, the pre-request
+hook stamping the request id into `application_name`, and the container surviving
+a pause/resume cycle with its port intact.
+
+### P5c — the gateway · done · 13 unit + 5 integration
+
+Hops 3–7 of the request pipeline: resolve the project, validate the apikey,
+apply three rate-limit layers, proxy to that project's PostgREST. The mandate is
+a **negative** one, and stating it that way is the point — every future feature
+will want to violate it. No query parsing, no control-plane query on the hot
+path, no response-body inspection, no customer data. The hot path is a map
+lookup, one ES256 verification, three Redis buckets and a proxy.
+
+**The routing table is in memory because of blast radius, not speed** (**D-376**).
+A gateway that queried per request would make every customer's data API depend on
+the control plane being up, so one control-plane incident would take out the
+fleet. In memory, a control-plane outage costs *changes* — new projects,
+rotations, resumes — and nothing already running. The staleness that buys is safe
+per field: status is the one that matters and its window matches the cache and
+retry windows already in front of it; keys are stale in the safe direction by
+construction, since P4h publishes before it signs precisely so verifiers may lag;
+ports change only on a re-placement, which cannot happen while a project runs.
+
+**The order of the admission checks is the design** (**D-377**), and each is a
+denial of service on somebody else if it moves. Resolution before key validation,
+because a key cannot be checked against a project not yet identified. Key
+validation before rate limiting, so an unauthenticated flood cannot spend a valid
+key's budget. Rate limiting before the paused check, so a burst at a paused
+project cannot enqueue one resume per request.
+
+The `Host` header is an unverified assertion — anyone can send any Host — so
+resolving it is only half the job: the apikey's `ref` claim must match the
+resolved project, and *that* is what turns an assertion into an identity. Neither
+half is sufficient alone. Auto-resume goes through the control plane's own
+lifecycle path rather than pushing a job (**D-378**), because that path owns the
+`paused → resuming` transition, the in-flight dedupe and the audit row — and the
+burst arriving the instant a paused project is touched is exactly what the dedupe
+is for.
+
+**Verified live, and the live check found what the tests could not.** The e2e
+suite builds its routing table by hand, so `createRoutingTable`'s SQL had never
+run against the real schema — a column typo there would have passed every test
+and failed only in production. Running it against the staging control plane
+proved the query, and turned up that a failing `activeKey` was caught silently:
+an unreachable KEK and a project with no key were indistinguishable, and both
+present as *every request 401ing with nothing anywhere saying why*. It now
+reports through `onError` while still not failing the fleet's refresh over one
+project (**D-379**). Booting the wired `main.ts` against staging confirmed the
+rest: an unknown host 404s, a real ref reaches hop 4, `evil-corebase.test` is
+refused by the suffix check in the production wiring and not merely in a unit
+test, and the control plane is untouched.
+
+**Verification:** 13 unit tests (a forged key, a key naming another project, a
+user token in the apikey slot, a revoked key, a paused project answering 503 while
+still recording traffic and enqueueing exactly one resume per *admitted* request,
+and the routing table reporting rather than swallowing a key it cannot load) plus
+5 against a real PostgREST — a real hop, D-109's injection, the verbatim body,
+the query string reaching a gateway that deliberately cannot parse it, and the
+request id arriving in `application_name` through both hops.
+
+One assertion was wrong and instructive: it expected a `PGRST` code for an unknown
+relation and got the Postgres SQLSTATE `42P01`. The contract is "PGRST/SQLSTATE" —
+both are upstream's to choose and neither is ours to normalise — so it now accepts
+either, which is what the doc actually promises.
+
+**A process gap worth recording:** P5b was committed without its STATUS and
+README entries, which rule 2 of the definition of done exists to prevent. Both
+were written afterwards, from the commits and the code. Nothing was lost, but the
+rule was broken and the entry says so rather than reading as though it were
+written at the time.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real

@@ -8,7 +8,7 @@ Corebase is a developer-focused Backend-as-a-Service: a developer creates a proj
 
 ## Status
 
-**Milestone 0 and Phases 1–4 complete.** Phase 4 met two of its three exit criteria; the third needs a real sending domain and cannot be met on Docker.
+**Milestone 0 and Phases 1–4 complete; Phase 5 in progress** (P5a–P5c: the traffic signal, PostgREST per project, and the gateway in front of it). Phase 4 met two of its three exit criteria; the third needs a real sending domain and cannot be met on Docker.
 
 **The provisioning spine (Milestone 0).** `POST /v1/projects` returns a real, isolated PostgreSQL 17.5 database on a data node about **2.5 seconds** later, with its own volume, cgroup limits, the full role model, envelope-encrypted credentials, and a connection string you can `psql` into immediately. Twenty consecutive creates are measured end to end.
 
@@ -169,6 +169,40 @@ The auth module walked straight past it. The tripwire watched for a third *conta
 The fix needed no change to the scan at all: the signal writes `last_active_at`, which is the column the scan already filters candidates on, so a project touched by traffic simply stops being a candidate. It's a throttled write to Postgres rather than a counter in Redis, because a lost timestamp fails in the dangerous direction — it reads as *idle*.
 
 The test is a controlled comparison: two identical projects, both backdated a month, one scan, and the traffic signal the only difference. One stays ready; its twin pauses.
+
+**Every project now has a data API, and a gateway in front of it.** PostgREST runs
+as a third container per project, connected directly to that project's Postgres
+and reloading its schema cache on `NOTIFY` rather than on a timer. Five failures
+stood between the image building and the container serving, and four of them were
+invisible to `docker build`: an em dash in a config comment (the base image's
+locale is POSIX, so a non-ASCII byte is `invalid argument`), an apostrophe inside a
+shell default that broke the entrypoint at EOF, `information_schema` revoked from
+`PUBLIC` by the Phase 1 hardening so introspection 503'd forever, a schema `USAGE`
+grant that does not imply `EXECUTE` on the function inside it, and a port the data
+node never published. What made them tractable was printing PostgREST's own log on
+a health-check timeout — one run instead of five.
+
+The gateway is deliberately thin: resolve the project from the Host, validate the
+apikey, apply three rate-limit layers, proxy. It parses no queries, inspects no
+response bodies, holds no customer data, and — the one that matters most — makes
+**no control-plane query on the hot path**. Its routing table lives in memory and
+refreshes on a timer, which is about blast radius rather than speed: a gateway
+that queried per request would make every customer's data API depend on the
+control plane being up. In memory, a control-plane outage costs new projects and
+rotations, not the fleet.
+
+The order of its checks is the design. Resolve before validating a key, because a
+key can't be checked against an unidentified project; validate before rate
+limiting, so an unauthenticated flood can't spend a valid key's budget; rate-limit
+before the paused check, so a burst at a paused project can't enqueue one resume
+per request. And because a `Host` header is an unverified assertion — anyone can
+send any Host — resolving it is only half of identity: the apikey's own `ref`
+claim must match the project it resolved to.
+
+Running the routing table's query against staging for the first time is what
+caught the fault the tests could not: a signing key that fails to *load* was being
+swallowed, making an unreachable KEK indistinguishable from a project with no key
+— both showing up as every request 401ing with nothing anywhere saying why.
 
 ## Run it
 
