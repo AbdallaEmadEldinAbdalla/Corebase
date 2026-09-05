@@ -2916,6 +2916,58 @@ were written afterwards, from the commits and the code. Nothing was lost, but th
 rule was broken and the entry says so rather than reading as though it were
 written at the time.
 
+### CI repair after P5b — one omission, and three faults it uncovered · 8/8 green
+
+P5b went in red and stayed red for four pushes. The omission was small; what it
+exposed was not.
+
+**The omission:** P5b made `corebase/postgrest:12.2` mandatory and never taught
+either workflow to build it. `seed-images` refused to run, which is the guard
+doing its job — the failure landed on the commit that added the requirement
+rather than as a timeout deep inside provisioning.
+
+**Its remediation line was wrong.** The guard's `case` matched `*postgres*`
+before `*postgrest*`, and "postgrest" contains "postgres", so the specific arm
+was dead code and every run named the wrong image and the wrong directory. A
+shell `case` is first-match; the looser pattern must never come first.
+
+**The image was not the same image on every architecture.** The build then failed
+on CI with `unable to find user root: no matching entries in passwd file`, from a
+Dockerfile that builds cleanly on an arm64 laptop. The official PostgREST image is
+Ubuntu-based on arm64 and a *single scratch layer* on amd64 — no shell, no
+`/etc/passwd`, no apt — so `USER root` names a user that does not exist. The
+binary is now copied onto a base we choose, which is portable, gives the
+entrypoint its shell and `gosu`, and makes the uid it drops to ours rather than
+the base image's. `RUN postgrest --version` inside the build proves the binary
+runs there instead of deferring that to a container that will not start.
+
+**And a dormant ordering dependency surfaced on an unrelated commit.** Vitest
+shards by file, so *adding* `postgrest.e2e.test.ts` reshuffled which files share a
+shard. Two files had been inheriting node state instead of declaring it:
+`registerNode` is a heartbeat and deliberately does not reset `status` — one that
+did would silently revert an operator draining a node — so a node cordoned by
+`placement.e2e` (which cordons with no WHERE clause) stayed cordoned for every
+file that ran after it. Fixing the status then moved the same five failures onto
+`disk_reserved_gb`, still at 190 of 200 GB: **normalising one dimension of a
+shared fixture is not normalising it.**
+
+**A project is three containers now**, and T8's exact-count assertion still said
+two. It stays exact rather than becoming a floor, for the same reason the idle
+scan's tripwire is exact: a fourth container should have to come here and say what
+it means for drift.
+
+**Verification:** every fix reproduced before it was made. The cordoned-node
+failure was reproduced by cordoning the staging nodes by hand; the disk failure by
+inserting a node at 7000/8192 MB and 190/200 GB, which fails all five with CI's
+exact message on the old code and passes 5/5 on the new one. The image was built
+for both `linux/amd64` and `linux/arm64`, and the 11-test live suite re-run
+against the rebuilt image since its base changed underneath it. CI is 8/8.
+
+Two things earned their keep. The placement error printed the node, both
+dimensions, the ceiling and the percentage — one run to locate instead of a
+bisect. And `seed-images` refusing to start is why a missing image was a clear
+red rather than a mystery hang. Both are §5 rules paying for themselves.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -2972,6 +3024,18 @@ inside.
 **Commits are split and tagged with the step.** `feat(M0/T5d): …`,
 `fix(M0/T5e): …`, `docs(M0/T5f): …`. One concern per commit, and the message says
 *why*, including what the alternative would have broken.
+
+**A test file declares the fixture it needs; it never inherits one.** Vitest
+shards by file, so adding a file reshuffles which files share a shard — and a
+dormant coupling then surfaces as a red CI on a commit that has nothing to do with
+it. Shared rows (`nodes` above all) must be normalised in `beforeEach`, in *every*
+dimension: status, RAM and disk. Normalising one of three just moves the failure.
+
+**A base image is not the same image on every architecture.** `FROM` inherits
+whatever the registry serves for the builder's platform, and "it built on my
+machine" says nothing about the other one. An image whose userland matters should
+build *from a base we choose* and copy in what it needs, and should exercise the
+thing it copied during the build.
 
 ## 6. Decisions made while building (not from the plan)
 
