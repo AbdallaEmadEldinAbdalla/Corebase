@@ -1,0 +1,35 @@
+{
+  "at": "2026-09-05T15:59:19.962Z",
+  "strict": false,
+  "vus": 10,
+  "duration": "20s",
+  "host": {
+    "platform": "darwin",
+    "cpus": 10
+  },
+  "smoke": {
+    "reqs": 15493,
+    "readP50": 6.7929585,
+    "readP99": 62.23066574999999,
+    "writeP50": 7.719083,
+    "writeP99": 60.74530883999999,
+    "errorRate": 0,
+    "rlsRate": 1
+  },
+  "overhead": {
+    "serial": {
+      "directP50": 1.545625,
+      "gatewayP50": 4.457583,
+      "addedP50": 2.9119579999999994
+    },
+    "concurrent": {
+      "directP50": 2.339667,
+      "gatewayP50": 6.944208,
+      "directP99": 70.22658,
+      "gatewayP99": 74.10215314,
+      "overheadP50": 4.604540999999999,
+      "overheadP99": 3.87557314
+    }
+  },
+  "failures": []
+}

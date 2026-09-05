@@ -14,7 +14,8 @@
     "observability": "node --experimental-strip-types bench/observability.mts",
     "test:unit": "vitest run --exclude '**/*.e2e.test.ts' --passWithNoTests",
     "pause-bench": "node --experimental-strip-types bench/pause.mts",
-    "density": "node --experimental-strip-types bench/density.mts"
+    "density": "node --experimental-strip-types bench/density.mts",
+    "load": "node --experimental-strip-types bench/load.mts"
   },
   "dependencies": {
     "@corebase/types": "workspace:*",
