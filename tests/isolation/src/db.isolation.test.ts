@@ -59,19 +59,48 @@ describe('DB-1 — A\'s database credentials at B\'s pooler', () => {
 });
 
 describe('DB-3 — the auth schema from a customer session', () => {
-  it('is not readable, and cannot be reached by switching role either', async () => {
+  it('exposes the helpers and nothing else: the tables stay unreadable', async () => {
     const c = await connect(A());
     try {
-      // The direct attempt.
+      // The denial moved in P5d, and this assertion moved with it. The customer's
+      // role was given USAGE on `auth` because the entire documented policy
+      // cookbook calls `auth.uid()` and could not be written without it — so this
+      // used to fail at the *schema* and now fails at the *table*.
+      //
+      // That is the boundary being drawn more precisely rather than moved: USAGE
+      // on a schema is the right to name things in it, never the right to read
+      // them. Asserting the exact message is what makes the difference visible;
+      // "it threw" would have called both of these the same result.
       expect(await denied(c, 'select * from auth.users'))
-        .toMatch(/permission denied for schema auth/);
-      // And the obvious escalation: become the role PostgREST uses. A customer
-      // who could `set role authenticated` would inherit whatever the API role
-      // may read, which is a different privilege set than their own.
+        .toMatch(/permission denied for table users/);
+
+      // The helpers, which is the capability that was deliberately added. They
+      // leak nothing: in a psql session there are no request claims, so this is
+      // null rather than somebody's identity.
+      const { rows } = await c.query<{ uid: string | null }>('select auth.uid() as uid');
+      expect(rows[0]!.uid).toBeNull();
+
+      // And the obvious escalation is still refused: a customer who could become
+      // the role a request runs as would inherit a different privilege set than
+      // their own.
       expect(await denied(c, 'set role authenticated'))
         .toMatch(/permission denied to set role/);
     } finally { await c.end(); }
   });
+
+  it('and the token tables in particular are unreadable, since they are the ones worth stealing',
+    async () => {
+      const c = await connect(A());
+      try {
+        // Refresh-token hashes and one-time-token hashes. A grant that reached
+        // these would turn a customer's own database connection into session
+        // takeover for every user of their project.
+        for (const table of ['auth.refresh_tokens', 'auth.one_time_tokens']) {
+          expect(await denied(c, `select * from ${table}`))
+            .toMatch(/permission denied for table/);
+        }
+      } finally { await c.end(); }
+    });
 });
 
 describe('DB-4 to DB-7 — the Postgres privilege fence', () => {
