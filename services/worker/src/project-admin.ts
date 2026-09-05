@@ -159,6 +159,36 @@ export async function ensureDeveloperRole(client: Client): Promise<{ created: bo
   // on — so this grants visibility of their own database, nothing more.
   await client.query(`GRANT USAGE ON SCHEMA information_schema TO ${dev}`);
 
+  // The `auth` helpers, without which **the documented policy cookbook cannot be
+  // written at all** (P5d).
+  //
+  // Every pattern in the cookbook calls `auth.uid()`, and creating a policy that
+  // references it requires USAGE on the schema to resolve the function. The image
+  // grants that to `anon`, `authenticated` and `service_role` — the roles a
+  // *request* runs as — and to nobody else, so the role a customer actually runs
+  // migrations as could not write a single one of them. Found by running the
+  // cookbook verbatim; the error is `permission denied for schema auth` on the
+  // CREATE POLICY, which reads like a platform fault rather than a missing grant.
+  //
+  // USAGE on the schema is not read access to it: `auth.users` and the token
+  // tables have no grant to this role and stay unreadable, which the isolation
+  // suite's DB-3 asserts. The helpers themselves leak nothing — they return the
+  // caller's own request claims, which in a psql session are simply null.
+  await client.query(`GRANT USAGE ON SCHEMA auth TO ${dev}`);
+  await client.query(
+    `GRANT EXECUTE ON FUNCTION auth.jwt(), auth.uid(), auth.role() TO ${dev}`);
+
+  // CREATE on the database, for schemas.
+  //
+  // The cookbook's SECURITY DEFINER membership helper lives in an `app` schema,
+  // and `create schema app` failed with `permission denied for database postgres`
+  // — so that pattern was unreachable too. A customer creating schemas is
+  // ordinary: PostgREST exposes `public` only, so a new schema is invisible to
+  // the API until someone configures it, and a SECURITY DEFINER function the
+  // customer creates runs as the *customer*, which escalates nothing.
+  await client.query(
+    `GRANT CREATE ON DATABASE ${identifier(await currentDatabase(client))} TO ${dev}`);
+
   // API-facing roles see what developer creates (D-108's asymmetry preserved:
   // anon gets nothing by default).
   await client.query(
@@ -169,6 +199,12 @@ export async function ensureDeveloperRole(client: Client): Promise<{ created: bo
        GRANT USAGE, SELECT ON SEQUENCES TO authenticated, service_role`);
 
   return { created };
+}
+
+/** The connected database's name, for a GRANT that must name it explicitly. */
+async function currentDatabase(client: Client): Promise<string> {
+  const { rows } = await client.query<{ db: string }>('SELECT current_database() AS db');
+  return rows[0]!.db;
 }
 
 /** Set a role's password. Idempotent by nature — the same value re-applied. */
