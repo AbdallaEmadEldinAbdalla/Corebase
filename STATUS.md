@@ -3127,6 +3127,78 @@ child row is readable and only the parent is policy-scoped, so an embed that
 ignored the parent's policy would surface the other user's name; it returns null.
 Isolation stayed green at 39/39, and credentials + auth-schema (34) unchanged.
 
+### P5f — the latency budget under k6 · done · budget met, one real regression fixed
+
+Phase 5's third exit criterion. `tests/load/` holds the k6 scripts, `pnpm --filter
+@corebase/worker load` stands up the real thing — the real API process with the
+gateway wired, a project provisioned by the real saga, 4000 rows behind a real
+RLS policy — and it is the nightly's fifth drill.
+
+**Result:** read **p50 6.79 ms** against a 20 ms budget and **p99 62 ms** against
+100 ms, zero errors and 100% RLS correctness across ~15,500 requests. The origin
+budget holds.
+
+**The measurement found a real regression, and the harness's first version found
+nothing at all.** Both are worth recording, because the second is the more
+instructive.
+
+**The harness reported a beautiful 0.9 ms p50 across 47,351 requests — every one
+of them a 403.** It had set `CB_JWT_ISSUER` to a flat `https://corebase.test`, so
+every project's keys were minted under an issuer no project's gateway accepts.
+Rejections are fast. **A load test that does not check its own responses measures
+the error path and reports it as the happy path, and the faster the error the
+better the result looks.** Nothing is measured now until one request per arm is
+proven correct — right status, rows actually returned, none of them another
+owner's — and k6's own failed *checks* are listed as run failures ahead of any
+latency number, because a check failure invalidates every number above it.
+
+**The regression: the rate limiter cost six Redis round-trips per request**
+(**D-389**). Each `hit()` issued `INCR` then `TTL` as separate awaits, and the
+gateway makes three checks per request for D-033's layers — 2.06 ms of a measured
+6.5 ms overhead against a budget of ~1.5 ms. It is now one round-trip of three
+commands, with `EXPIRE ... NX` preserving the semantics that matter: the window
+starts at the first attempt and does not slide, or the ceiling would never be
+reached. Verified live against the staging Redis. Overhead at 10 VUs fell from
+6.50 ms to 4.60 ms.
+
+The three checks **stay sequential** even though pipelining them saves another
+~0.9 ms, and that was measured before it was rejected: fired together, every
+bucket counts a request an earlier bucket already refused, so a flood from one IP
+burns the *project's* ceiling on its way to being rejected and denies everyone
+else. Short-circuiting is what stops a rate limit from being an amplifier.
+
+**Which numbers block is the design** (**D-388**, resolving **OQ-151**). Absolute
+latency is a property of the machine, and a threshold that pretends otherwise
+buys a red build whenever the runner is busy — which is how a performance gate
+gets muted, leaving nothing. So the error rate, the RLS-correctness rate and the
+gateway's *added* cost block anywhere; the absolute p50/p99 are reported unless
+`CB_LOAD_STRICT=1` says the hardware is production-shaped. The added cost is the
+only figure in the budget that travels between machines: two arms, same box, same
+interleaved run, so a noisy neighbour hits both equally.
+
+**And it is measured at 1 VU** (**D-390**). At concurrency the gateway is one
+single-threaded Node process while PostgREST is thread-pooled, so the latency gap
+includes event-loop queuing — real for a client, but not the per-request cost the
+doc's figure describes, and enforcing it would enforce a property of the load
+generator. Serial 2.91 ms, concurrent 4.60 ms, both printed.
+
+**Two traps, documented where they bit.** Node's `fetch` treats `Host` as a
+forbidden header and silently drops it, so every preflight request arrived
+announcing `127.0.0.1:8097` and was answered `project_not_found` — while k6, a Go
+program, sent what it was told and resolved the project fine. A guard failing
+where the thing it guards succeeds is the most confusing arrangement available.
+And the A/B first shared one path across both arms: the gateway strips `/rest/v1`
+before proxying, so the direct arm requested a path PostgREST does not have, and
+a 404 is fast — the run reported a 6 ms "overhead" that was the difference
+between a real query and a miss.
+
+**Honest limits.** Cloudflare and the client's own network are the budget's top
+two hops and neither exists here; Caddy is not in the staging stack either, so
+"origin" means the gateway's socket rather than Caddy's — one loopback hop short,
+in the direction that flatters us. The doc's ~1.5 ms gateway figure is not met at
+2.91 ms on a laptop whose Redis round-trips are Docker-forwarded, and whether it
+is achievable at all is now **OQ-184** rather than a silent miss.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -3195,6 +3267,15 @@ whatever the registry serves for the builder's platform, and "it built on my
 machine" says nothing about the other one. An image whose userland matters should
 build *from a base we choose* and copy in what it needs, and should exercise the
 thing it copied during the build.
+
+**A performance test asserts correctness first.** Errors are faster than
+successes, so a benchmark that does not check its responses will happily report
+the latency of a rejection as a record time — and the worse the break, the better
+the number looks. Every load run proves one correct request per arm before it
+measures anything, and treats a failed check as invalidating every latency figure
+above it.
+
+
 
 ## 6. Decisions made while building (not from the plan)
 

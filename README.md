@@ -8,7 +8,7 @@ Corebase is a developer-focused Backend-as-a-Service: a developer creates a proj
 
 ## Status
 
-**Milestone 0 and Phases 1–4 complete; Phase 5 in progress** (P5a–P5e: the traffic signal, PostgREST per project, the gateway in front of it, the tenant-isolation suite now gating releases, and the RLS posture and policy cookbook proven through the gateway). Phase 4 met two of its three exit criteria; the third needs a real sending domain and cannot be met on Docker.
+**Milestone 0 and Phases 1–4 complete; Phase 5 in progress** (P5a–P5f: the traffic signal, PostgREST per project, the gateway in front of it, the tenant-isolation suite now gating releases, the RLS posture and policy cookbook proven through the gateway, and the latency budget measured under k6). Phase 4 met two of its three exit criteria; the third needs a real sending domain and cannot be met on Docker.
 
 **The provisioning spine (Milestone 0).** `POST /v1/projects` returns a real, isolated PostgreSQL 17.5 database on a data node about **2.5 seconds** later, with its own volume, cgroup limits, the full role model, envelope-encrypted credentials, and a connection string you can `psql` into immediately. Twenty consecutive creates are measured end to end.
 
@@ -251,6 +251,32 @@ Running the docs verbatim is the whole technique here. These are the policies
 customers copy, so the value is entirely in not quietly improving them on the way
 into the test — if a pattern needs a fix to work, the documentation is what should
 change.
+
+**And the pipeline is now measured, not assumed.** `tests/load/` runs k6 against a
+real provisioned project through the real gateway: read **p50 6.8 ms** against a
+20 ms budget, **p99 62 ms** against 100 ms, zero errors, and every response
+checked to contain only the caller's own rows.
+
+The first version of that harness is the more useful story. It reported a
+beautiful 0.9 ms p50 across 47,351 requests, every single one of which was a 403 —
+a misconfigured issuer meant the gateway rejected everything, and rejections are
+fast. **A load test that does not check its own responses measures the error path
+and reports it as the happy path**, and the worse the break, the better the number
+looks. Nothing is measured now until one request per arm is proven correct.
+
+With that fixed, the measurement found something real: the rate limiter was making
+six Redis round-trips per request, because each of the three layered checks did an
+`INCR` and a `TTL` as separate calls. One round-trip each now. The three checks
+stay *sequential* though, and that was measured before it was rejected — firing
+them together would save a millisecond, but then a flood from one IP would burn
+the whole project's rate-limit ceiling on its way to being rejected, denying
+everyone else. Short-circuiting is what stops a rate limit from becoming an
+amplifier.
+
+What blocks a build is chosen carefully: absolute latency is a property of the
+machine, so a shared CI runner enforces only what travels between machines — the
+error rate, the RLS correctness, and the gateway's *added* cost measured against a
+direct arm in the same interleaved run.
 
 ## Run it
 
