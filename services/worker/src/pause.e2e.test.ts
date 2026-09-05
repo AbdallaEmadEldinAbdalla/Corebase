@@ -250,6 +250,77 @@ describe('P2c — pause and resume on a real node', () => {
     expect(exitCode, 'the resumed database replayed WAL — the pause was not clean').toBe(0);
   });
 
+  t('EXIT CRITERION (P5b): a provisioned project has three containers and a live data API',
+    async () => {
+      const p = await newProject();
+      await runSaga('provision_project', p.id);
+
+      const { rows } = await pool.query<{
+        postgrest_port: number | null; postgrest_admin_port: number | null;
+        postgrest_container_id: string | null;
+      }>(`select postgrest_port, postgrest_admin_port, postgrest_container_id
+            from project_databases where project_id = $1`, [p.id]);
+      const place = rows[0]!;
+      expect(place.postgrest_container_id).toBeTruthy();
+      // Adjacent by construction, so `7434`/`7435` is recognisable as one
+      // project's while a human reads `docker ps`.
+      expect(place.postgrest_admin_port).toBe(place.postgrest_port! + 1);
+
+      // Three containers, all running and all labelled with the ref — which is
+      // what `verify_gone` lists by, so a container missing the label is one the
+      // purge would leave behind.
+      const running = await docker.listContainers(`com.corebase.project.ref=${p.ref}`);
+      const roles = running.map((c) => c.Labels?.['com.corebase.role']).sort();
+      expect(roles).toEqual(['database', 'pooler', 'postgrest']);
+
+      // And the data API actually answers. `/ready` rather than `/live`: the
+      // failures this catches — a revoked catalogue grant, a missing pre-request
+      // function — all produce a PostgREST that is alive and serving 503.
+      const node = (await pool.query<{ address: string }>(
+        `select n.address from nodes n
+           join project_databases d on d.node_id = n.id where d.project_id = $1`,
+        [p.id])).rows[0]!.address;
+      const ready = await fetch(`http://${node}:${place.postgrest_admin_port}/ready`);
+      expect(ready.status).toBe(200);
+
+      // The restart policy is promoted only after the gate passes (D-184), which
+      // matters more for PostgREST than for the others: it *exits* when it cannot
+      // reach its database, so a policy attached before the gate turns a slow
+      // start into a crash loop that hides the real error.
+      const inspect = await docker.inspectContainer(place.postgrest_container_id!);
+      expect(inspect!.HostConfig?.RestartPolicy?.Name).toBe('unless-stopped');
+    }, 300_000);
+
+  t('EXIT CRITERION (P5b): pause removes the data API, resume brings it back',
+    async () => {
+      const p = await newProject();
+      await runSaga('provision_project', p.id);
+      const before = (await pool.query<{ postgrest_admin_port: number }>(
+        `select postgrest_admin_port from project_databases where project_id = $1`,
+        [p.id])).rows[0]!.postgrest_admin_port;
+
+      await runSaga('pause_project', p.id);
+      // Gone, not merely stopped: a paused project gives its RAM back, and a
+      // stopped-but-present container is a booking nobody credited.
+      expect(await docker.listContainers(`com.corebase.project.ref=${p.ref}`)).toHaveLength(0);
+      const paused = await pool.query<{ postgrest_container_id: string | null }>(
+        `select postgrest_container_id from project_databases where project_id = $1`, [p.id]);
+      expect(paused.rows[0]!.postgrest_container_id).toBeNull();
+
+      await runSaga('resume_project', p.id);
+      // Without the resume steps a resumed project would have a database and a
+      // pooler and **no data API** — fully recovered in the dashboard and
+      // answering nothing on /rest/v1.
+      const roles = (await docker.listContainers(`com.corebase.project.ref=${p.ref}`))
+        .map((c) => c.Labels?.['com.corebase.role']).sort();
+      expect(roles).toEqual(['database', 'pooler', 'postgrest']);
+      const node = (await pool.query<{ address: string }>(
+        `select n.address from nodes n
+           join project_databases d on d.node_id = n.id where d.project_id = $1`,
+        [p.id])).rows[0]!.address;
+      expect((await fetch(`http://${node}:${before}/ready`)).status).toBe(200);
+    }, 300_000);
+
   // ── the idle scan: what actually triggers a pause ─────────────────────────
 
   const idleScan = (idleDays: number) => createIdleScan({

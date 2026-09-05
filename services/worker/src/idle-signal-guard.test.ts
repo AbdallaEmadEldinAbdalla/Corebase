@@ -37,19 +37,27 @@ import { readFileSync, readdirSync } from 'node:fs';
 const SRC = new URL('.', import.meta.url).pathname;
 
 describe('D-236 — the idle signal is only sufficient while there is no data plane', () => {
-  it('a project is still exactly two containers', () => {
+  it('every per-project container that serves traffic is covered by the signal', () => {
     const spec = readFileSync(`${SRC}container-spec.ts`, 'utf8');
-    // The builders that produce a per-project container. A third one means a third
-    // way to use a project.
     const builders = [...spec.matchAll(/export function (build\w*Spec)\b/g)].map((m) => m[1]!);
+    // PostgREST joined in P5b, which is what this assertion was built to stop
+    // happening *before* the traffic signal existed. It exists now (P5a), so the
+    // list grows rather than the tripwire firing — and the list is still checked,
+    // because a fourth builder is a fourth way to use a project and the question
+    // has to be asked again: does the signal see it?
+    //
+    // For PostgREST the answer is yes and by construction: every data-plane
+    // request resolves a project through the gateway, and resolution is where the
+    // signal fires. A container that served traffic *without* passing through
+    // project resolution would be invisible again, which is the thing to check
+    // when this list next changes.
     expect(
       builders.sort(),
-      'A new per-project container appeared. If it serves customer traffic — PostgREST, ' +
-      'auth, storage, a gateway — the idle scan can no longer conclude a project is idle ' +
-      'from database connections alone: HTTP traffic with no direct connections would look ' +
-      'idle and the project would be paused under its users. Implement the traffic signal ' +
-      '(idle-scan.ts already takes a second input) and update D-236 before adding it here.',
-    ).toEqual(['buildContainerSpec', 'buildPoolerSpec']);
+      'A new per-project container appeared. Does data-plane traffic to it pass ' +
+      'through project resolution, where the traffic signal fires (P5a, D-374)? ' +
+      'If not, the idle scan cannot see it and the project will be paused under ' +
+      'its users — wire the signal before adding it here.',
+    ).toEqual(['buildContainerSpec', 'buildPoolerSpec', 'buildPostgrestSpec']);
   });
 
   it('the traffic signal is recorded where the scan already reads it (P5a)', () => {
