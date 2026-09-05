@@ -92,12 +92,28 @@ export function registerGateway(app: FastifyInstance, deps: GatewayDeps) {
       await fail(reply, req, 401, 'invalid_api_key', 'That API key has been revoked.');
       return undefined;
     }
-    if (!verifyApiKey(apikey, entry, deps.projectDomain)) {
-      // One code for a bad signature, a wrong ref and a malformed token. They are
-      // the same answer to the caller, and distinguishing them tells somebody
-      // holding a key from another project which half they got right.
+    const verdict = verifyApiKey(apikey, entry, deps.projectDomain);
+    if (verdict === 'invalid') {
+      // One code for a bad signature, an unresolvable kid, a wrong role and a
+      // malformed token. They are the same answer to the caller, and
+      // distinguishing them tells somebody holding a key from another project
+      // which half they got right.
       await fail(reply, req, 401, 'invalid_api_key',
         'That API key is not valid for this project.');
+      return undefined;
+    }
+    if (verdict === 'mismatch') {
+      // The isolation matrix's API-5. Reaching this needs a token *this project's
+      // own key signed* whose `ref` names a different project — so it says
+      // nothing to an outsider, who cannot get past the signature check to see
+      // it. It is worth its own status precisely because nobody outside can
+      // produce it: a 403 here means the platform minted something inconsistent,
+      // which is our bug and should not be filed under "bad key".
+      //
+      // Project identity comes from the routed Host. A claim that disagrees is
+      // refused rather than believed, in either direction.
+      await fail(reply, req, 403, 'project_mismatch',
+        'That API key was issued for a different project.');
       return undefined;
     }
 
@@ -250,34 +266,70 @@ export function registerGateway(app: FastifyInstance, deps: GatewayDeps) {
  * Every published key is tried, not just the first: P4h's rotation means a valid
  * key may be signed by the outgoing kid for the length of a swap window.
  */
-function verifyApiKey(apikey: string, entry: RouteEntry, domain: string): boolean {
+/**
+ * `ok` — this project's key signed it and it names this project.
+ * `mismatch` — this project's key signed it and it names a *different* project.
+ * `invalid` — everything else.
+ *
+ * The order is the point. The signature is checked **before** the `ref` claim, so
+ * the two outcomes cannot be told apart by anyone who has not already got past
+ * the signature — which means holding this project's key. Checking `ref` first
+ * would be cheaper and would turn the 403 into an oracle: present a token at
+ * every Host until one answers differently, and the difference names the project.
+ *
+ * The issuer is deliberately not bound during verification. It is derived from
+ * `ref`, so binding it would fold the mismatch case back into a signature failure
+ * and lose the distinction; it is checked below instead, alongside `ref`.
+ */
+type KeyVerdict = 'ok' | 'mismatch' | 'invalid';
+
+function verifyApiKey(apikey: string, entry: RouteEntry, domain: string): KeyVerdict {
   let claimedRef: string;
+  let claimedIss: string;
   let role: unknown;
   try {
     const decoded = decodeUnverified(apikey);
     claimedRef = String(decoded.claims['ref'] ?? '');
+    claimedIss = String(decoded.claims['iss'] ?? '');
     role = decoded.claims['role'];
   } catch {
-    return false;
+    return 'invalid';
   }
-  if (claimedRef !== entry.ref) return false;
   // A *user* access token in the apikey slot is the likeliest mistake, and it
   // must not pass: letting a user's own credential select the project is a
-  // different trust decision from a project key doing so (D-320).
-  if (role !== 'anon' && role !== 'service_role') return false;
+  // different trust decision from a project key doing so (D-320). Checked before
+  // the signature because it is a property of the token's *purpose*, and a
+  // correctly signed user token is still not an API key for anyone.
+  if (role !== 'anon' && role !== 'service_role') return 'invalid';
 
-  const issuer = `https://${entry.ref}.${domain}`;
-  for (const jwk of entry.jwks) {
-    const pem = jwkToPem(jwk);
-    if (!pem) continue;
-    try {
-      verifyJwt(apikey, { publicKeyPem: pem, issuer });
-      return true;
-    } catch (err) {
-      if (!(err instanceof JwtError)) throw err;
-    }
+  // The `kid` must resolve to a published key of *this* project, and the token is
+  // then verified against that key alone.
+  //
+  // The isolation suite's API-9 found this loop trying every key and ignoring the
+  // header, which made `kid` decorative: a token naming a kid that exists nowhere
+  // was accepted because some other key happened to verify it. It never allowed a
+  // cross-tenant read — the signature still had to be the project's — but it
+  // dissolved the guarantee rotation depends on. P4h publishes keys by kid so a
+  // verifier can say which key signed what; a verifier that tries them all cannot
+  // answer that, and "some key of yours signed this" is not the claim the JWKS
+  // makes.
+  const kid = ((): string | undefined => {
+    try { return decodeUnverified(apikey).header.kid; } catch { return undefined; }
+  })();
+  if (!kid) return 'invalid';
+  const jwk = entry.jwks.find((k) => k['kid'] === kid);
+  if (!jwk) return 'invalid';
+  const pem = jwkToPem(jwk);
+  if (!pem) return 'invalid';
+  try {
+    verifyJwt(apikey, { publicKeyPem: pem, kid });
+  } catch (err) {
+    if (!(err instanceof JwtError)) throw err;
+    return 'invalid';
   }
-  return false;
+  if (claimedRef !== entry.ref) return 'mismatch';
+  if (claimedIss !== `https://${entry.ref}.${domain}`) return 'mismatch';
+  return 'ok';
 }
 
 /**

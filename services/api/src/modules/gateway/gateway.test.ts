@@ -100,7 +100,7 @@ describe('P5c — admission', () => {
     await app.close();
   });
 
-  it('refuses a key signed by another project, and one naming another project', async () => {
+  it('separates a key signed elsewhere (401) from one naming elsewhere (403)', async () => {
     const { app, key } = fixture();
     const other = generateKeypair();
     const now = Math.floor(Date.now() / 1000);
@@ -109,9 +109,15 @@ describe('P5c — admission', () => {
       iat: now, exp: now + 3600 }, { privateKeyPem: other.privateKeyPem, kid: other.kid });
     expect((await get(app, { host: `${REF}.${DOMAIN}`, apikey: forged })).statusCode).toBe(401);
     // Right signer, wrong ref — the check that makes a Host header an identity
-    // rather than an assertion.
+    // rather than an assertion. 403 rather than 401, and the difference is not
+    // cosmetic: reaching it requires a token *this project's key* signed, so it
+    // is invisible to anyone who has not already got past the signature, and it
+    // means the platform minted something inconsistent rather than that someone
+    // presented a bad key (the isolation matrix's API-5).
     const wrongRef = key('anon', 'ffffffffffffffff');
-    expect((await get(app, { host: `${REF}.${DOMAIN}`, apikey: wrongRef })).statusCode).toBe(401);
+    const res = await get(app, { host: `${REF}.${DOMAIN}`, apikey: wrongRef });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error.code).toBe('project_mismatch');
     await app.close();
   });
 
