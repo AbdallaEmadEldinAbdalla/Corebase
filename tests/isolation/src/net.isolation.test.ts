@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { setUp, tearDown, type Harness, type Fixture } from './harness.ts';
 
 /**
@@ -41,6 +43,27 @@ async function reachable(f: Fixture, host: string, port: number): Promise<boolea
     throw new Error(`the probe itself failed (exit ${r.exitCode}): ${r.stdout} ${r.stderr}`);
   }
   return out === 'OPEN';
+}
+
+/**
+ * The WAL archive endpoint, from the file that configured the firewall.
+ *
+ * Deliberately fails loudly rather than defaulting: a missing file means the
+ * allowlist was never applied, and a default would turn that into a confusing
+ * connectivity failure instead of a clear setup one.
+ */
+function storeEndpoint(): { store: string; port: number } {
+  const path = join(
+    new URL('../../../', import.meta.url).pathname,
+    'infra/docker/staging/backup-store.env');
+  const text = readFileSync(path, 'utf8');
+  const store = /^CB_BACKUP_S3_ENDPOINT=(.+)$/m.exec(text)?.[1]?.trim();
+  const port = /^CB_BACKUP_S3_PORT=(.+)$/m.exec(text)?.[1]?.trim();
+  if (!store) {
+    throw new Error(`no CB_BACKUP_S3_ENDPOINT in ${path} — `
+      + 'run ./scripts/staging.sh backup-store, then harden-egress.');
+  }
+  return { store, port: Number(port ?? 9000) };
 }
 
 /** B's container address, discovered host-side — setup, never an assertion. */
@@ -125,8 +148,13 @@ describe('NET-4 — arbitrary egress', () => {
     // A deny-all that also blocks WAL archiving is not a win: backups would fail
     // slowly and look like a backup bug. This is the counterpart assertion that
     // stops a future tightening from silently breaking durability.
-    const store = process.env['CB_BACKUP_S3_ENDPOINT'] ?? '172.18.0.3';
-    const port = Number(process.env['CB_BACKUP_S3_PORT'] ?? 9000);
+    // Read from `backup-store.env` — the same file `staging.sh harden-egress`
+    // built the allowlist from. An earlier version defaulted to a hardcoded
+    // 172.18.0.3, which is this developer's compose address and not CI's: the
+    // probe hit an address nothing listens on, was correctly dropped, and
+    // reported the *platform* as broken. A test that hardcodes an address the
+    // environment assigns is a test that fails somewhere it was never run.
+    const { store, port } = storeEndpoint();
     expect(await reachable(A(), store, port)).toBe(true);
   });
 
