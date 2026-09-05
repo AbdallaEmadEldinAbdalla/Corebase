@@ -168,6 +168,107 @@ export function buildPoolerSpec(a: PoolerSpecArgs): ContainerSpec {
   };
 }
 
+/** PostgREST's container and the name it answers to on the project network. */
+export const postgrestName = (ref: string) => `${CONTAINER_PREFIX}${ref}-rest`;
+export const POSTGREST_ALIAS = 'rest';
+export const POSTGREST_IMAGE = process.env.CB_POSTGREST_IMAGE ?? 'corebase/postgrest:12.2';
+/** PostgREST's listeners inside the container. Host ports are allocated in pairs. */
+export const POSTGREST_PORT = 3000;
+export const POSTGREST_ADMIN_PORT = 3001;
+
+/**
+ * `db-pool` per plan, against the project's `max_connections` budget (D-074).
+ *
+ * Free tier's 20 splits 3 reserved / 7 here / 8 pooler / 2 direct. This is the
+ * project's *entire* data-API concurrency rather than a per-request cost —
+ * PostgREST multiplexes all HTTP traffic onto these connections — so raising it
+ * takes budget from the pooler, which is where a customer's own `psql` and their
+ * ORM live.
+ */
+export const PLAN_POSTGREST_POOL: Record<string, number> = {
+  free: 7, pro: 20, team: 40, enterprise: 60,
+};
+
+export interface PostgrestSpecArgs {
+  ref: string;
+  networkName: string;
+  /** Host ports from placement: API, and the admin server beside it. */
+  hostPort: number;
+  adminHostPort: number;
+  /** `authenticator`'s password — the one login role of the data API (D-074). */
+  authenticatorPassword: string;
+  /**
+   * The project's published verification keys, as a JWKS document.
+   *
+   * Every published key, not only the signing one: P4h's rotation dual-publishes,
+   * and a PostgREST holding one kid during a swap window rejects tokens that are
+   * perfectly valid — which presents as "auth is broken" on a day nobody touched
+   * auth.
+   */
+  jwks: { keys: Array<Record<string, unknown>> };
+  plan?: string;
+  image?: string;
+  restartPolicy?: string;
+  cpuLimit?: number;
+  ramLimitMb?: number;
+}
+
+/**
+ * The data API sidecar (D-011, D-101).
+ *
+ * Connects **directly** to Postgres rather than through the pooler, which is not
+ * a preference: `LISTEN` does not survive transaction pooling and the schema-cache
+ * reload (D-100) depends on it, PostgREST is itself a pool so a second one
+ * multiplexes nothing further, and prepared statements stay enabled. That single
+ * requirement settles the whole connection topology.
+ *
+ * No restart policy at create time, promoted after the health gate — the same rule
+ * as the database and the pooler (D-184). It matters more here: PostgREST *exits*
+ * when it cannot reach its database rather than retrying forever, so a restart
+ * policy attached before the gate would turn a slow-starting database into a
+ * crash loop that hides the real error.
+ */
+export function buildPostgrestSpec(a: PostgrestSpecArgs): ContainerSpec {
+  const memBytes = (a.ramLimitMb ?? 192) * 1024 * 1024;
+  const pool = PLAN_POSTGREST_POOL[a.plan ?? 'free'] ?? PLAN_POSTGREST_POOL['free']!;
+  return {
+    Image: a.image ?? POSTGREST_IMAGE,
+    Env: [
+      `COREBASE_REF=${a.ref}`,
+      // The database by its network alias, not its container name: the alias is
+      // stable across a container being recreated, which reconciliation does.
+      `COREBASE_PG_HOST=${DB_ALIAS}`,
+      `COREBASE_DB_POOL=${pool}`,
+      `PGRST_DB_URI=postgres://authenticator:${encodeURIComponent(a.authenticatorPassword)}@${DB_ALIAS}:5432/postgres`,
+      `COREBASE_JWKS=${JSON.stringify(a.jwks)}`,
+    ],
+    Labels: {
+      [LABEL_MANAGED]: 'true',
+      [LABEL_REF]: a.ref,
+      [LABEL_ROLE]: 'postgrest',
+    },
+    HostConfig: {
+      Memory: memBytes,
+      MemorySwap: memBytes,
+      NanoCpus: Math.round((a.cpuLimit ?? 0.5) * 1e9),
+      // Higher than the pooler's 64: PostgREST is a Haskell runtime with a
+      // thread per capability plus its connection pool, and a ceiling that a
+      // normal steady state can reach is a ceiling that turns load into an
+      // outage rather than a limit.
+      PidsLimit: 256,
+      Init: true,
+      RestartPolicy: { Name: a.restartPolicy ?? 'no' },
+      Mounts: [],
+      PortBindings: {
+        [`${POSTGREST_PORT}/tcp`]: [{ HostPort: String(a.hostPort) }],
+        [`${POSTGREST_ADMIN_PORT}/tcp`]: [{ HostPort: String(a.adminHostPort) }],
+      },
+    },
+    ExposedPorts: { [`${POSTGREST_PORT}/tcp`]: {}, [`${POSTGREST_ADMIN_PORT}/tcp`]: {} },
+    NetworkingConfig: { EndpointsConfig: { [a.networkName]: { Aliases: [POSTGREST_ALIAS] } } },
+  };
+}
+
 /**
  * Bootstrap superuser password: HMAC(secret, project_id).
  *

@@ -174,6 +174,30 @@ export function pickPort(used: readonly number[], range: readonly [number, numbe
 }
 
 /**
+ * Two adjacent free ports, `n` and `n+1`, for PostgREST's API and admin listeners.
+ *
+ * Both must be free, and the pair must be adjacent, which is why this is not two
+ * calls to `pickPort`: a first call returning `n` and a second returning `n+1`
+ * only by luck would silently degrade into a non-adjacent pair as a node fills,
+ * and the adjacency is what makes `7434`/`7435` recognisable as one project's
+ * while a human is reading `docker ps`.
+ *
+ * Steps by two from the range's start, so pairs never interleave — a pair taken
+ * at `n` cannot leave `n+1` looking free to the next allocation.
+ */
+export function pickPortPair(
+  used: readonly number[], range: readonly [number, number],
+): number {
+  const taken = new Set(used);
+  for (let p = range[0]; p + 1 <= range[1]; p += 2) {
+    if (!taken.has(p) && !taken.has(p + 1)) return p;
+  }
+  throw new NoPortsError(
+    `no free adjacent port pair in ${range[0]}-${range[1]} — a project needs two, `
+    + 'so this range holds half as many projects as its width suggests');
+}
+
+/**
  * A project's volume name is derived from its ref, never stored-only. The purge
  * has to verify the volume is gone *after* the placement row that recorded its
  * name has been deleted — and a check that silently skips when the row is
@@ -194,6 +218,17 @@ const envRange = (min: string, max: string, dflt: [number, number]): [number, nu
 
 export const PG_PORT_RANGE = envRange('CB_PG_PORT_MIN', 'CB_PG_PORT_MAX', [5433, 6432]);
 export const POOLER_PORT_RANGE = envRange('CB_POOLER_PORT_MIN', 'CB_POOLER_PORT_MAX', [6433, 7432]);
+/**
+ * PostgREST's two listeners (P5b). One range, allocated in pairs: the API port
+ * and the admin port next to it.
+ *
+ * Adjacent rather than two ranges, because the pairing is what a human debugging
+ * a project needs — `7434` and `7435` are obviously one project's, while a port
+ * from each of two distant ranges is a lookup. The allocator enforces the pairing
+ * so the adjacency is a fact rather than a convention.
+ */
+export const POSTGREST_PORT_RANGE = envRange(
+  'CB_POSTGREST_PORT_MIN', 'CB_POSTGREST_PORT_MAX', [7433, 7492]);
 
 export interface NodeRegistration {
   hostname: string; region?: string; ramTotalMb: number; diskTotalGb: number;
@@ -226,6 +261,12 @@ export async function registerNode(pool: Pool, n: NodeRegistration): Promise<str
 
 export interface Placement {
   nodeId: string; hostname: string; port: number; poolerPort: number;
+  /**
+   * PostgREST's pair (P5b). Nullable on the replay path: a project placed before
+   * this column existed has none, and inventing numbers for a container that does
+   * not exist would collide with the allocator the first time it is touched.
+   */
+  postgrestPort: number | null; postgrestAdminPort: number | null;
   volumeName: string; ramLimitMb: number; bookedMb: number; replayed: boolean;
 }
 
@@ -248,9 +289,11 @@ export async function allocateNode(
 
     const existing = await client.query<{
       node_id: string; hostname: string; port: number; pooler_port: number;
+      postgrest_port: number | null; postgrest_admin_port: number | null;
       volume_name: string; ram_limit_mb: number;
     }>(
-      `SELECT d.node_id, n.hostname, d.port, d.pooler_port, d.volume_name, d.ram_limit_mb
+      `SELECT d.node_id, n.hostname, d.port, d.pooler_port,
+              d.postgrest_port, d.postgrest_admin_port, d.volume_name, d.ram_limit_mb
          FROM project_databases d JOIN nodes n ON n.id = d.node_id
         WHERE d.project_id = $1`,
       [args.projectId],
@@ -259,6 +302,7 @@ export async function allocateNode(
       await client.query('COMMIT');
       const r = existing.rows[0];
       return { nodeId: r.node_id, hostname: r.hostname, port: r.port, poolerPort: r.pooler_port,
+        postgrestPort: r.postgrest_port, postgrestAdminPort: r.postgrest_admin_port,
         volumeName: r.volume_name, ramLimitMb: r.ram_limit_mb, bookedMb: booking, replayed: true };
     }
 
@@ -270,18 +314,31 @@ export async function allocateNode(
     const want: Booking = { ramMb: booking, diskGb: diskBooking };
     const n = await pickNode(client, args.region ?? 'eu-central', want);
 
-    const ports = await client.query<{ port: number; pooler_port: number }>(
-      `SELECT port, pooler_port FROM project_databases WHERE node_id = $1`, [n.id]);
+    const ports = await client.query<{
+      port: number; pooler_port: number;
+      postgrest_port: number | null; postgrest_admin_port: number | null;
+    }>(
+      `SELECT port, pooler_port, postgrest_port, postgrest_admin_port
+         FROM project_databases WHERE node_id = $1`, [n.id]);
     const port = pickPort(ports.rows.map((r) => r.port), PG_PORT_RANGE);
     const poolerPort = pickPort(ports.rows.map((r) => r.pooler_port), POOLER_PORT_RANGE);
+    // Both PostgREST ports are excluded from the pool the pair is drawn from, and
+    // the pair is adjacent. Taking them from one list rather than two is what
+    // makes `n` and `n+1` safe: an admin port allocated independently could land
+    // on the next project's API port.
+    const takenPgrst = ports.rows.flatMap((r) =>
+      [r.postgrest_port, r.postgrest_admin_port].filter((v): v is number => v !== null));
+    const postgrestPort = pickPortPair(takenPgrst, POSTGREST_PORT_RANGE);
     const volumeName = volumeNameFor(args.ref);
 
     await client.query(
       `INSERT INTO project_databases
-         (project_id, node_id, volume_name, port, pooler_port, ram_limit_mb,
+         (project_id, node_id, volume_name, port, pooler_port,
+          postgrest_port, postgrest_admin_port, ram_limit_mb,
           ram_booked_mb, disk_limit_mb, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'provisioning')`,
-      [args.projectId, n.id, volumeName, port, poolerPort, limit, booking,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'provisioning')`,
+      [args.projectId, n.id, volumeName, port, poolerPort,
+       postgrestPort, postgrestPort + 1, limit, booking,
        PLAN_DISK_CAP_MB[args.plan ?? 'free'] ?? PLAN_DISK_CAP_MB['free']!]);
 
     await client.query(
@@ -291,7 +348,8 @@ export async function allocateNode(
         WHERE id = $1`, [n.id, booking, diskBooking]);
 
     await client.query('COMMIT');
-    return { nodeId: n.id, hostname: n.hostname, port, poolerPort, volumeName,
+    return { nodeId: n.id, hostname: n.hostname, port, poolerPort,
+      postgrestPort, postgrestAdminPort: postgrestPort + 1, volumeName,
       ramLimitMb: limit, bookedMb: booking, replayed: false };
   } catch (err) {
     await client.query('ROLLBACK');
