@@ -20,6 +20,19 @@ import { readFileSync, readdirSync } from 'node:fs';
  * gateway to the per-project stack and this test fails with instructions, because
  * at that moment the idle signal has to grow its second half before it can be
  * trusted again.
+ *
+ * **P5a built that second half, and doing so showed this file had been watching
+ * the wrong door.** The container count is a proxy for "a new way to use a
+ * project", and the auth module became one without adding a container — it is a
+ * shared multi-tenant process. So `/auth/v1/*` served per-project traffic from
+ * P4b onward while the scan still concluded from database connections alone, and
+ * a project whose users only signed up and logged in looked idle. Nothing failed,
+ * which is exactly what this file exists to prevent.
+ *
+ * The container assertion stays until PostgREST lands, because it is still the
+ * cheapest way to notice a *third container*. What has changed is that tripping it
+ * is now a prompt to check the signal covers the new path, not to build the signal
+ * from scratch.
  */
 const SRC = new URL('.', import.meta.url).pathname;
 
@@ -39,17 +52,30 @@ describe('D-236 — the idle signal is only sufficient while there is no data pl
     ).toEqual(['buildContainerSpec', 'buildPoolerSpec']);
   });
 
-  it('nothing in the worker meters data-plane requests yet', () => {
-    // The other direction: if a traffic meter *does* appear, the scan must start
-    // using it rather than quietly ignoring a signal that now exists.
-    const files = readdirSync(SRC).filter((f) => f.endsWith('.ts') && !f.includes('.test.'));
-    const meters = files.filter((f) =>
-      /requests?_total|data_plane|gateway_requests/.test(readFileSync(`${SRC}${f}`, 'utf8')));
-    expect(
-      meters,
-      'Something now meters data-plane traffic. That is the first of D-236\'s two ' +
-      'signals — wire it into idle-scan.ts and delete this assertion.',
-    ).toEqual([]);
+  it('the traffic signal is recorded where the scan already reads it (P5a)', () => {
+    // D-236's first signal now exists, and the tripwire it replaced was watching
+    // the wrong door: it looked for a new *container*, and the data plane arrived
+    // as a shared *process* — the auth module, serving `/auth/v1/*` per project
+    // since P4b, whose connections open as an internal role the scan excludes.
+    // For that whole time a project used only for signups and logins looked idle.
+    //
+    // The signal writes `project_databases.last_active_at`, which is the column
+    // the scan already filters candidates on — so a project touched by traffic
+    // simply stops being a candidate, and the scan needed no change at all. This
+    // asserts that wiring, because it is the kind that would keep working after
+    // being disconnected: nothing fails if the write stops, the projects just
+    // quietly start pausing again.
+    const meter = readFileSync(
+      `${SRC}../../api/src/modules/project-auth/traffic.ts`, 'utf8');
+    expect(meter).toMatch(/last_active_at = now\(\)/);
+    const context = readFileSync(
+      `${SRC}../../api/src/modules/project-auth/context.ts`, 'utf8');
+    // Called from project resolution, which is the one place every data-plane
+    // request passes through — today's auth endpoints and tomorrow's gateway
+    // routes alike.
+    expect(context).toMatch(/traffic\?\.seen\(/);
+    const scan = readFileSync(`${SRC}idle-scan.ts`, 'utf8');
+    expect(scan).toContain('last_active_at');
   });
 
   it('the scan refuses to conclude when a project cannot be asked', () => {

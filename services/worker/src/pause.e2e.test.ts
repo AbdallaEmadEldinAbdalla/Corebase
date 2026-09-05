@@ -271,6 +271,42 @@ describe('P2c — pause and resume on a real node', () => {
     expect(r.paused).toBe(0);
   });
 
+  t('EXIT CRITERION (P5a): auth traffic keeps a project out of the scan\'s reach',
+    async () => {
+      // Two projects, one scan, one difference between them. The first version of
+      // this test ran a scan just to assert the project *was* a candidate, and
+      // that scan paused it — a setup step with the side effect the test exists to
+      // prevent. A controlled comparison needs no such ordering, and says more:
+      // the signal is the only thing separating these two outcomes.
+      const used = await newProject();
+      const forgotten = await newProject();
+      await runSaga('provision_project', used.id);
+      await runSaga('provision_project', forgotten.id);
+      await pool.query(
+        `update project_databases set last_active_at = now() - interval '30 days'
+          where project_id = any($1::uuid[])`, [[used.id, forgotten.id]]);
+
+      // Exactly what `resolveProject` does on every data-plane request. Before
+      // P5a nothing did this, and a project whose users only signed up and logged
+      // in was paused under them: the auth module's connections open as
+      // `corebase_auth`, and the scan counts `developer` alone.
+      const { createTrafficMeter } = await import(
+        '@corebase/api/modules/project-auth/traffic.ts');
+      createTrafficMeter(pool).seen(used.id);
+      await new Promise((r) => setTimeout(r, 250));
+
+      await runIdleScan(7);
+
+      const status = async (id: string) => (await pool.query<{ status: string }>(
+        `select status from projects where id = $1`, [id])).rows[0]!.status;
+      // The signal writes `last_active_at`, which is the column the scan already
+      // filters candidates on — so a project touched by traffic stops being a
+      // candidate and the scan needed no change at all.
+      expect(await status(used.id)).toBe('ready');
+      // …and its twin, identical but for the signal, is on its way down.
+      expect(['pausing', 'paused']).toContain(await status(forgotten.id));
+    });
+
   t('does not pause a project with a live customer connection', async () => {
     const p = await newProject();
     await runSaga('provision_project', p.id);
