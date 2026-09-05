@@ -161,8 +161,11 @@ describe('T8 — a converged node reports no drift', () => {
     expect(report.clean).toBe(true);
     expect(report.drift).toEqual([]);
     expect(report.projects_checked).toBe(1);
-    // Two: a project is a database *and* a pooler since P2b.
-    expect(report.containers_seen).toBe(2);
+    // Three since P5b: a database, a pooler (P2b) and a data API (P5b). This
+    // assertion is deliberately an exact count rather than a floor — it is the
+    // same tripwire as the idle scan's, and it exists so that adding a fourth
+    // container has to come here and say what the fourth one means for drift.
+    expect(report.containers_seen).toBe(3);
   });
 
   t('records the report on the node so "is it running" is one SELECT', async () => {

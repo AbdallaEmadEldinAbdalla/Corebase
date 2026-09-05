@@ -85,7 +85,19 @@ beforeEach(async () => {
     await docker.removeContainer(c.Id).catch(() => {});
   }
   await pool.query('truncate provisioning_jobs, project_databases, projects cascade');
-  await pool.query('update nodes set ram_reserved_mb = 0');
+  // Status as well as capacity, because `registerNode` is a heartbeat and a
+  // heartbeat must never un-cordon a node — an operator draining one for
+  // decommission would have that decision silently reverted. So a node another
+  // file cordoned (`placement.e2e` does it with no WHERE clause) stays cordoned,
+  // and every test here then fails with "no active node in region eu-central",
+  // which names nothing about the cause or the file that caused it.
+  //
+  // This file therefore declares the fixture it needs rather than inheriting
+  // whatever the previous file left. That mattered here the moment P5b added a
+  // test file: vitest shards by file, so a new file reshuffles which files share
+  // a shard, and an ordering dependency that had been invisible for phases
+  // became a red CI on an unrelated commit.
+  await pool.query(`update nodes set ram_reserved_mb = 0, status = 'active'`);
 }, 60_000);
 
 function sagas() {

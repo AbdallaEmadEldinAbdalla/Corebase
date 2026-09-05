@@ -94,7 +94,13 @@ beforeEach(async () => {
     await docker.removeContainer(c.Id).catch(() => {});
   }
   await pool.query('truncate provisioning_jobs, project_databases, projects cascade');
-  await pool.query('update nodes set ram_reserved_mb = 0');   // every node, not just ours
+  // Every node, not just ours — and status too. `registerNode` is a heartbeat and
+  // deliberately will not un-cordon a node, so one that another file cordoned
+  // stays cordoned and every test here fails with "no active node in region
+  // eu-central". See rotation.e2e for the full reasoning; the short version is
+  // that a file must declare the fixture it needs instead of inheriting one,
+  // because vitest shards by file and adding a file reshuffles the shards.
+  await pool.query(`update nodes set ram_reserved_mb = 0, status = 'active'`);
 }, 60_000);
 
 function sagas() {
