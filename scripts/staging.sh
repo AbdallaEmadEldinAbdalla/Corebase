@@ -113,6 +113,89 @@ cmd_app_role() {
     "$CB_APP_DB_PASSWORD" "$CONTROL_DB_PORT"
 }
 
+# ── egress default-deny (D-081) ──────────────────────────────────────────────
+#
+# The half of D-081 that had never been built. The threat model's whole argument
+# is that the container is the isolation wall: assuming the Postgres privilege
+# fence fails, the baseline turns "code exec in the database" into "code exec in a
+# box that can reach nothing". Without egress control that second half is absent —
+# a compromised project container could reach the open internet, and could reach
+# the node's own Docker API port, which is the control surface for every other
+# tenant on the box.
+#
+# Found by the P5e isolation suite's NET-4, which is exactly what that suite is
+# for. It was not even recorded as a gap.
+#
+# **Matched on the outbound interface, not on addresses.** Traffic leaving the
+# node goes out `eth0`; traffic between two containers on the same project bridge
+# never does, and traffic from one project's bridge to another's is already
+# refused by Docker's own per-network isolation. Filtering on `-o eth0` therefore
+# governs egress *without* touching either of those, where a `-s pool -d pool`
+# rule would have had to re-decide inter-project reachability and would have
+# opened A→B the moment it got the direction wrong.
+#
+# In production this belongs to the node agent, applied when the node joins the
+# fleet. Here it is applied to the staging node, which is the same iptables.
+cmd_harden_egress() {
+  local pool="10.201.0.0/16"
+  local store_ip store_port
+  store_ip="$(grep -E '^CB_BACKUP_S3_ENDPOINT=' "$STAGING_DIR/backup-store.env" 2>/dev/null | cut -d= -f2)"
+  store_port="$(grep -E '^CB_BACKUP_S3_PORT=' "$STAGING_DIR/backup-store.env" 2>/dev/null | cut -d= -f2)"
+  if [ -z "$store_ip" ]; then
+    echo "  ✗ no object-store endpoint — run ./scripts/staging.sh backup-store first." >&2
+    echo "    Applying the deny without the archive allowlist would break WAL archiving," >&2
+    echo "    which fails slowly and looks like a backup bug rather than a firewall one." >&2
+    return 1
+  fi
+
+  # Idempotent: flush our own rules before reinstalling, so running this twice
+  # does not stack duplicates and a changed store address does not leave the old
+  # allowlist entry behind.
+  # Two chains, because a tenant container has two distinct ways out and only one
+  # of them is FORWARD.
+  #
+  # DOCKER-USER covers traffic *through* the node — the internet, the outer
+  # bridge, another host. It does not cover traffic *to* the node, because the
+  # node's own bridge address is a local destination and that is INPUT, not
+  # FORWARD. P5e's NET-3 found the Engine API still reachable at the default
+  # gateway after the FORWARD rules were in place: the daemon listens on
+  # 0.0.0.0:2376, and the gateway address is the first thing a tenant inside the
+  # container can discover. Blocking egress to the world while leaving the
+  # fleet's control surface open on the near side would have been the more
+  # dangerous of the two holes.
+  #
+  # INPUT drops are safe for the data path: NAT egress and DNS forwarding are
+  # FORWARD, and container-to-container traffic inside a project stays on its own
+  # bridge. Nothing a project runs needs to originate a connection *to* the node.
+  docker exec cb-data-node sh -c "
+    set -e
+    iptables -F DOCKER-USER
+    # Return traffic first: without it every allowed outbound connection dies on
+    # its reply, which looks like a broken remote rather than a broken rule.
+    iptables -A DOCKER-USER -s $pool -o eth0 -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+    # DNS. Docker's embedded resolver forwards from the container's own address.
+    iptables -A DOCKER-USER -s $pool -o eth0 -p udp --dport 53 -j RETURN
+    iptables -A DOCKER-USER -s $pool -o eth0 -p tcp --dport 53 -j RETURN
+    # The WAL archive endpoint — the one named destination a project must reach.
+    iptables -A DOCKER-USER -s $pool -o eth0 -d $store_ip -p tcp --dport ${store_port:-9000} -j RETURN
+    # Everything else leaving the node, from any project subnet.
+    iptables -A DOCKER-USER -s $pool -o eth0 -j DROP
+    iptables -A DOCKER-USER -j RETURN
+
+    # The node itself. Its own chain so this is idempotent: flush and refill
+    # rather than appending a second copy on every run.
+    iptables -N CB-TENANT-INPUT 2>/dev/null || true
+    iptables -F CB-TENANT-INPUT
+    iptables -A CB-TENANT-INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+    iptables -A CB-TENANT-INPUT -j DROP
+    iptables -D INPUT -s $pool -j CB-TENANT-INPUT 2>/dev/null || true
+    iptables -I INPUT 1 -s $pool -j CB-TENANT-INPUT
+  " >/dev/null || { echo "  ✗ could not apply the egress policy" >&2; return 1; }
+
+  echo "  ✓ egress default-deny applied to $pool (allowed: DNS, $store_ip:${store_port:-9000})"
+  echo "  ✓ the node itself is unreachable from tenant containers (Engine API included)"
+}
+
 cmd_backup_store() {
   # Creates the backup bucket and writes the endpoint the worker will use.
   #
@@ -402,6 +485,7 @@ case "${1:-}" in
   kek) cmd_kek ;;
   app-role) cmd_app_role ;;
   backup-store) cmd_backup_store ;;
+  harden-egress) cmd_harden_egress ;;
   mail-sink) cmd_mail_sink ;;
   seed-images) cmd_seed_images ;;
   verify) cmd_verify ;;
@@ -412,6 +496,6 @@ case "${1:-}" in
   monitoring) cmd_monitoring ;;
   # seed-images before backup-store: the egress probe runs a container from the
   # project image on the node, so the image has to be there first.
-  all) cmd_up && cmd_kek && cmd_app_role && cmd_seed_images && cmd_backup_store && cmd_mail_sink && cmd_verify && cmd_idempotent ;;
-  *) echo "usage: $0 {up|kek|app-role|seed-images|backup-store|mail-sink|verify|idempotent|down|nuke|status|monitoring|all}"; exit 2 ;;
+  all) cmd_up && cmd_kek && cmd_app_role && cmd_seed_images && cmd_backup_store && cmd_harden_egress && cmd_mail_sink && cmd_verify && cmd_idempotent ;;
+  *) echo "usage: $0 {up|kek|app-role|seed-images|backup-store|harden-egress|mail-sink|verify|idempotent|down|nuke|status|monitoring|all}"; exit 2 ;;
 esac
