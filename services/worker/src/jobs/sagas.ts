@@ -14,11 +14,12 @@ import { backupRunsTotal } from '../metrics.ts';
 import {
   buildContainerSpec, buildPoolerSpec, bootstrapPassword, containerName, networkName,
   poolerName, IMAGE, POOLER_IMAGE, LABEL_MANAGED, LABEL_REF,
+  postgrestName, buildPostgrestSpec, POSTGREST_IMAGE,
 } from '../container-spec.ts';
 import type { SecretStore } from '@corebase/secrets';
 import { SECRET_NAMES } from '@corebase/secrets';
 import { createHash } from 'node:crypto';
-import { generateKeypair, sign as signJwt, projectKeyClaims } from '@corebase/jwt';
+import { generateKeypair, sign as signJwt, projectKeyClaims, toJwk } from '@corebase/jwt';
 import {
   auditImageRoles, connectAsSuperuser, ensureDeveloperRole, setRolePassword,
   DEVELOPER_ROLE, POOLER_AUTH_ROLE, AUTH_ROLE,
@@ -61,14 +62,51 @@ async function loadPlacement(pool: Pool, projectId: string) {
   const { rows } = await pool.query<{
     volume_name: string; port: number; pooler_port: number; ram_limit_mb: number;
     container_id: string | null; pooler_container_id: string | null;
+    postgrest_port: number | null; postgrest_admin_port: number | null;
+    postgrest_container_id: string | null;
     node_address: string | null; node_hostname: string;
   }>(`SELECT d.volume_name, d.port, d.pooler_port, d.ram_limit_mb, d.container_id,
-             d.pooler_container_id,
+             d.pooler_container_id, d.postgrest_port, d.postgrest_admin_port,
+             d.postgrest_container_id,
              n.address AS node_address, n.hostname AS node_hostname
         FROM project_databases d JOIN nodes n ON n.id = d.node_id
        WHERE d.project_id = $1`, [projectId]);
   if (!rows[0]) throw new Error('no placement row — allocate_node must run first');
   return rows[0];
+}
+
+/**
+ * The project's published verification keys, as a JWKS document.
+ *
+ * **Every published key**, which is the same set the two JWKS endpoints serve and
+ * deliberately not just the signing one. P4h's rotation dual-publishes: for the
+ * length of a swap window a project has an incoming or outgoing key alongside the
+ * active one, and a PostgREST holding a single kid rejects tokens that are
+ * perfectly valid — a failure that arrives on a day nobody touched auth and looks
+ * like the auth module breaking.
+ *
+ * Which also names the thing this does *not* yet do: a rotation after this
+ * container starts leaves it holding a stale set. Step 3 of the rotation runbook
+ * — reload each PostgREST's key file — is the piece that closes it, and it is
+ * recorded as unbuilt rather than assumed away (OQ-112).
+ */
+async function projectJwks(
+  deps: SagaDeps, projectId: string,
+): Promise<{ keys: Array<Record<string, unknown>> }> {
+  const secrets = requireSecrets(deps);
+  const [pub, kid] = await Promise.all([
+    secrets.get(projectId, SECRET_NAMES.jwtPublicKey),
+    secrets.get(projectId, SECRET_NAMES.jwtKid),
+  ]);
+  const keys: Array<Record<string, unknown>> = [];
+  if (pub && kid) keys.push(toJwk(pub, kid));
+
+  const { rows } = await deps.pool.query<{ kid: string; public_key_pem: string }>(
+    `SELECT kid, public_key_pem FROM project_signing_keys
+      WHERE project_id = $1 AND status IN ('next', 'retiring')
+      ORDER BY published_at`, [projectId]);
+  for (const r of rows) keys.push(toJwk(r.public_key_pem, r.kid));
+  return { keys };
 }
 
 function requireSecrets(deps: SagaDeps): SecretStore {
@@ -477,6 +515,154 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
    * scheme is region- and generation-dependent, and a project must keep
    * answering on the name it was handed.
    */
+  /**
+   * Start the project's PostgREST (P5b, D-011).
+   *
+   * After `generate_api_keys`, and that ordering is load-bearing rather than
+   * tidy: PostgREST needs the project's JWKS at container start, and the keys are
+   * minted by that step. Starting it first produces a data API that comes up and
+   * rejects every token, which reads as an auth fault on a project nobody has
+   * used yet.
+   */
+  const startPostgrest: SagaStep<SagaContext> = {
+    name: 'start_postgrest',
+    async run(ctx) {
+      const docker = requireDocker(deps);
+      const projectId = ctx.job.project_id!;
+      const project = await loadProject(deps.pool, projectId);
+      const place = await loadPlacement(deps.pool, projectId);
+      const name = postgrestName(project.ref);
+
+      if (!(await docker.imageExists(POSTGREST_IMAGE))) {
+        throw new Error(
+          `postgrest image ${POSTGREST_IMAGE} is not present on the node — pre-pull it (D-071)`);
+      }
+      if (place.postgrest_port === null || place.postgrest_admin_port === null) {
+        // A project placed before P5b. Its row has no ports and inventing them
+        // here would bypass the allocator's uniqueness — the repair belongs in a
+        // migration step of its own, not in a hot saga path.
+        throw new Error(
+          'this project was placed before the data API existed and has no PostgREST '
+          + 'ports. Re-place it, or backfill the ports through the allocator.');
+      }
+
+      const secrets = requireSecrets(deps);
+      const authenticatorPassword = await secrets.get(projectId, SECRET_NAMES.authenticator);
+      if (!authenticatorPassword) {
+        throw new Error(
+          'the authenticator credential is not stored yet — store_credentials must run first');
+      }
+
+      // **Every published key**, not just the signing one. P4h's rotation
+      // dual-publishes, and a PostgREST holding a single kid during a swap window
+      // rejects tokens that are perfectly valid — which presents as "auth broke"
+      // on a day nobody touched auth. Reading the same set the JWKS endpoints
+      // serve is what keeps the two from disagreeing.
+      const jwks = await projectJwks(deps, projectId);
+      if (!jwks.keys.length) {
+        throw new Error(
+          'this project publishes no verification keys — generate_api_keys must run first');
+      }
+
+      let inspect = await docker.inspectContainer(name);
+      if (!inspect) {
+        const id = await docker.createContainer(name, buildPostgrestSpec({
+          ref: project.ref,
+          networkName: await ensureNetwork(ctx, project.ref),
+          hostPort: place.postgrest_port,
+          adminHostPort: place.postgrest_admin_port,
+          authenticatorPassword,
+          jwks,
+          plan: project.plan,
+        }));
+        ctx.log('postgrest created', {
+          name, container: id.slice(0, 12),
+          port: place.postgrest_port, admin: place.postgrest_admin_port,
+          kids: jwks.keys.map((k: Record<string, unknown>) => k['kid']),
+        });
+        inspect = await docker.inspectContainer(name);
+      } else {
+        ctx.log('postgrest already exists — reusing', { name, state: inspect.State.Status });
+      }
+
+      if (!inspect!.State.Running) {
+        await docker.startContainer(inspect!.Id);
+        ctx.log('postgrest started', { name });
+      }
+
+      await deps.pool.query(
+        `UPDATE project_databases SET postgrest_container_id = $2 WHERE project_id = $1`,
+        [projectId, inspect!.Id]);
+    },
+  };
+
+  /**
+   * Prove the data API answers before calling the project ready.
+   *
+   * `/ready` on the admin server, not `/live` and not a TCP check. The three are
+   * genuinely different claims: a socket accepts while the process is starting,
+   * `/live` passes while PostgREST cannot reach Postgres at all, and only
+   * `/ready` means it connected *and* built a schema cache. Every failure this
+   * step has caught in development — a revoked catalogue grant, a missing
+   * pre-request function — produced a container that passed the first two and
+   * served 503 to every request.
+   */
+  const waitPostgrestHealthy: SagaStep<SagaContext> = {
+    name: 'wait_postgrest_healthy',
+    async run(ctx) {
+      const docker = requireDocker(deps);
+      const projectId = ctx.job.project_id!;
+      const project = await loadProject(deps.pool, projectId);
+      const place = await loadPlacement(deps.pool, projectId);
+      const deadline = Date.now() + (deps.healthTimeoutMs ?? 60_000);
+      const name = postgrestName(project.ref);
+      // `node_address`, never `node_hostname` (D-192): the hostname is only what
+      // the node calls itself, and using it as an address works right up until an
+      // environment where it does not resolve.
+      if (!place.node_address) {
+        throw new Error('the node has no address — the data api cannot be probed');
+      }
+      const url = `http://${place.node_address}:${place.postgrest_admin_port}/ready`;
+
+      let lastError = 'never attempted';
+      while (Date.now() < deadline) {
+        // Fatal-vs-transient, and it matters more here than for the pooler:
+        // PostgREST *exits* when it cannot reach its database rather than
+        // retrying forever, so a container that has gone will never answer and
+        // waiting out the timeout only delays the real message.
+        const inspect = await docker.inspectContainer(name);
+        if (inspect && !inspect.State.Running && !inspect.State.Restarting) {
+          const logs = await docker.containerLogs(name).catch(() => '');
+          throw new Error(
+            `postgrest exited (${inspect.State.ExitCode}) before it answered: `
+            + `${String(logs).trim().split('\n').slice(-3).join(' | ') || 'no logs'}`);
+        }
+
+        try {
+          const res = await fetch(url, { signal: AbortSignal.timeout(3_000) });
+          if (res.ok) {
+            ctx.log('data api ready', { via: url });
+            await docker.setRestartPolicy(inspect!.Id, 'unless-stopped');
+            return;
+          }
+          // 503 is the interesting failure, not a transport error: PostgREST is
+          // up and telling us it cannot serve. Its own logs say why, and this is
+          // the one place that answer is cheap to get.
+          lastError = `${res.status} from ${url}`;
+        } catch (err) {
+          lastError = (err as Error).message;
+        }
+        await new Promise((r) => setTimeout(r, 500));
+      }
+
+      const logs = await docker.containerLogs(name).catch(() => '');
+      throw new Error(
+        `the data api did not become ready within ${deps.healthTimeoutMs ?? 60_000}ms `
+        + `(last: ${lastError}). postgrest said: `
+        + `${String(logs).trim().split('\n').slice(-4).join(' | ') || 'nothing'}`);
+    },
+  };
+
   const writeConnection: SagaStep<SagaContext> = {
     name: 'write_connection',
     async run(ctx) {
@@ -1475,6 +1661,35 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
     name: 'stop_pooler',
   };
 
+  /**
+   * Stop the data API (P5b).
+   *
+   * First in the deletion order, before the pooler and well before the database:
+   * PostgREST is the surface a customer's application is *actively calling*, and
+   * a deletion that stopped the database first would turn every in-flight request
+   * into a 503 from a service that is supposed to be going away cleanly. Stopping
+   * the front door first is what makes the rest of the teardown quiet.
+   */
+  const stopPostgrest: SagaStep<SagaContext> = {
+    name: 'stop_postgrest',
+    async run(ctx) {
+      const projectId = ctx.job.project_id!;
+      const project = await loadProject(deps.pool, projectId);
+      const place = await loadPlacement(deps.pool, projectId).catch(() => undefined);
+      const docker = requireDocker(deps);
+      // Recorded id first, derived name as the fallback — same rule as the
+      // pooler: the row may be missing on a retry, and "no row so nothing to
+      // stop" would leave a data API serving a project being deleted.
+      const target = place?.postgrest_container_id ?? postgrestName(project.ref);
+      const state = await docker.inspectContainer(target);
+      if (!state) { ctx.log('no data api to stop'); return; }
+      if (!state.State.Running) { ctx.log('data api already stopped'); return; }
+      await docker.setRestartPolicy(state.Id, 'no');
+      await docker.stopContainer(state.Id);
+      ctx.log('data api stopped');
+    },
+  };
+
   const markSoftDeleted: SagaStep<SagaContext> = {
     name: 'mark_soft_deleted',
     async run(ctx) {
@@ -1539,10 +1754,14 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       // By name as well as by id: a container created just before a crash may
       // exist with no id recorded, and leaving it behind would be a resource
       // leak invisible to the control plane.
-      // Both of the project's containers (P2b), by id and by derived name.
+      // All three of the project's containers (P2b, P5b), by id and by derived
+      // name. Missing one here is a container that outlives its project — which
+      // reconciliation then reports as an orphan forever, because the placement
+      // row it would have been matched against is gone.
       const targets = [
         place?.container_id, containerName(project.ref),
         place?.pooler_container_id, poolerName(project.ref),
+        place?.postgrest_container_id, postgrestName(project.ref),
       ].filter(Boolean);
       for (const target of targets) {
         await docker.removeContainer(target as string);
@@ -1550,10 +1769,11 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       if (place) {
         await deps.pool.query(
           `UPDATE project_databases
-              SET container_id = NULL, pooler_container_id = NULL
+              SET container_id = NULL, pooler_container_id = NULL,
+                  postgrest_container_id = NULL
             WHERE project_id = $1`, [projectId]);
       }
-      ctx.log('containers removed', { database: true, pooler: true });
+      ctx.log('containers removed', { database: true, pooler: true, data_api: true });
     },
   };
 
@@ -1910,6 +2130,9 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       const place = await loadPlacement(deps.pool, projectId).catch(() => undefined);
       const docker = requireDocker(deps);
       for (const target of [
+        // The data API first, for the same reason deletion stops it first: it is
+        // the surface a customer's application is calling.
+        place?.postgrest_container_id, postgrestName(project.ref),
         place?.pooler_container_id, poolerName(project.ref),
         place?.container_id, containerName(project.ref),
       ].filter(Boolean)) {
@@ -1917,7 +2140,8 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       }
       await deps.pool.query(
         `UPDATE project_databases
-            SET container_id = NULL, pooler_container_id = NULL
+            SET container_id = NULL, pooler_container_id = NULL,
+                postgrest_container_id = NULL
           WHERE project_id = $1`, [projectId]);
       ctx.log('containers removed; volume, network and placement kept');
     },
@@ -2129,6 +2353,8 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       generateApiKeys,               // P1e
       startPooler,                   // P2b
       waitPoolerHealthy,             // P2b — proves the whole pooled chain
+      startPostgrest,                // P5b — after generate_api_keys: it needs the JWKS
+      waitPostgrestHealthy,          // P5b — /ready, not /live: 503 is the failure that matters
       writeConnection,               // T5e
       markReady,                     // T5e
     ],
@@ -2137,6 +2363,7 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       disableApi,                    // T7
       disableWrites,                 // T7
       finalBackup,                   // T7 (gate, unimplemented in M0 — D-066)
+      stopPostgrest,                 // P5b — the front door first, see the step
       stopPooler,                    // P2b — before the database, see the step
       stopContainer,                 // T7
       removeNetwork,                 // P2a — holds no data; frees the subnet
@@ -2185,6 +2412,12 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       waitHealthy,                   // T5d
       startPooler,                   // P2b
       waitPoolerHealthy,             // P2b
+      // Without these a resumed project has a database and a pooler and **no data
+      // API** — it would look fully recovered in the dashboard and answer nothing
+      // on `/rest/v1`. `start_postgrest` is check-then-act, so it reuses the
+      // container the pause left behind rather than creating a second.
+      startPostgrest,                // P5b
+      waitPostgrestHealthy,          // P5b
       markResumed,                   // P2c
     ],
     // Credential rotation (P2d). The pooler is absent from this list on purpose:

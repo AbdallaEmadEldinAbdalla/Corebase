@@ -48,7 +48,8 @@ export interface ReconcileOptions {
 
 export interface Drift {
   class: 'container_not_running' | 'zombie_container' | 'orphan_container'
-    | 'pooler_not_running' | 'stuck_transition'
+    | 'pooler_not_running' | 'postgrest_not_running' | 'unknown_container_role'
+    | 'stuck_transition'
     | 'orphan_volume' | 'orphan_network' | 'reservation_drift';
   ref?: string;
   detail: string;
@@ -134,9 +135,9 @@ export function createReconciler(opts: ReconcileOptions) {
       // ── desired state ────────────────────────────────────────────────────
       const { rows: desired } = await opts.pool.query<{
         id: string; ref: string; status: string; plan: string; container_id: string | null;
-        node_hostname: string | null;
+        postgrest_port: number | null; node_hostname: string | null;
       }>(`SELECT p.id, p.ref::text AS ref, p.status::text AS status, p.plan::text AS plan,
-                 d.container_id, n.hostname AS node_hostname
+                 d.container_id, d.postgrest_port, n.hostname AS node_hostname
             FROM projects p
             LEFT JOIN project_databases d ON d.project_id = p.id
             LEFT JOIN nodes n ON n.id = d.node_id
@@ -155,12 +156,34 @@ export function createReconciler(opts: ReconcileOptions) {
       const containers = await opts.docker.listContainers(`${LABEL_MANAGED}=true`);
       const byRef = new Map<string, { running: boolean; id: string }>();
       const poolerByRef = new Map<string, { running: boolean; id: string }>();
+      const postgrestByRef = new Map<string, { running: boolean; id: string }>();
       for (const c of containers) {
         const ref = c.Labels?.[LABEL_REF];
         if (!ref) continue;
         const entry = { running: c.State === 'running', id: c.Id };
-        if (c.Labels?.[LABEL_ROLE] === 'pooler') poolerByRef.set(ref, entry);
-        else byRef.set(ref, entry);
+        // Explicit per role, with no `else` catch-all. This used to read "pooler,
+        // or otherwise the database", and P5b's third container would have landed
+        // in the database bucket — reconciliation would then have compared a
+        // PostgREST against what it expects of a Postgres, and which of the two
+        // won the map would have depended on iteration order.
+        //
+        // The role label is missing only on containers predating it, which is why
+        // an absent role still counts as the database; anything *named* and
+        // unrecognised is drift, and saying so is the point.
+        const role = c.Labels?.[LABEL_ROLE];
+        if (role === 'pooler') poolerByRef.set(ref, entry);
+        else if (role === 'postgrest') postgrestByRef.set(ref, entry);
+        else if (role === 'database' || role === undefined) byRef.set(ref, entry);
+        else {
+          drift.push({
+            // `alert_only`: an unrecognised role is a thing a human added or a
+            // version skew between this reconciler and the node's images, and
+            // neither is safe to repair automatically.
+            class: 'unknown_container_role', ref, action: 'alert_only',
+            detail: `container ${c.Id.slice(0, 12)} carries role "${role}", which this `
+              + 'reconciler does not know — it is neither repaired nor removed',
+          });
+        }
       }
 
       // ── diff, project by project ─────────────────────────────────────────
@@ -193,6 +216,42 @@ export function createReconciler(opts: ReconcileOptions) {
                 : `project is ${p.status} and has no pooler on the node — DATABASE_URL is dead`,
             });
           }
+        }
+
+        // The data API is not optional either, and for a stronger reason than the
+        // pooler: `/rest/v1` is the surface a customer's *frontend* calls, so a
+        // ready project with a dead PostgREST is an application that is down for
+        // its users while the dashboard says everything is fine.
+        if (SHOULD_RUN.has(p.status) && actual?.running) {
+          const rest = postgrestByRef.get(p.ref);
+          // Only for projects that have ports for one: a project provisioned
+          // before P5b legitimately has no data API, and reporting drift for it
+          // every five minutes would be a permanent false alarm.
+          if (p.postgrest_port !== null && (!rest || !rest.running)) {
+            const action = await enqueueRepair(p.id, p.ref);
+            drift.push({
+              class: 'postgrest_not_running', ref: p.ref, action,
+              detail: rest
+                ? `project is ${p.status} but its data API is not running — /rest/v1 is dead`
+                : `project is ${p.status} and has no data API on the node — /rest/v1 is dead`,
+            });
+          }
+        }
+
+        if (SHOULD_NOT_RUN.has(p.status) && postgrestByRef.get(p.ref)?.running) {
+          // Same reasoning as the zombie pooler below, and the same repair: a data
+          // API outliving its project answers requests and then fails them against
+          // a database that is gone, which reads as "the API is broken" rather
+          // than "the project was deleted". Stopping is reversible, so automatic.
+          const rest = postgrestByRef.get(p.ref)!;
+          await opts.docker.setRestartPolicy(rest.id, 'no').catch(() => {});
+          await opts.docker.stopContainer(rest.id);
+          log('warn', 'drift repaired: zombie data api stopped',
+            { ref: p.ref, status: p.status });
+          drift.push({
+            class: 'zombie_container', ref: p.ref, action: 'stopped',
+            detail: `the data api was running while the project is ${p.status}`,
+          });
         }
 
         if (SHOULD_NOT_RUN.has(p.status) && poolerByRef.get(p.ref)?.running) {
