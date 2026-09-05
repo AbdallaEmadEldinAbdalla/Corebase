@@ -126,6 +126,14 @@ export function registerGateway(app: FastifyInstance, deps: GatewayDeps) {
     // Layered, because each catches what the others cannot: per-IP stops one host
     // from drowning a project, per-key stops one leaked key from spending the
     // project's whole budget, and per-project is the tier's actual ceiling.
+    //
+    // **Sequential, and deliberately not pipelined into one round-trip** (D-389).
+    // Firing all three together would save ~0.9 ms — P5f measured it — but every
+    // bucket would then count a request that an earlier bucket already refused,
+    // so a flood from one IP would burn the *project's* ceiling on its way to
+    // being rejected and deny everybody else. Short-circuiting is what keeps a
+    // rate limit from being an amplifier. Each `hit` is now a single round-trip
+    // (three commands in one MULTI), which is where the cheap win actually was.
     for (const [limiter, bucket, id] of [
       [deps.ipLimiter, 'gw-ip', req.ip ?? 'unknown'],
       [deps.keyLimiter, 'gw-key', hash.slice(0, 32)],

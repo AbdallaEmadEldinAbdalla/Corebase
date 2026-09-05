@@ -36,16 +36,40 @@ export function createRateLimiter(redis: Redis, opts: RateLimitOptions): RateLim
   return {
     async hit(key) {
       const k = `${prefix}${key}`;
-      // INCR then EXPIRE only on first hit: the window starts at the first
-      // attempt and does not slide forward with each one, which is what makes
-      // the ceiling real.
-      const count = await redis.incr(k);
-      if (count === 1) await redis.expire(k, opts.windowSeconds);
-      const ttl = count === 1 ? opts.windowSeconds : Math.max(await redis.ttl(k), 0);
+      // One round-trip, three commands.
+      //
+      // The previous version issued INCR and then TTL as separate awaits, so
+      // every check cost two round-trips — and the gateway makes three checks per
+      // request (D-033's layers), which is **six sequential round-trips on the
+      // hot path**. P5f measured them at 2.06 ms of a 6.5 ms gateway overhead
+      // against a budget of ~1.5 ms; the request-pipeline doc says these are
+      // pipelined, and it was right to.
+      //
+      // `EXPIRE ... NX` is what makes one round-trip possible while keeping the
+      // semantics: the window starts at the first attempt and does not slide
+      // forward with each one, which is what makes the ceiling real. Setting it
+      // unconditionally would restart the window on every hit and the limit would
+      // never be reached. Redis 7.0+.
+      const res = await redis.multi()
+        .incr(k)
+        .expire(k, opts.windowSeconds, 'NX')
+        .ttl(k)
+        .exec();
+      // `exec` returns [err, value] pairs, or null if the transaction was
+      // discarded. Treating a failure as "allowed" is deliberate: a limiter that
+      // fails closed turns a Redis blip into an outage for every project at once,
+      // which is a far worse failure than briefly not limiting.
+      const count = Number(res?.[0]?.[1] ?? 0);
+      const ttlRaw = Number(res?.[2]?.[1] ?? opts.windowSeconds);
+      if (!count) {
+        return { allowed: true, remaining: opts.limit, retryAfterSeconds: opts.windowSeconds };
+      }
       return {
         allowed: count <= opts.limit,
         remaining: Math.max(0, opts.limit - count),
-        retryAfterSeconds: ttl,
+        // A key with no expiry reads as -1; a missing key as -2. Neither is a
+        // sensible Retry-After, so the window is the floor.
+        retryAfterSeconds: ttlRaw > 0 ? ttlRaw : opts.windowSeconds,
       };
     },
     async reset(key) { await redis.del(`${prefix}${key}`); },
