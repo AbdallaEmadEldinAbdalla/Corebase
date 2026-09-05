@@ -141,10 +141,23 @@ beforeAll(async () => {
       NetworkingConfig: { EndpointsConfig: { [NET]: {} } },
     });
     await docker.startContainer(PG);
-    for (let i = 0; i < 60; i++) {
-      const r = await docker.execCapture(PG, ['pg_isready', '-U', 'postgres', '-q']);
-      if (r.exitCode === 0) break;
+    // `pg_isready` is not the signal here, and CI proved it: during `initdb` the
+    // official image runs a temporary server on the unix socket, so `pg_isready`
+    // *inside the container* answers yes while none of the image's init SQL has
+    // run yet. The next statement then failed with `role "authenticator" does not
+    // exist` — on a fresh CI volume, where init takes longer than on a warm local
+    // one. So the wait is for the thing actually depended on.
+    let ready = false;
+    for (let i = 0; i < 120; i++) {
+      const r = await docker.execCapture(PG, ['psql', '-U', 'postgres', '-tAc',
+        `select 1 from pg_roles where rolname = 'authenticator'`]);
+      if (r.exitCode === 0 && r.stdout.trim() === '1') { ready = true; break; }
       await new Promise((r2) => setTimeout(r2, 1000));
+    }
+    if (!ready) {
+      const logs = await docker.containerLogs(PG).catch(() => '');
+      throw new Error(`the project database never finished its init SQL — `
+        + `'authenticator' never appeared:\n${String(logs).slice(-1200)}`);
     }
 
     pair = generateKeypair();
