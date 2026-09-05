@@ -1,0 +1,57 @@
+## /etc/postgrest/postgrest.conf — project __REF__
+##
+## Rendered from docs/04-data-api/01-rest-api-design.md. Every line that is not
+## obvious carries its reason, because the alternative is a config nobody dares
+## change.
+
+## The one login role for the data API (D-074). `authenticator` is NOINHERIT and
+## never queries as itself: PostgREST issues `SET LOCAL ROLE` per transaction to
+## anon, authenticated or service_role, which is what makes the four-role model a
+## boundary rather than a convention. The password arrives via PGRST_DB_URI so it
+## is never written to this file.
+db-uri = "postgres://authenticator@__PG_HOST__:5432/postgres"
+
+db-schemas   = "public"
+db-anon-role = "anon"
+
+## Sizing against the free tier's max_connections = 20 (D-074): 3 reserved,
+## 7 here, 8 for the pooler, 2 direct. PostgREST is itself a pool, so this is the
+## project's entire data-API concurrency — not a per-request cost.
+db-pool = __DB_POOL__
+db-pool-acquisition-timeout = 10
+
+## The project's published keys (D-014), as a JWKS file. A *file* and not a
+## secret, because P4h made key rotation a dual-publish: during the swap window
+## this holds both kids, and a verifier holding only one would reject tokens that
+## are perfectly valid.
+jwt-secret = "@/etc/postgrest/jwks.json"
+jwt-role-claim-key = ".role"
+jwt-cache-max-lifetime = 3600
+
+## Schema-cache reload without a restart (D-100). The event trigger in the project
+## image NOTIFYs this channel on DDL, so `corebase db push`, the dashboard's table
+## editor and a developer in psql all get a reload for free — no code path in
+## Corebase has to remember to poke PostgREST. Possible only because this connects
+## directly to Postgres: LISTEN does not survive transaction pooling, which by
+## itself settles the connection topology (D-101).
+db-channel-enabled = true
+db-channel = "pgrst"
+
+## Request id → application_name, so a slow query in pg_stat_activity can be
+## traced back to the HTTP request that caused it (D-105).
+db-pre-request = "corebase.pre_request"
+
+## Safe here and only here: a direct connection, not the transaction pooler.
+db-prepared-statements = true
+
+## Caps any single response fleet-wide; clients page past it.
+db-max-rows = 1000
+db-extra-search-path = "public, extensions"
+
+server-host = "*"
+server-port = 3000
+admin-server-port = 3001
+
+## Follows privileges, so the OpenAPI document a caller sees is the surface that
+## caller can actually use rather than the whole schema (OQ-100).
+openapi-mode = "follow-privileges"
