@@ -162,6 +162,14 @@ It is the auth API's first browser client, and that is the point of asking for i
 
 The demo doesn't skip the verification step. Its server proxies the mail sink's read API under its own origin, so one click pulls the token out of the message the worker really sent over SMTP — `autoconfirm` stays off, which is both the default and the point. Driven end to end in a real browser: four steps, zero console errors.
 
+**Phase 5 opens by closing a hole that was already open.** The idle scan pauses a project after a week of inactivity, and it decided that from database connections alone. That was sound while there was no data plane — a client connection was the only way to use a project — and a tripwire was left in place so that adding PostgREST would fail loudly and force the missing "no HTTP traffic" signal to be built first.
+
+The auth module walked straight past it. The tripwire watched for a third *container*; the auth module is a shared multi-tenant *process*, so nothing tripped when it started serving `/auth/v1/*` per project — and its database connections open as an internal role the scan deliberately excludes. So for the whole of Phase 4, **a project whose users only signed up and logged in looked idle**, and would have been paused under them after seven days with nothing to wake it.
+
+The fix needed no change to the scan at all: the signal writes `last_active_at`, which is the column the scan already filters candidates on, so a project touched by traffic simply stops being a candidate. It's a throttled write to Postgres rather than a counter in Redis, because a lost timestamp fails in the dangerous direction — it reads as *idle*.
+
+The test is a controlled comparison: two identical projects, both backdated a month, one scan, and the traffic signal the only difference. One stays ready; its twin pauses.
+
 ## Run it
 
 ```bash

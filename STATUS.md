@@ -1,6 +1,6 @@
 # Corebase — Build Status
 
-**Last updated:** 2026-09-04 · **Phase:** Phase 4 (auth) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 complete** (P3a–P3h; **all four exit criteria met**) · **Phase 4 complete** (P4a–P4i; 2 of 3 exit criteria met — the third needs a real domain and provider)
+**Last updated:** 2026-09-05 · **Phase:** Phase 4 (auth) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 complete** (P3a–P3h; **all four exit criteria met**) · **Phase 4 complete** (P4a–P4i; 2 of 3 exit criteria met — the third needs a real domain and provider) · **Phase 5 started** (P5a done)
 
 This file is the handover document. If you are picking Corebase up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
@@ -2774,6 +2774,52 @@ Two bugs in my own `serve.py` were found that way: a `log_message` override that
 crashed on `send_error`'s int status and answered an empty reply instead of the
 403 it had just decided on, and the path allowlist — now proven against a
 traversal attempt and a non-allowlisted path, both 403.
+## 4c. Phase 5 — data API and RLS
+
+### P5a — the data-plane traffic signal · done · 5 unit + 1 integration
+
+D-236's first signal, built because Phase 5 cannot add PostgREST without it — and
+building it found that **the gap had already opened, one phase early, through a
+door the tripwire was not watching**.
+
+The tripwire asserts a project is exactly two containers, on the reasoning that a
+third would be a new way to use a project. The auth module became one **without
+adding a container**: it is a shared multi-tenant process. So since P4b,
+`/auth/v1/*` has served per-project traffic while the idle scan still concluded
+from database connections alone — and the auth module's own connections open as
+`corebase_auth`, which the scan deliberately excludes along with every internal
+role. For that entire period **a project whose users only signed up and logged in
+looked idle**, and would have been paused under them after seven days with nothing
+to wake it, because resume-on-request is Phase 5 work. Nothing failed, which is
+exactly what the tripwire existed to prevent (**D-375**).
+
+**The signal writes the column the design already had** (**D-374**).
+`project_databases.last_active_at` already means "last known active" and the scan
+already filters candidates on it, so a project touched by traffic simply stops
+being a candidate — and **the scan needed no change at all**. It is fired from
+`resolveProject`, which is the one place every data-plane request passes through:
+the auth endpoints today, whatever the gateway routes tomorrow.
+
+Postgres rather than Redis, despite this being the hot path, because Redis is a
+delivery mechanism and never the truth (D-018) and a lost timestamp fails in the
+dangerous direction — it reads as *idle*. The throttle is what keeps it off the
+hot path instead: one write per project per minute, against a window measured in
+days, so a minute of staleness cannot change the decision. The write is never
+awaited and never throws, and losing one releases the memo so the next request
+retries rather than waiting out the interval.
+
+**Verification:** 5 unit tests (fifty requests cost one write; the interval
+reopens it; projects throttle independently, or a busy project would suppress a
+quiet one's only request of the hour; a failed write neither throws nor blocks and
+releases the memo; the memo is bounded, since an unbounded map fed by an
+unauthenticated endpoint is a leak with a public trigger) and one integration test
+that is a **controlled comparison**: two identical projects, both backdated thirty
+days, one scan, and the traffic signal the only difference between them — one
+stays `ready`, its twin pauses. Breaking the meter makes it fail.
+
+Its first version ran a scan merely to assert the project *was* a candidate, and
+that scan paused it — a setup step with the very side effect the test exists to
+prevent. The comparison needs no such ordering and proves more.
 
 ## 5. Rules the code follows
 
@@ -3060,7 +3106,12 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   per-role `CONNECTION LIMIT` on `developer`. A customer can still point an
   application fleet at `DIRECT_DATABASE_URL` and exhaust the direct headroom; it
   fails visibly, which is the intended behaviour, but nothing caps it.
-- **Idle detection is missing its first signal**, deliberately. The doc requires both
+- ~~**Idle detection is missing its first signal**~~ — **built in P5a** (D-374).
+  What follows is kept for the reasoning, and for the correction underneath it:
+  the tripwire described here was watching the container count, and the data plane
+  arrived as a shared *process* instead (D-375), so the gap it guarded against had
+  already been open since P4b.
+- **Idle detection was missing its first signal**, deliberately. The doc requires both
   "no data-plane traffic" and "no database connections"; only the second exists,
   because the first needs a gateway. It is sufficient today — a client connection is
   the only way to use a project — and would become wrong the moment PostgREST lands.
