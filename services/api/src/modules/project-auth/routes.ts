@@ -90,6 +90,8 @@ export interface ProjectAuthDeps extends ResolveDeps {
   refreshIpLimiter: RateLimiter;
   /** Absent means owed emails are recorded and not sent — the state until P4d. */
   mailer?: AuthMailer;
+  /** Records data-plane activity so the idle scan does not pause a project in use (P5a). */
+  traffic?: { seen(projectId: string): void } | undefined;
 }
 
 const tooMany = (retryAfterSeconds: number) =>

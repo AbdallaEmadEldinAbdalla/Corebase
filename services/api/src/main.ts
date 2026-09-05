@@ -12,6 +12,7 @@ import { createSessionStore, createMemorySessionStore } from './kernel/sessions.
 import { createRateLimiter, createMemoryRateLimiter } from './kernel/rate-limit.ts';
 import type { ProjectAuthDeps } from './modules/project-auth/routes.ts';
 import { createMailer } from './modules/project-auth/mailer.ts';
+import { createTrafficMeter } from './modules/project-auth/traffic.ts';
 import { createAuthEmailQueue } from '@corebase/queue';
 import type { AuthDeps } from './modules/auth/routes.ts';
 import { createOrgStore } from './modules/orgs/store.ts';
@@ -187,6 +188,15 @@ const projectAuth: ProjectAuthDeps | undefined = await (async () => {
     // Must match what the worker signed the project's keys with (CB_JWT_ISSUER
     // there), or every apikey fails its issuer check.
     ...(process.env.CB_JWT_ISSUER ? { keyIssuer: process.env.CB_JWT_ISSUER } : {}),
+    // The traffic signal (P5a). Without it the idle scan concludes from database
+    // connections alone, and a project used only through `/auth/v1/*` — whose
+    // connections open as an internal role the scan excludes — looks idle and is
+    // paused under its users.
+    traffic: createTrafficMeter(pool, {
+      onError: (err) => console.warn(JSON.stringify({
+        level: 'warn', service: 'api', msg: 'could not record project activity',
+        error: err.message })),
+    }),
     /**
      * The mail path (P4d): suppression and caps are checked here, at enqueue,
      * and the worker does the sending.

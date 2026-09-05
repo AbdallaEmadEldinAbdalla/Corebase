@@ -102,6 +102,15 @@ export interface ResolveDeps {
   /** Overridable so tests and self-hosted deployments can name their own domain. */
   projectDomain?: string | undefined;
   /**
+   * Records that this project served data-plane traffic (P5a, D-236).
+   *
+   * Absent means the signal is not recorded, which is the pre-P5a behaviour and
+   * therefore the one that pauses an actively-used project — so it is optional
+   * only because a unit test building a context has no pool to give it, never
+   * because a deployment should run without it.
+   */
+  traffic?: { seen(projectId: string): void } | undefined;
+  /**
    * Pins the issuer that API keys must carry. Only needed where the saga was run
    * with `CB_JWT_ISSUER` set to something other than the project's own origin —
    * which is how the staging stack mints keys.
@@ -220,6 +229,13 @@ export async function resolveProject(
   if (!verified) {
     throw new AuthContextError(401, 'That API key is not valid for this deployment.');
   }
+
+  // Every data-plane request resolves a project, so this is the one place that
+  // sees all of them — `/auth/v1/*` today, and whatever the gateway routes
+  // tomorrow. Recorded before the status check on purpose: traffic to a paused
+  // project is still traffic, and it is exactly the evidence that pausing it was
+  // wrong.
+  deps.traffic?.seen(row.id);
 
   if (row.status !== 'ready') {
     // Named, because this one the caller can act on and it is not a security
