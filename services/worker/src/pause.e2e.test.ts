@@ -100,7 +100,14 @@ beforeEach(async () => {
   // eu-central". See rotation.e2e for the full reasoning; the short version is
   // that a file must declare the fixture it needs instead of inheriting one,
   // because vitest shards by file and adding a file reshuffles the shards.
-  await pool.query(`update nodes set ram_reserved_mb = 0, status = 'active'`);
+  // Disk as well as RAM. Both are reservations against a node, both are left
+  // behind by any file that provisioned without releasing, and zeroing one of the
+  // two just moves the failure to the other dimension — which is exactly what
+  // happened: fixing the status left `disk_reserved_gb` at 190/200 GB and the
+  // same five tests failed on the placement ceiling instead. The truncate above
+  // removes every project_database, so no project holds any of it.
+  await pool.query(
+    `update nodes set ram_reserved_mb = 0, disk_reserved_gb = 0, status = 'active'`);
 }, 60_000);
 
 function sagas() {
