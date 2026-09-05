@@ -286,10 +286,13 @@ cmd_seed_images() {
   for image in corebase/postgres:17.5 corebase/pgbouncer:1.23 corebase/postgrest:12.2; do
     if ! docker image inspect "$image" >/dev/null 2>&1; then
       echo "  ✗ $image is not built locally — build it first:"
+      # postgrest before postgres: "postgrest" *contains* "postgres", so the
+      # looser arm first makes the specific one dead code and tells you to build
+      # the wrong image.
       case "$image" in
+        *postgrest*) echo "      docker build -t $image infra/docker/postgrest" ;;
         *postgres*)  echo "      docker build -t $image infra/docker/postgres" ;;
         *pgbouncer*) echo "      docker build -t $image infra/docker/pgbouncer" ;;
-        *postgrest*) echo "      docker build -t $image infra/docker/postgrest" ;;
       esac
       exit 1
     fi

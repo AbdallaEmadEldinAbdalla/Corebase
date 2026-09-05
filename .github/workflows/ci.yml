@@ -134,6 +134,19 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: build the project data-API image
+        # Third container per project since P5b (D-011). `seed-images` refuses to
+        # run without it, which is how this omission surfaced — as a red CI on the
+        # commit that added the requirement rather than as a mystery timeout deep
+        # in provisioning.
+        uses: docker/build-push-action@v7
+        with:
+          context: infra/docker/postgrest
+          tags: corebase/postgrest:12.2
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: bring up the staging substitute
         run: ./scripts/staging.sh up
 
