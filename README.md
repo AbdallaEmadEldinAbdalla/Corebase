@@ -8,7 +8,7 @@ Corebase is a developer-focused Backend-as-a-Service: a developer creates a proj
 
 ## Status
 
-**Milestone 0 and Phases 1–4 complete; Phase 5 in progress** (P5a–P5c and P5e: the traffic signal, PostgREST per project, the gateway in front of it, and the tenant-isolation suite now gating releases). Phase 4 met two of its three exit criteria; the third needs a real sending domain and cannot be met on Docker.
+**Milestone 0 and Phases 1–4 complete; Phase 5 in progress** (P5a–P5e: the traffic signal, PostgREST per project, the gateway in front of it, the tenant-isolation suite now gating releases, and the RLS posture and policy cookbook proven through the gateway). Phase 4 met two of its three exit criteria; the third needs a real sending domain and cannot be met on Docker.
 
 **The provisioning spine (Milestone 0).** `POST /v1/projects` returns a real, isolated PostgreSQL 17.5 database on a data node about **2.5 seconds** later, with its own volume, cgroup limits, the full role model, envelope-encrypted credentials, and a connection string you can `psql` into immediately. Twenty consecutive creates are measured end to end.
 
@@ -232,6 +232,25 @@ rewritten to name the neighbour and re-signed correctly, refused anyway.
 Every deny has a positive control beside it, because the failure mode of a suite
 like this is passing for the wrong reason. A container with no networking passes
 every network row; a pooler that refuses everyone passes the credential row.
+
+**Then the policy cookbook was run exactly as the docs write it — and it could
+not be written at all.** Every pattern calls `auth.uid()`, and creating a policy
+that references it needs USAGE on the `auth` schema. That was granted to the
+roles a *request* runs as, and to nobody else — so the role a customer runs
+migrations as failed on the first policy anyone would copy out of the
+documentation, with an error that reads like a platform fault. The entire subject
+of this phase was unusable from the connection string the previous one hands out.
+
+One pattern was also simply wrong. Soft delete filtered tombstones in the read
+policy, and PostgREST writes with `RETURNING`, so Postgres applies the read policy
+to the *new* row too — meaning the one operation the pattern exists to perform
+fails on its own policy. The rule generalises: an UPDATE may not move a row
+outside its own SELECT policy. Tombstones now hide in a view instead.
+
+Running the docs verbatim is the whole technique here. These are the policies
+customers copy, so the value is entirely in not quietly improving them on the way
+into the test — if a pattern needs a fix to work, the documentation is what should
+change.
 
 ## Run it
 

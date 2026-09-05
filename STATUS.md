@@ -3059,6 +3059,74 @@ run on a single-node staging substitute. The persistent prod canaries (daily,
 non-destructive) need a prod fleet. All three are in §8 rather than quietly
 dropped from the matrix.
 
+### P5d — the RLS posture and the policy cookbook, through the gateway · done · 15 tests
+
+Phase 5's exit criterion — *the full filter/embed/RPC surface works through the
+gateway against a seeded project* — plus the posture and the cookbook that make
+the surface safe to expose. Everything runs through the gateway rather than in
+psql, because a policy that works in psql and not through the API is the failure
+that matters: the claims arrive as a GUC PostgREST sets, and a policy is only
+correct if it reads them the way the request delivers them.
+
+**The step's largest finding is that the entire cookbook was impossible to
+write** (**D-387**). Every pattern calls `auth.uid()`; resolving that inside a
+`CREATE POLICY` needs USAGE on schema `auth`; the image granted it to `anon`,
+`authenticated` and `service_role` — the roles a *request* runs as — and to
+nobody else. The role a customer runs migrations as had none of it, so the first
+policy anyone copied out of the docs failed with `permission denied for schema
+auth`. Confirmed on a saga-provisioned project, not only in the test's own
+container: Phase 5's whole subject was unusable from the connection string Phase 2
+hands out. `create schema app` failed too, which put the SECURITY DEFINER pattern
+out of reach as well.
+
+Neither grant widens exposure. USAGE on a schema is the right to *name* things in
+it, never to read them — `auth.users`, `auth.refresh_tokens` and
+`auth.one_time_tokens` stay unreadable, and the isolation suite's DB-3 now
+asserts that at the table rather than at the schema. That is the boundary drawn
+more precisely rather than moved, and the exact-message assertion is the only
+reason the change was visible at all.
+
+**Cookbook pattern 5 could not work through the API, as written** (**D-386**). It
+filtered tombstones in the SELECT policy; PostgREST writes with `RETURNING`, so
+Postgres applies the SELECT policy to the *new* row, and the whole purpose of the
+tombstoning UPDATE is to move that row out of the read policy's reach. It failed
+on the one operation it exists to perform, and no request shape avoided it —
+`return=minimal`, `return=representation` and `count=none` were each tried. The
+doc now states the general rule (**an UPDATE may not move a row outside its own
+SELECT policy**) and hides tombstones in a `security_invoker` view. That keyword
+is the load-bearing token: without it the view runs as its owner and quietly
+becomes the bypass the policies exist to prevent.
+
+**The posture is asserted per role, because default-deny is three different
+mechanisms** — a privilege error for `anon` (no table grant at all, D-108), `200
+[]` for `authenticated` (grant held, zero policies), and full rows for
+`service_role` (BYPASSRLS by attribute, D-082, which is why it works on a table
+nobody wrote a policy for). A test that only checked "nothing leaked" would pass
+with any two of them broken. The grants come from the *customer role's own*
+default privileges, which is a trap worth pinning: `ALTER DEFAULT PRIVILEGES` is
+per creating role, so the image's settings cover platform migrations and nothing
+a customer does.
+
+**Three tests were wrong first, and two of them were passing.** The InitPlan test
+put `(select auth.uid())` in the query's own WHERE clause — an InitPlan duly
+appeared, proving a fact about scalar subqueries rather than anything about
+*policy* predicates, and against tables with no policies at all, whose plans were
+`One-Time Filter: false` and short-circuited before any predicate mattered. The
+index test gave every row the same owner, so the planner kept choosing a
+sequential scan *correctly* (an index matching every row is worse than none) and
+the test read that as the index having no effect. And `toContain` on an array is
+exact element equality, so the `search_path` assertion never matched what
+Postgres stores.
+
+**Verification:** 15/15 — the posture per role, all five cookbook patterns plus
+the SECURITY DEFINER helper run verbatim, the InitPlan and indexing claims read
+off real plans, and the exit criterion's surface: filters (`eq`, `gt`, `like`,
+`in`, `or`), ordering, limit/offset, Range headers, embeds in both directions,
+and RPC by POST and GET. The embed tests are the security-relevant ones — every
+child row is readable and only the parent is policy-scoped, so an embed that
+ignored the parent's policy would surface the other user's name; it returns null.
+Isolation stayed green at 39/39, and credentials + auth-schema (34) unchanged.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
