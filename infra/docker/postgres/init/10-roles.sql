@@ -55,3 +55,19 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 
 -- Customer roles never get filesystem or program execution (D-080).
 REVOKE ALL ON SCHEMA information_schema FROM PUBLIC;
+
+-- …but `authenticator` gets it back, because PostgREST builds its schema cache by
+-- introspecting `information_schema` and `pg_catalog` (P5b). Without this it
+-- starts, connects, and then answers **every request with 503** while logging
+-- `permission denied for schema information_schema` — a project that looks
+-- provisioned and serves nothing.
+--
+-- This is not a hole in the revoke above. That revoke exists so `anon` and
+-- `authenticated` — the roles a *request* runs as — cannot enumerate a schema
+-- they have no table grants on. `authenticator` is different in kind: it is the
+-- login role that never queries as itself (NOINHERIT, D-074), and it holds a
+-- password only the control plane has. Reading the catalogue is the entire job
+-- PostgREST logs in to do, and `SET LOCAL ROLE` drops to a customer role before
+-- any of the customer's data is touched.
+GRANT USAGE ON SCHEMA information_schema TO authenticator;
+GRANT SELECT ON ALL TABLES IN SCHEMA information_schema TO authenticator;
