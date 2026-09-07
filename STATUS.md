@@ -3518,6 +3518,63 @@ that reveals nothing, per-object RLS skipped on the public path while the
 authenticated path for the same object still denies `anon`, a lookalike domain
 resolving to nothing, and a year-long lifetime clamped to seven days.
 
+### P6e — presigned direct upload · done · 8 tests
+
+D-122's other half: objects above 50 MB bypass the service entirely, because
+every proxied byte costs a node's ingress twice. The price is that **nothing here
+watches the upload happen**, and the intent row is what makes that gap
+recoverable — it records exactly what was authorised, so completion can be
+checked against it and an abandoned upload can be swept (D-124's F4).
+
+**Authorization is a trial `INSERT`, rolled back** (**D-400**). The doc asks for
+"an RLS check on the intended path", and the only way to ask Postgres whether
+*this* caller may create *this* row is to try — the customer's `WITH CHECK` can
+depend on the path, the bucket, their claims or a membership table, so no
+expression of the question avoids running their policy. Re-implementing it in
+TypeScript would create two authorities that can disagree; deferring the check to
+completion would let a client upload gigabytes before being told no. The savepoint
+rollback takes the usage trigger's effect with it, which the tests assert against
+both the object row and the project's usage total — a probe that leaked into the
+quota would bill a customer for an upload that never happened.
+
+**The cap is a signed `content-length`, not a range** (**D-401**), which departs
+from the doc's wording deliberately: `content-length-range` is a POST-policy
+construct for browser form uploads, while for a presigned PUT the exact-length
+signature is the stronger equivalent — the store refuses a mismatch before a byte
+of ours is involved. `content-type` is signed beside it, so a leaked URL cannot be
+repurposed for a different file shape. `UNSIGNED-PAYLOAD` is unavoidable, since
+the bytes do not exist when the URL is signed — and that is exactly why
+completion trusts nothing the client says.
+
+**Completion re-reads the truth from the store** (**D-402**): true size, true
+etag. The size is checked against the intent even though the signed
+`content-length` should make a mismatch impossible, because an impossible state
+reached anyway means the assumption was wrong, and finalising on it would write a
+false number into the customer's quota. The content sniff can only happen here —
+no earlier moment had bytes to inspect — and it reads the first 512 bytes by
+*range*, since every signature lives in the first twelve and fetching a 4 GB
+video to see its header would reintroduce the cost this path exists to avoid. A
+refusal deletes the object immediately rather than deferring to the sweep: the
+service knows now that those bytes are unwanted.
+
+The row is finalised as `service_role` using the *intent's* owner rather than the
+completing caller — P6d's pattern again, since the authorisation decision was made
+when the URL was signed, and the row should record whose upload it was rather than
+who pressed the button. The intent is deleted after the row exists, so a crash
+between them leaves an intent whose object already has a row, which the sweep
+reads as complete and drops. An expired intent answers 410 rather than
+finalising: the bytes may be there, but the authorisation behind them has lapsed.
+
+**Verification:** 8 tests, the first being the whole path — sign, `PUT` straight
+at the object store over HTTPS from the test process, complete, and then download
+the result byte-identically through the ordinary authenticated route, which is
+what proves the two halves produced one coherent object rather than a row and
+some bytes that merely coexist. Plus: a wrong length and a wrong content type both
+refused *by the store*; completing before uploading is a 409 with no row; a
+`image/png` declaration over a Windows binary caught at completion with the bytes
+deleted; signing refused before a URL exists when the policy would refuse the row;
+and the trial insert leaving nothing behind in either the table or the quota.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
