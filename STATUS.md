@@ -3448,6 +3448,76 @@ the derived key, the row's etag matching the store's, a refused upload leaving
 nothing behind, Range answering 206, and each refusal paired with a control that
 succeeds. 24/24 in the storage suite, 202/202 in the api package.
 
+### P6d — signed URLs and public buckets · done · 14 unit + 11 integration
+
+Two ways to reach an object without an API key, and what they have in common is
+the interesting part: **neither has a caller to evaluate policies against**
+(**D-399**). A signed URL is redeemed by someone who may not be able to
+authenticate at all; a public object is fetched by anyone. Running RLS as nobody
+would deny every one of them, so the permission question is answered *earlier* —
+at minting, under the requester's own policies, and at the moment a bucket is
+marked public. That is what "the bucket is the ACL" means in practice, and it is
+why minting checks visibility first: without that, the endpoint launders access
+("I cannot read this, but here is a link that can").
+
+**The tokens are ours, not the store's presigning**, for three reasons that each
+stand alone: they work through the project's own hostname, so a customer's links
+do not point at a third party; they survive rotation of the store credential,
+which otherwise turns credential hygiene into a customer-visible outage; and they
+never expose `projects/<ref>/…`, so the physical key layout stays an
+implementation detail rather than appearing in every shared link.
+
+**Deliberately not a JWT** (**D-396**). A JWT names its algorithm in the token,
+which is the root of every algorithm-substitution attack; these have no header,
+no negotiation, and one algorithm that is never stated on the wire, so it cannot
+be talked down. Nothing about a bearer capability in a URL benefits from being
+extensible.
+
+**The verification order is the security** (**D-397**): kid, then signature, then
+expiry, then target. An unaccepted kid is refused *before any key is derived*,
+because the kid is the HKDF salt and honouring an arbitrary one lets the attacker
+choose the key. And `verifyToken` takes the request's target rather than handing
+the payload back, because a signature proves the token is ours while only that
+comparison proves it is for *this* object — the isolation matrix's ST-2 is a valid
+signature with the path swapped, and it is refused.
+
+The master secret is created **lazily** (**D-398**), which is race-safe for a
+precise reason: `put` is `ON CONFLICT DO NOTHING`, so two requests racing to
+create it produce one secret — first writer wins, loser reads it back. `replace`
+would have been the bug, invalidating every URL signed a moment earlier. Lazy
+also means projects provisioned before this step are not permanently unable to
+sign.
+
+Every refusal on the redeem path returns **one status and one message**. Expired,
+forged, wrong object and unknown kid all answer `403 That signed URL is not
+valid.`, and the distinction goes to the logs — handing it to the holder of a bad
+token turns the endpoint into an oracle for which objects exist and when links
+expire. A private bucket on the public path answers **404, not 403**, so it does
+not confirm its own existence to a prober.
+
+The public path resolves its project from the routed **Host**, never from
+anything the client chose — a `?ref=` parameter would make it a way to read any
+project's public buckets from any hostname. Resolution is cached in process for
+30 seconds, the doc's own figure: this path has no apikey, so identifying a
+project means a control-plane query and D-051 wants none on a read path. The cost
+is the documented one, and it is documented: a `public` flip takes up to 30 s to
+propagate.
+
+Revocability is stated rather than left to be discovered. A signed URL **cannot**
+be revoked before `exp` short of rotating the project's kid, which kills every
+outstanding URL at once — so one hour by default, seven days hard maximum, and
+the response body itself carries `revocable: false`.
+
+**Verification:** 14 unit tests, every one an attack that costs nothing to
+attempt because the token travels in a URL — swapped path, swapped bucket,
+swapped project, a neighbour's signature, edited payload, edited expiry,
+attacker-chosen kid, a short signature that would make `timingSafeEqual` throw,
+and seven shapes of garbage that must refuse rather than 500. Plus 11 integration
+tests: redemption with no apikey at all, the ST-2 path swap refused with a body
+that reveals nothing, per-object RLS skipped on the public path while the
+authenticated path for the same object still denies `anon`, a lookalike domain
+resolving to nothing, and a year-long lifetime clamped to seven days.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
