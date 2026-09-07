@@ -254,23 +254,22 @@ describe('P3g — what must never be destroyed', () => {
 
     // An S3 whose deletes do nothing: list keeps reporting the objects.
     //
-    // The three read/write operations throw rather than returning something
-    // harmless, and that is a small assertion of its own: repo destruction lists
-    // and deletes, and if it ever starts uploading or reading object bytes this
-    // test fails loudly instead of quietly exercising a path nobody meant it to
-    // have.
+    // Built by starting from *every* method the real client has and replacing
+    // each with a thrower, then overriding the three this path uses. Two reasons
+    // it is done that way round: the standing assertion survives — repo
+    // destruction lists and deletes, and touching anything else fails loudly
+    // rather than quietly exercising a path nobody meant it to have — and adding
+    // a method to the S3 client no longer breaks this file's types, which it did
+    // three times while the storage module was being built.
     const unreachable = (op: string) => () => {
       throw new Error(`repo destruction called ${op}, which it has no business doing`);
     };
-    const lying: S3 = {
+    const lying = {
+      ...Object.fromEntries(Object.keys(s3).map((k) => [k, unreachable(k)])),
       list: (pfx: string) => s3.list(pfx),
       deleteBatch: async () => [],
       deleteObject: async () => {},
-      putObject: unreachable('putObject') as S3['putObject'],
-      getObject: unreachable('getObject') as S3['getObject'],
-      headObject: unreachable('headObject') as S3['headObject'],
-      presignPut: unreachable('presignPut') as S3['presignPut'],
-    };
+    } as unknown as S3;
     const r = await createRepoDestroy({ pool, s3: lying }).scanOnce();
     expect(r.destroyed).toBe(0);
     expect(r.failed).toBe(1);

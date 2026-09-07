@@ -323,6 +323,53 @@ export function createS3(cfg: S3Config) {
     },
 
     /**
+     * Every key under a prefix, **with its size and modification time**.
+     *
+     * The reconciliation sweep needs all three: the key to anti-join against the
+     * metadata rows, the size to recompute a project's true storage total, and
+     * the timestamp for the grace window — an object younger than the grace
+     * period may simply be an upload that has not written its row yet, and
+     * deleting it would race a request that is going fine.
+     *
+     * Parsed per `<Contents>` block rather than by three independent scans for
+     * `<Key>`, `<Size>` and `<LastModified>`: independent scans line up only as
+     * long as every object has all three fields, and the first one that does not
+     * silently pairs one object's key with another's size.
+     */
+    async listDetailed(
+      prefix: string,
+    ): Promise<Array<{ key: string; size: number; lastModified: Date }>> {
+      const out: Array<{ key: string; size: number; lastModified: Date }> = [];
+      let token: string | undefined;
+      for (let page = 0; page < 10_000; page++) {
+        const res = await send('GET', '', {
+          query: {
+            'list-type': '2', prefix, 'max-keys': '1000',
+            ...(token ? { 'continuation-token': token } : {}),
+          },
+        });
+        if (res.status !== 200) {
+          throw new Error(`S3 list ${prefix} → ${res.status}: ${res.body.slice(0, 300)}`);
+        }
+        for (const block of res.body.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
+          const xml = block[1]!;
+          const key = /<Key>([^<]*)<\/Key>/.exec(xml)?.[1];
+          if (!key) continue;
+          out.push({
+            key: decodeXml(key),
+            size: Number(/<Size>(\d+)<\/Size>/.exec(xml)?.[1] ?? 0),
+            lastModified: new Date(/<LastModified>([^<]*)<\/LastModified>/.exec(xml)?.[1]
+              ?? 0),
+          });
+        }
+        const truncated = /<IsTruncated>true<\/IsTruncated>/.test(res.body);
+        token = /<NextContinuationToken>([^<]*)<\/NextContinuationToken>/.exec(res.body)?.[1];
+        if (!truncated || !token) break;
+      }
+      return out;
+    },
+
+    /**
      * Every key under a prefix, following continuation tokens.
      *
      * Paged rather than capped: a repo with more than a thousand objects is
