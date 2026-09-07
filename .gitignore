@@ -25,6 +25,10 @@ infra/docker/staging/mail-sink.env
 # The object store's self-signed TLS material — generated per environment.
 infra/docker/staging/object-store-certs/
 demo/auth/config.js
+# Same reason: the Phase 5 demo's config carries a real project's anon key,
+# regenerated on every run. Public by design, but it is a live credential for
+# somebody's local project and not a source file.
+demo/data/config.js
 
 # k6 writes a raw summary per script per run. The curated record is
 # p5f-latency.json, which the harness writes and which is worth a diff;

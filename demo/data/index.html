@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Corebase Data API — demo</title>
+<!--
+  Phase 5's demo (roadmap §Phase 5): the proposal's §80 five-minute flow minus
+  storage — "table + policy via SQL, insert as service_role, read as an
+  authenticated user seeing only their rows."
+
+  Plain on purpose, like Phase 4's: no build step, no framework, no dependency.
+  This page is the *data* API's first browser client, and anything that fails in
+  it is a thing a customer's own frontend would hit.
+
+  **What is not on this page is the subject of the demo.** There is no
+  service_role key here and there must never be one: it carries BYPASSRLS, so a
+  page holding it would show every visitor every user's notes. The rows were
+  inserted by `scripts/data-demo.sh` — the customer's *backend* — and this page
+  holds only the anon key, which is published in client code by design (D-029).
+  Everything it can see, it can see because a policy said so.
+-->
+<style>
+  :root {
+    --ink: #1a1a1a; --ink-soft: #5c5c5c; --line: #e2ded8;
+    --bg: #f7f6f3; --card: #ffffff; --accent: #1a1a1a;
+    --ok: #14663a; --bad: #8c2318; --wait: #7a5a10;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 16px 64px;
+    background: var(--bg); color: var(--ink);
+    font: 15px/1.55 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--ink-soft); margin: 0 0 24px; font-size: 14px; }
+  section {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 18px 20px; margin: 0 0 16px;
+  }
+  h2 { font-size: 14px; margin: 0 0 12px; letter-spacing: .01em; }
+  pre {
+    background: #fbfaf8; border: 1px solid var(--line); border-radius: 6px;
+    padding: 12px; overflow-x: auto; font-size: 12.5px; margin: 12px 0 0;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  button {
+    font: inherit; font-weight: 600; padding: 9px 15px; margin: 14px 8px 0 0;
+    border: 1px solid var(--accent); border-radius: 6px;
+    background: var(--accent); color: #fff; cursor: pointer;
+  }
+  button.ghost { background: #fff; color: var(--ink); }
+  button:disabled { opacity: .45; cursor: default; }
+  .msg { margin: 12px 0 0; font-size: 13.5px; }
+  .msg.ok { color: var(--ok); } .msg.bad { color: var(--bad); }
+  .msg.wait { color: var(--wait); }
+  .hint { color: var(--ink-soft); font-size: 13px; margin: 10px 0 0; }
+  code { background: #f0eee9; padding: 1px 4px; border-radius: 3px; font-size: 12.5px; }
+  .who { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 4px; }
+  table.notes { border-collapse: collapse; width: 100%; margin: 12px 0 0; font-size: 13px; }
+  table.notes th { text-align: left; color: var(--ink-soft); font-weight: 500;
+                   border-bottom: 1px solid var(--line); padding: 4px 8px 4px 0; }
+  table.notes td { padding: 4px 8px 4px 0; border-bottom: 1px solid #f2efe9;
+                   font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12.5px; }
+  .claims th { text-align: left; color: var(--ink-soft); font-weight: 500;
+               padding: 2px 14px 2px 0; vertical-align: top; font-size: 13px; }
+  .claims td { padding: 2px 0; font-family: ui-monospace, SFMono-Regular, monospace;
+               font-size: 12.5px; word-break: break-all; }
+  .warn { border-left: 3px solid var(--wait); padding-left: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Corebase Data API</h1>
+  <p class="sub" id="target">…</p>
+
+  <section>
+    <h2>1 · The table and its policies</h2>
+    <p class="hint">
+      Applied by <code>scripts/data-demo.sh</code> over the project's own
+      <code>DATABASE_URL</code> — the way a customer runs a migration. Shown here
+      because a demo that hides its SQL is teaching the wrong thing.
+    </p>
+<pre>create table public.notes (
+  id         bigserial primary key,
+  owner      uuid not null,
+  body       text not null,
+  created_at timestamptz not null default now()
+);
+
+-- RLS is already ENABLED at this point: the project's event trigger did that
+-- when the table was created, so it is closed before any policy exists.
+create policy "read own notes"   on public.notes for select
+  to authenticated using ( owner = (select auth.uid()) );
+create policy "insert own notes" on public.notes for insert
+  to authenticated with check ( owner = (select auth.uid()) );</pre>
+    <p class="hint">
+      Two policies, and the second one uses <code>with check</code> rather than
+      <code>using</code>. An <code>insert</code> has no existing row to filter, so
+      a <code>using</code> clause would constrain nothing — step 5 is that
+      difference, live.
+    </p>
+  </section>
+
+  <section>
+    <h2>2 · The rows, inserted as <code>service_role</code></h2>
+    <p class="hint" id="seeded">…</p>
+    <p class="hint warn">
+      That insert ran in the shell script, not here. <code>service_role</code>
+      carries <code>BYPASSRLS</code>, so it reads and writes every row regardless
+      of any policy — which is exactly why it belongs to a backend and why this
+      page has never seen one. Everything below uses the <b>anon</b> key plus a
+      user's own access token.
+    </p>
+  </section>
+
+  <section>
+    <h2>3 · Read as a signed-in user</h2>
+    <p class="hint">
+      Both users exist with the password <code>demo-password-123</code>. Log in as
+      one, then the other: the request is byte-identical apart from the token.
+    </p>
+    <div class="who">
+      <button id="as-alice">Log in as alice</button>
+      <button id="as-bob" class="ghost">Log in as bob</button>
+    </div>
+    <p class="msg" id="login-msg"></p>
+    <table class="claims" id="claims-tbl" hidden><tbody id="claims"></tbody></table>
+    <button id="read" class="ghost" disabled>GET /rest/v1/notes</button>
+    <p class="msg" id="read-msg"></p>
+    <table class="notes" id="notes-tbl" hidden>
+      <thead><tr><th>id</th><th>owner</th><th>body</th></tr></thead>
+      <tbody id="notes"></tbody>
+    </table>
+    <p class="hint" id="read-verdict"></p>
+  </section>
+
+  <section>
+    <h2>4 · Read with the anon key alone</h2>
+    <p class="hint">
+      No user token — just the public key any visitor has. The policies name
+      <code>to authenticated</code>, and <code>anon</code> holds no grant on this
+      table either, so there is nothing for it to see.
+    </p>
+    <button id="read-anon" class="ghost">GET as anon</button>
+    <p class="msg" id="anon-msg"></p>
+    <pre id="anon-out" hidden></pre>
+  </section>
+
+  <section>
+    <h2>5 · Try to write a row owned by someone else</h2>
+    <p class="hint">
+      Signed in as the current user, but with <code>owner</code> set to the other
+      one. This is the attempt <code>with check</code> exists to refuse — and the
+      reason a policy written with <code>using</code> alone would let it through.
+    </p>
+    <button id="forge" class="ghost" disabled>POST a note owned by the other user</button>
+    <p class="msg" id="forge-msg"></p>
+    <pre id="forge-out" hidden></pre>
+    <p class="hint">
+      And the honest control: the same request with <code>owner</code> set to
+      <i>you</i> succeeds, so the refusal above is the policy and not a broken
+      endpoint.
+    </p>
+    <button id="own" class="ghost" disabled>POST a note owned by me</button>
+    <p class="msg" id="own-msg"></p>
+  </section>
+</main>
+
+<script src="config.js"></script>
+<script>
+(() => {
+  const cfg = window.COREBASE_DEMO;
+  const $ = (id) => document.getElementById(id);
+  if (!cfg) {
+    $('target').textContent = 'No config.js — run ./scripts/data-demo.sh first.';
+    return;
+  }
+  $('target').innerHTML =
+    `project <code>${cfg.ref}</code> · anon key only · `
+    + `same-origin calls, forwarded with <code>Host: ${cfg.ref}.&lt;domain&gt;</code>`;
+  $('seeded').innerHTML =
+    `<b>${cfg.total}</b> notes were seeded across two users. A signed-in user sees `
+    + 'only their own; that count came from a <code>service_role</code> read in the '
+    + 'script, which is the only thing here that can see all of them — so it is a '
+    + 'figure from before this page loaded, not a live total.';
+
+  let session = null;   // { email, token, uid, label }
+
+  const say = (el, text, kind) => {
+    const node = $(el);
+    node.textContent = text;
+    node.className = 'msg' + (kind ? ' ' + kind : '');
+  };
+
+  // Every call carries the anon key, exactly as a customer's frontend would, and
+  // adds the user's token only when there is one. `apikey` identifies the
+  // project; `Authorization` identifies the person.
+  const call = async (path, init = {}) => {
+    const headers = { apikey: cfg.anonKey, ...(init.headers || {}) };
+    if (session) headers.authorization = 'Bearer ' + session.token;
+    const res = await fetch(path, { ...init, headers });
+    const text = await res.text();
+    let body = text;
+    try { body = JSON.parse(text); } catch { /* keep the text */ }
+    return { status: res.status, body };
+  };
+
+  async function login(email, label) {
+    say('login-msg', 'signing in…', 'wait');
+    // No Authorization on the token endpoint: there is no session yet, and the
+    // apikey is what says which project's users to look in.
+    const res = await fetch('/auth/v1/token?grant_type=password', {
+      method: 'POST',
+      headers: { apikey: cfg.anonKey, 'content-type': 'application/json' },
+      body: JSON.stringify({ email, password: 'demo-password-123' }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body.access_token) {
+      say('login-msg', `sign-in failed (HTTP ${res.status})`, 'bad');
+      return;
+    }
+    const claims = JSON.parse(
+      atob(body.access_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    session = { email, token: body.access_token, uid: claims.sub, label };
+    say('login-msg', `signed in as ${email}`, 'ok');
+
+    // The claims are shown because they are the whole mechanism: `sub` is what
+    // `auth.uid()` returns inside the policy, and `role` is the database role the
+    // request runs as.
+    $('claims').innerHTML = ['sub', 'role', 'ref', 'iss', 'exp']
+      .filter((k) => claims[k] !== undefined)
+      .map((k) => `<tr><th>${k}</th><td>${claims[k]}</td></tr>`).join('');
+    $('claims-tbl').hidden = false;
+    for (const id of ['read', 'forge', 'own']) $(id).disabled = false;
+    $('notes-tbl').hidden = true;
+    $('read-verdict').textContent = '';
+    say('read-msg', '');
+  }
+
+  $('as-alice').onclick = () => login('alice@example.com', 'alice');
+  $('as-bob').onclick = () => login('bob@example.com', 'bob');
+
+  $('read').onclick = async () => {
+    say('read-msg', 'reading…', 'wait');
+    const { status, body } = await call('/rest/v1/notes?select=id,owner,body&order=id');
+    if (status !== 200 || !Array.isArray(body)) {
+      say('read-msg', `HTTP ${status} — ${JSON.stringify(body)}`, 'bad');
+      return;
+    }
+    $('notes').innerHTML = body.map((n) =>
+      `<tr><td>${n.id}</td><td>${n.owner.slice(0, 8)}…</td><td>${n.body}</td></tr>`).join('');
+    $('notes-tbl').hidden = false;
+    const mine = body.every((n) => n.owner === session.uid);
+    // No arithmetic against `cfg.total`. That number is a snapshot the script
+    // took with `service_role` before this page loaded, and step 5 adds rows —
+    // so "N of M" and "the other M − N" both drift the moment anyone writes. A
+    // demo asserting a stale count is a demo making a false claim, however small.
+    // What is actually verifiable from here is the ownership of what came back.
+    say('read-msg', `HTTP 200 · ${body.length} row${body.length === 1 ? '' : 's'} returned`, 'ok');
+    $('read-verdict').innerHTML = mine
+      ? `Every row returned is owned by <code>${session.uid.slice(0, 8)}…</code>, and `
+        + 'the other user\'s rows are absent — not hidden by this page, but never '
+        + 'put in the response. Log in as the other user and the same request '
+        + 'returns a different set.'
+      : '<b>A row owned by someone else came back. That is a policy failure.</b>';
+  };
+
+  $('read-anon').onclick = async () => {
+    const saved = session;
+    session = null;                       // drop the token, keep the apikey
+    const { status, body } = await call('/rest/v1/notes?select=id,body');
+    session = saved;
+    $('anon-out').hidden = false;
+    $('anon-out').textContent = typeof body === 'string' ? body : JSON.stringify(body, null, 2);
+    if (status === 200 && Array.isArray(body) && body.length === 0) {
+      say('anon-msg', 'HTTP 200 and an empty list — RLS had nothing to show it', 'ok');
+    } else if (status === 401 || status === 403) {
+      say('anon-msg', `HTTP ${status} — refused before RLS: anon holds no grant `
+        + 'on this table, which is the opt-in asymmetry (D-108)', 'ok');
+    } else {
+      say('anon-msg', `HTTP ${status} — unexpected, and worth reading closely`, 'bad');
+    }
+  };
+
+  const other = () => (session.label === 'alice' ? cfg.users.bob : cfg.users.alice);
+
+  $('forge').onclick = async () => {
+    say('forge-msg', 'posting…', 'wait');
+    const { status, body } = await call('/rest/v1/notes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', prefer: 'return=representation' },
+      body: JSON.stringify({ owner: other(), body: 'planted by ' + session.email }),
+    });
+    $('forge-out').hidden = false;
+    $('forge-out').textContent = typeof body === 'string' ? body : JSON.stringify(body, null, 2);
+    if (status === 401 || status === 403) {
+      say('forge-msg', `HTTP ${status} — refused by the WITH CHECK clause`, 'ok');
+    } else {
+      say('forge-msg', `HTTP ${status} — it went through, which is a policy failure`, 'bad');
+    }
+  };
+
+  $('own').onclick = async () => {
+    say('own-msg', 'posting…', 'wait');
+    const { status, body } = await call('/rest/v1/notes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', prefer: 'return=representation' },
+      body: JSON.stringify({ owner: session.uid, body: 'written by ' + session.email }),
+    });
+    if (status >= 200 && status < 300) {
+      say('own-msg', `HTTP ${status} — accepted, so the refusal above was the policy`, 'ok');
+    } else {
+      say('own-msg', `HTTP ${status} — ${JSON.stringify(body)}`, 'bad');
+    }
+  };
+})();
+</script>
+</body>
+</html>
