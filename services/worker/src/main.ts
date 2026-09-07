@@ -21,6 +21,8 @@ import { createWalScan } from './wal-scan.ts';
 import { createBackupScan } from './backup-scan.ts';
 import { createRestoreExpiry, restoreTtlHours } from './restore-expiry.ts';
 import { createRepoDestroy, REPO_RETENTION_DAYS } from './repo-destroy.ts';
+import { createStorageSweep } from './storage-sweep.ts';
+import { createS3, s3FromEnv } from '@corebase/s3';
 import { createVerifyScan } from './verify-scan.ts';
 import { createReconciler } from './reconcile.ts';
 import {
@@ -249,6 +251,54 @@ if (secrets) {
 const sweepMs = Number(process.env.CB_SWEEP_INTERVAL_MS ?? 10_000);
 const sweepTimer = setInterval(() => { void sweeper.sweepOnce().catch((e) =>
   log('error', 'sweep failed', { error: (e as Error).message })); }, sweepMs);
+
+/**
+ * The storage reconciliation sweep (P6f, D-124 §5).
+ *
+ * Daily by default, because its grace window is 24 hours: running it more often
+ * finds the same protected objects again and costs a full prefix listing per
+ * project each time. It is also the only thing standing between the storage
+ * orderings' deliberate trade — harmless garbage instead of visible corruption —
+ * and paying for that garbage indefinitely.
+ *
+ * Registered only with an object store, and said out loud when there is none: a
+ * deployment whose sweep never runs accumulates cost silently, which is exactly
+ * the failure mode that makes a quiet default dangerous.
+ */
+const storeForSweep = (() => {
+  const cfg = s3FromEnv();
+  return cfg ? createS3(cfg) : undefined;
+})();
+let storageSweepTimer: NodeJS.Timeout | undefined;
+if (storeForSweep && secrets) {
+  const storageSweep = createStorageSweep({
+    pool, secrets, s3: storeForSweep,
+    log: (m, f) => log('info', m, f),
+  });
+  const storageSweepMs = Number(process.env.CB_STORAGE_SWEEP_MS ?? 86_400_000);
+  storageSweepTimer = setInterval(() => {
+    void storageSweep.sweepOnce().then((r) => {
+      // Logged every run, not only when it finds something: "the sweep ran and
+      // found nothing" is the report that tells an operator the system is
+      // healthy, and a sweep that only speaks up on failure is indistinguishable
+      // from a sweep that is not running.
+      log('info', 'storage sweep complete', { ...r, failures: r.failures.length });
+      if (r.missingObjects > 0) {
+        // The direction the write orderings are supposed to make impossible, so
+        // any count above zero is a platform bug rather than routine garbage.
+        log('error', 'storage rows with no object behind them', {
+          count: r.missingObjects,
+          note: 'quarantined in storage_missing_objects for review',
+        });
+      }
+    }).catch((e) => log('error', 'storage sweep failed', { error: (e as Error).message }));
+  }, storageSweepMs);
+} else {
+  log('warn', 'storage sweep disabled', {
+    reason: storeForSweep ? 'no secret store' : 'no object store configured',
+    consequence: 'orphaned objects accumulate and quota totals are never trued up',
+  });
+}
 
 // The purge scan closes expired recovery windows (D-038). Hourly in production:
 // the window is measured in days, so scanning faster buys nothing and a slow
@@ -528,6 +578,7 @@ const shutdown = async (signal: string) => {
   // at the query rather than at the shutdown, which is a confusing last line in a
   // log. `process.exit` made this survivable rather than correct.
   clearInterval(sweepTimer);
+  if (storageSweepTimer) clearInterval(storageSweepTimer);
   clearInterval(purgeTimer);
   clearInterval(backupGaugeTimer);
   clearInterval(restoreExpiryTimer);
