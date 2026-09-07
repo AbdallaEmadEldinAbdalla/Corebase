@@ -247,6 +247,7 @@ export async function ensureStorageOwnership(client: Client): Promise<void> {
   // table — while making sure a platform-owned function is not executing customer
   // SQL as `postgres`.
   await client.query(`ALTER FUNCTION storage.bucket_id(text) OWNER TO ${dev}`);
+  await client.query(`ALTER FUNCTION storage.bucket_config(text) OWNER TO ${dev}`);
 }
 
 /** The connected database's name, for a GRANT that must name it explicitly. */

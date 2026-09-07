@@ -116,6 +116,32 @@ CREATE FUNCTION storage.bucket_id(bucket_name text) RETURNS uuid
   LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''
   AS $$ SELECT id FROM storage.buckets WHERE name = bucket_name $$;
 
+-- The config the *service* enforces with, for the same reason and by the same
+-- mechanism (P6c).
+--
+-- Size limits, the MIME allowlist and the `public` flag are platform enforcement
+-- inputs, not the caller's data: the service has to read them to decide whether
+-- to accept bytes at all, and it has to read them for an *unauthenticated*
+-- request too — a public-bucket GET has no caller identity and still needs to
+-- know the bucket is public.
+--
+-- Reading them as the caller would mean a customer whose object policy permits an
+-- upload could still not upload, because their bucket policy happened not to let
+-- them see the bucket's row. That is a confusing failure with no good error
+-- message, and the enforcement values are not what bucket RLS exists to protect.
+--
+-- The deliberate leak, stated plainly: this tells anyone who can name a bucket
+-- whether it exists and what its limits are. `storage.bucket_id` already leaks
+-- existence to the same caller — policies need it to — so the increment is the
+-- limits, and a size limit is not a secret.
+CREATE FUNCTION storage.bucket_config(bucket_name text)
+  RETURNS TABLE (id uuid, is_public boolean, file_size_limit bigint, allowed_mime_types text[])
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''
+  AS $$
+    SELECT b.id, b.public, b.file_size_limit, b.allowed_mime_types
+      FROM storage.buckets b WHERE b.name = bucket_name
+  $$;
+
 -- ── quota accounting, fast path ───────────────────────────────────────────────
 --
 -- One row, maintained by a trigger, so an upload can check quota with a
@@ -177,6 +203,7 @@ REVOKE ALL ON SCHEMA storage FROM PUBLIC;
 GRANT USAGE ON SCHEMA storage TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION storage.prefix_owner(text) TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION storage.bucket_id(text) TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION storage.bucket_config(text) TO anon, authenticated, service_role;
 
 -- **Table privileges go to `anon` as well as `authenticated`, which departs from
 -- D-108's asymmetry, and the departure is deliberate** (D-391).
