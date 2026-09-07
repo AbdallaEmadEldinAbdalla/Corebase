@@ -16,6 +16,7 @@ import {
 } from './backup.ts';
 import type { JobRecord } from './jobs/repo.ts';
 import type { SagaStep, SagaContext } from './jobs/runner.ts';
+import { loadBackupEnv } from './staging-env.ts';
 
 /**
  * P3a integration: a project gets a real pgBackRest repo in real object storage.
@@ -40,14 +41,6 @@ const SECRET = 'test-bootstrap-secret-0123456789';
  * runs when someone remembered to export four variables is a suite that silently
  * stops running.
  */
-function loadBackupEnv(): void {
-  const file = join(process.cwd(), '../../infra/docker/staging/backup-store.env');
-  if (!existsSync(file)) return;
-  for (const line of readFileSync(file, 'utf8').split('\n')) {
-    const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
-    if (m && !process.env[m[1]!]) process.env[m[1]!] = m[2]!;
-  }
-}
 
 let pool: Pool; let docker: Docker; let orgId: string; let kekDir: string;
 let secrets: ReturnType<typeof createSecretStore>;

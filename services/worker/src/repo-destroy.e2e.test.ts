@@ -5,6 +5,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { createS3, s3FromEnv, type S3 } from '@corebase/s3';
 import { createRepoDestroy, REPO_RETENTION_DAYS } from './repo-destroy.ts';
 import { repoPathFor } from './backup.ts';
+import { loadBackupEnv } from './staging-env.ts';
 
 /**
  * P3g — a purged project's backup repo is destroyed, provably (D-038, D-066).
@@ -17,14 +18,6 @@ import { repoPathFor } from './backup.ts';
 const DB = process.env.CB_CONTROL_DATABASE_URL
   ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
 
-function loadBackupEnv(): void {
-  const file = join(process.cwd(), '../../infra/docker/staging/backup-store.env');
-  if (!existsSync(file)) return;
-  for (const line of readFileSync(file, 'utf8').split('\n')) {
-    const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
-    if (m && !process.env[m[1]!]) process.env[m[1]!] = m[2]!;
-  }
-}
 
 let pool: Pool; let s3: S3; let orgId: string;
 let up = false; let reason = '';
