@@ -3693,6 +3693,72 @@ reporting green over an untested one.
 
 **Verification:** 13/13, and the whole gate at 52/52 across five files.
 
+### P6h — the Phase 6 demo · done · Phase 6 complete
+
+The plan's three items — avatar upload, public URL renders, signed URL expires —
+built on Phase 4's flow rather than beside it: a *signed-in user* uploads their
+own avatar. That is the only version that shows anything, because the avatars
+pattern is entirely about the path carrying the owner's id and the policy
+enforcing it.
+
+**The demo found a bug that five green steps had missed** (**D-406**). The quota
+check read `storage.usage` directly, and that table is granted to `service_role`
+alone — so for a real user the read raised `permission denied` (42501), which the
+module maps to 403 with the message *"the project's policies do not allow this
+operation."* Every authenticated user's upload failed, blaming a policy that was
+correct.
+
+It survived because **every automated upload test used the service_role key.**
+P6c, P6e and P6f all uploaded as a backend; the demo was the first caller
+anywhere in this codebase to upload as a person, and it failed on the first
+click. The comment at that line had even asserted the opposite — that a
+non-service caller "simply sees no row" — which was a confident statement about
+behaviour nobody had exercised. The missing test now exists: an upload by a user,
+plus its refusal in somebody else's folder, plus the presigned path that had the
+identical read and the identical bug.
+
+**Verified in a browser, all four steps.** Upload: 201, 8,676 bytes, the store's
+own etag, and the image rendered back through the authenticated endpoint — an
+`<img src>` cannot carry an apikey, so each avatar is fetched and turned into a
+blob URL, which is what a real frontend must do too. The other user's folder:
+403 from `WITH CHECK`, with the bytes never stored because the policy is
+evaluated before the object store is touched. Public: a 64×64 PNG with no apikey
+and no token, `Cache-Control: public, max-age=3600`. Signed URL: 200 immediately
+with no credential, 403 six seconds later, worded identically to a forged token.
+And signing in as the second user shows the asymmetry the pattern rests on — Bob
+sees Alice's avatar (reads are wider than writes) and can only replace his own.
+
+**The demo proxy is now shared** (`demo/proxy.py`), because this was going to be
+the third copy of a handler that exists for one reason: a browser is forbidden
+from setting `Host`, and both the gateway and the storage service identify a
+project from it. It forwards bytes rather than text — this demo uploads a PNG and
+renders one back — and sends `cache-control: no-store` on the demos' own files,
+which is paid for in debugging time: `config.js` names a specific project and is
+regenerated every run, so a cached copy points at a project that may no longer
+exist and presents as "sign-in failed (HTTP 401)" on a page whose API answers
+perfectly to curl.
+
+Two fixture faults of my own, fixed and worth recording. The `auth.users` insert
+ran as the *customer* role and was refused — the boundary working, since DB-3
+asserts exactly that, so the fixture moved to the superuser rather than the grant
+being widened. And P6f's cap test pinned the usage counter at its ceiling and
+never restored it, so every later upload in the file failed with an unrelated
+quota error.
+
+### Phase 6 — exit criteria, honestly
+
+| Criterion | Status |
+|---|---|
+| Policy examples from the docs work as written (avatars own-path case) | **met** — P6a runs all three documented patterns verbatim as a customer, and found two that could not work as written; both were fixed in the docs (D-392). The avatars own-path case is proven in P6a, in the storage suite, and in the browser in P6h |
+| Orphan sweep provably converges both failure directions (crash-injected tests) | **met** — P6f, crashes injected through the raw object-store client because the states under test are ones the API cannot produce. Orphans collected; rows-with-no-bytes quarantined rather than deleted (D-403); a second sweep over a healthy project finds nothing |
+| Quota enforcement blocks uploads at cap | **met** — P6f, and it is the pricing contract in one test: both upload paths refused at the cap, reads and deletes still working, and a shrinking upsert allowed |
+
+**Demo:** avatar upload, public URL renders, signed URL expires — all three
+verified in a real browser (P6h).
+
+Three criteria, three met. Phase 6 also closes the isolation matrix's storage
+rows (P6g), which Phase 5 had recorded as a named gap.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -3768,6 +3834,14 @@ the latency of a rejection as a record time — and the worse the break, the bet
 the number looks. Every load run proves one correct request per arm before it
 measures anything, and treats a failed check as invalidating every latency figure
 above it.
+
+**A surface used by two kinds of caller is tested with both.** The storage API is
+reached by a customer's *backend* holding a `service_role` key and by their
+*users* holding an access token, and those callers have different database
+privileges — so a test suite that only ever presents one of them leaves half the
+surface unexercised. Five steps of storage work were green while every
+authenticated user's upload failed, because every test was a backend. Whenever a
+role distinction exists, the tests present each role.
 
 
 

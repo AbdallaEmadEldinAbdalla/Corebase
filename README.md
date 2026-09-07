@@ -8,7 +8,7 @@ Corebase is a developer-focused Backend-as-a-Service: a developer creates a proj
 
 ## Status
 
-**Milestone 0 and Phases 1–5 complete.** Phase 5 met three of its four exit criteria outright; the fourth — the latency budget — is met for the origin SLO it can measure on Docker, while the gateway-overhead figure needs production hardware to settle (OQ-184). Phase 4 met two of its three exit criteria; the third needs a real sending domain and cannot be met on Docker.
+**Milestone 0 and Phases 1–6 complete.** Phase 5 met three of its four exit criteria outright; the fourth — the latency budget — is met for the origin SLO it can measure on Docker, while the gateway-overhead figure needs production hardware to settle (OQ-184). Phase 4 met two of its three exit criteria; the third needs a real sending domain and cannot be met on Docker.
 
 **The provisioning spine (Milestone 0).** `POST /v1/projects` returns a real, isolated PostgreSQL 17.5 database on a data node about **2.5 seconds** later, with its own volume, cgroup limits, the full role model, envelope-encrypted credentials, and a connection string you can `psql` into immediately. Twenty consecutive creates are measured end to end.
 
@@ -297,6 +297,43 @@ real reason: the gateway identifies a project by the `Host` header, and a browse
 is *forbidden* from setting `Host`. Something upstream has to supply it. In
 production that is Cloudflare and Caddy; on a laptop it is forty lines that
 forward two path prefixes.
+
+## Phase 6 — storage
+
+Files live behind the same idea as rows: **RLS on `storage.objects` is the file
+permission system.** There is no second ACL engine anywhere — the storage service
+opens a transaction as the caller, the customer's policies decide, and only then
+are any bytes touched.
+
+Running the documented policies verbatim found two that could not work as
+written. Every example resolved a bucket with a subselect against
+`storage.buckets`, and a policy's subselect runs *as the caller* — against a
+table that is RLS-enabled with no policies. So it returned NULL, every predicate
+was false, and nothing errored: reads came back empty and writes affected zero
+rows silently. A customer following our own documentation would have installed a
+file-permission system that governed nothing.
+
+Uploads under 50 MB proxy through the service so size and content can be checked
+inline; larger ones get a presigned URL and upload straight to the object store,
+with an intent row covering the gap where nothing is watching. Postgres and the
+store share no transaction, so the **write orderings are the consistency model**:
+object-then-row on upload, row-then-object on delete. Every failure therefore
+lands as invisible garbage rather than a broken row — and a daily sweep collects
+it, which is what stops "harmless" from becoming "we pay for it forever".
+
+The sweep treats the two directions differently, and that asymmetry is the
+design. Bytes with no row are routine and get deleted. A row with no bytes is the
+direction the orderings are *built to prevent*, so finding one means an
+assumption broke: it is quarantined and alerted, never tidied away, because
+deleting it would destroy both the evidence and a file the customer believes they
+have.
+
+The phase's demo found the last bug, and it is the useful kind. Every automated
+upload test had used a `service_role` key — a *backend*. The demo was the first
+caller in the codebase to upload as a **user**, and it failed immediately: the
+quota check read a table only `service_role` may read, and the resulting
+permission error was reported as "your policies do not allow this", blaming a
+policy that was correct. Five green steps, one whole class of caller untested.
 
 ## Run it
 
