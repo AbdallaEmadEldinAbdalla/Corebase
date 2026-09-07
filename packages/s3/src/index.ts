@@ -2,7 +2,8 @@ import { createHash, createHmac } from 'node:crypto';
 import { request as httpsRequest } from 'node:https';
 
 /**
- * A minimal S3 client, for the one thing only the control plane may do: delete.
+ * A minimal S3 client, shared by the two components that talk to object storage
+ * directly: the control plane's repo destruction, and the storage service.
  *
  * ## Why this exists at all
  *
@@ -59,7 +60,14 @@ const uriEncode = (s: string): string =>
 /** Encode a key for a URL path: every segment escaped, the slashes kept. */
 const encodeKeyPath = (key: string): string => key.split('/').map(uriEncode).join('/');
 
-export interface S3Response { status: number; body: string }
+export interface S3Response {
+  status: number;
+  /** The response as text. Empty when `raw` was asked for. */
+  body: string;
+  /** The response as bytes. Always present — `body` is a convenience over it. */
+  bytes: Buffer;
+  headers: Record<string, string | undefined>;
+}
 
 export function createS3(cfg: S3Config) {
   const timeoutMs = cfg.timeoutMs ?? 30_000;
@@ -76,8 +84,10 @@ export function createS3(cfg: S3Config) {
   async function send(
     method: string, key: string, opts: {
       query?: Record<string, string>;
-      body?: string;
+      body?: Buffer | string;
       headers?: Record<string, string>;
+      /** Keep the response as bytes. Text is the default and wrong for objects. */
+      raw?: boolean;
     } = {},
   ): Promise<S3Response> {
     const now = new Date();
@@ -96,7 +106,11 @@ export function createS3(cfg: S3Config) {
     const canonicalQuery = Object.keys(query).sort()
       .map((k) => `${uriEncode(k)}=${uriEncode(query[k]!)}`).join('&');
 
-    const body = opts.body ?? '';
+    // Buffer throughout, because an object's bytes are not text: decoding a PNG
+    // to a string to hash it corrupts both the hash and the upload.
+    const body = Buffer.isBuffer(opts.body)
+      ? opts.body
+      : Buffer.from(opts.body ?? '', 'utf8');
     const payloadHash = sha256Hex(body);
     const headers: Record<string, string> = {
       host,
@@ -107,7 +121,7 @@ export function createS3(cfg: S3Config) {
       //   411 MissingContentLength: You must provide the Content-Length header.
       // Signed along with everything else, which is the correct handling — the
       // length is part of what the signature attests to.
-      ...(body ? { 'content-length': String(Buffer.byteLength(body)) } : {}),
+      ...(body.length ? { 'content-length': String(body.length) } : {}),
       ...(opts.headers ?? {}),
     };
     const signedNames = Object.keys(headers).map((h) => h.toLowerCase()).sort();
@@ -141,17 +155,98 @@ export function createS3(cfg: S3Config) {
       }, (res) => {
         const chunks: Buffer[] = [];
         res.on('data', (c: Buffer) => chunks.push(c));
-        res.on('end', () => resolve({
-          status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }));
+        res.on('end', () => {
+          const buf = Buffer.concat(chunks);
+          resolve({
+            status: res.statusCode ?? 0,
+            body: opts.raw ? '' : buf.toString('utf8'),
+            bytes: buf,
+            headers: res.headers as Record<string, string | undefined>,
+          });
+        });
       });
       r.on('timeout', () => r.destroy(new Error(`${method} ${fullPath} timed out`)));
       r.on('error', reject);
-      if (body) r.write(body);
+      if (body.length) r.write(body);
       r.end();
     });
   }
 
   return {
+    /**
+     * Store bytes at a key, and hand back the store's own etag.
+     *
+     * The etag is the reason this returns anything: it is what the metadata row
+     * records, and it is the only value that lets a later sweep tell "these
+     * bytes are the ones the row describes" from "something overwrote them".
+     * Inventing it locally from a hash of what we sent would defeat that — the
+     * question is what the *store* holds.
+     *
+     * `Content-Type` is signed along with the rest, so a store that serves it
+     * back is serving what was attested to rather than what a later request
+     * claimed.
+     */
+    async putObject(
+      key: string, body: Buffer,
+      opts: { contentType?: string; cacheControl?: string } = {},
+    ): Promise<{ etag: string }> {
+      const res = await send('PUT', key, {
+        body,
+        headers: {
+          'content-type': opts.contentType ?? 'application/octet-stream',
+          ...(opts.cacheControl ? { 'cache-control': opts.cacheControl } : {}),
+        },
+      });
+      if (res.status !== 200) {
+        throw new Error(`S3 put ${key} → ${res.status}: ${res.body.slice(0, 300)}`);
+      }
+      // Quoted in the header, and the quotes are part of neither the value nor
+      // anything a client should have to strip.
+      return { etag: (res.headers['etag'] ?? '').replace(/^"|"$/g, '') };
+    },
+
+    /**
+     * Fetch an object's bytes, optionally a byte range.
+     *
+     * The range is passed through rather than interpreted, because range
+     * semantics are the store's to implement and a partial response is a 206
+     * that the caller must be told about — collapsing it to 200 would make a
+     * media player think it had the whole file.
+     */
+    async getObject(
+      key: string, opts: { range?: string } = {},
+    ): Promise<{ status: number; bytes: Buffer; headers: Record<string, string | undefined> }> {
+      const res = await send('GET', key, {
+        raw: true,
+        ...(opts.range ? { headers: { range: opts.range } } : {}),
+      });
+      return { status: res.status, bytes: res.bytes, headers: res.headers };
+    },
+
+    /**
+     * Size and etag without the bytes.
+     *
+     * Used by the presigned-upload completion and by the sweep's inverse pass —
+     * both of which need to know what the store actually holds and neither of
+     * which wants to transfer it. A 404 is a normal answer here, not an error:
+     * "there is nothing at this key" is exactly the question being asked.
+     */
+    async headObject(
+      key: string,
+    ): Promise<{ exists: boolean; size: number; etag: string; contentType: string }> {
+      const res = await send('HEAD', key, { raw: true });
+      if (res.status === 404) return { exists: false, size: 0, etag: '', contentType: '' };
+      if (res.status !== 200) {
+        throw new Error(`S3 head ${key} → ${res.status}`);
+      }
+      return {
+        exists: true,
+        size: Number(res.headers['content-length'] ?? 0),
+        etag: (res.headers['etag'] ?? '').replace(/^"|"$/g, ''),
+        contentType: res.headers['content-type'] ?? 'application/octet-stream',
+      };
+    },
+
     /**
      * Every key under a prefix, following continuation tokens.
      *

@@ -1,5 +1,5 @@
 import type { Pool } from 'pg';
-import { createS3, s3FromEnv, type S3 } from './s3.ts';
+import { createS3, s3FromEnv, type S3 } from '@corebase/s3';
 import { repoPathFor } from './backup.ts';
 
 /**

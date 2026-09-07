@@ -21,7 +21,8 @@
     "@corebase/email": "workspace:*",
     "@corebase/metrics": "workspace:*",
     "@corebase/audit": "workspace:*",
-    "@corebase/jwt": "workspace:*"
+    "@corebase/jwt": "workspace:*",
+    "@corebase/s3": "workspace:*"
   },
   "devDependencies": {
     "@corebase/config": "workspace:*",

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
 import { join } from 'node:path';
 import { readFileSync, existsSync } from 'node:fs';
-import { createS3, s3FromEnv, type S3 } from './s3.ts';
+import { createS3, s3FromEnv, type S3 } from '@corebase/s3';
 import { createRepoDestroy, REPO_RETENTION_DAYS } from './repo-destroy.ts';
 import { repoPathFor } from './backup.ts';
 
@@ -260,10 +260,22 @@ describe('P3g — what must never be destroyed', () => {
         where project_id = $1`, [p.id]);
 
     // An S3 whose deletes do nothing: list keeps reporting the objects.
+    //
+    // The three read/write operations throw rather than returning something
+    // harmless, and that is a small assertion of its own: repo destruction lists
+    // and deletes, and if it ever starts uploading or reading object bytes this
+    // test fails loudly instead of quietly exercising a path nobody meant it to
+    // have.
+    const unreachable = (op: string) => () => {
+      throw new Error(`repo destruction called ${op}, which it has no business doing`);
+    };
     const lying: S3 = {
       list: (pfx: string) => s3.list(pfx),
       deleteBatch: async () => [],
       deleteObject: async () => {},
+      putObject: unreachable('putObject') as S3['putObject'],
+      getObject: unreachable('getObject') as S3['getObject'],
+      headObject: unreachable('headObject') as S3['headObject'],
     };
     const r = await createRepoDestroy({ pool, s3: lying }).scanOnce();
     expect(r.destroyed).toBe(0);
