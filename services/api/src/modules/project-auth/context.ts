@@ -80,6 +80,14 @@ export interface ProjectContext {
   publicKeys: ReadonlyArray<{ kid: string; publicKeyPem: string }>;
   /** `corebase_auth`'s password in this project's database. */
   dbPassword: string;
+  /**
+   * `authenticator`'s password — the role that switches into an API role.
+   *
+   * Optional because a project provisioned before the role model existed has
+   * none, and the honest answer for such a project is that storage is
+   * unavailable rather than that it silently runs as something else.
+   */
+  authenticatorPassword?: string;
   /** `https://<ref>.corebase.co/auth/v1` — the `iss` every *access token* carries. */
   issuer: string;
   /**
@@ -248,7 +256,23 @@ export async function resolveProject(
     throw new AuthContextError(503, 'This project has no reachable database yet.');
   }
 
-  const dbPassword = await deps.secrets.get(row.id, SECRET_NAMES.authRole);
+  // Two credentials, for two different jobs.
+  //
+  // `corebase_auth` is the auth module's own role: it reads and writes the `auth`
+  // schema as itself and never impersonates anyone. `authenticator` is the
+  // *switching* role — NOINHERIT, able to do nothing as itself, and granted
+  // `anon`/`authenticated`/`service_role` so a request can drop into whichever
+  // one the caller's key says. PostgREST logs in with it and so does the storage
+  // module (P6b), because storage authorisation *is* RLS on the metadata tables
+  // and RLS can only decide for a role it can see.
+  //
+  // Fetched in the same round as the others rather than lazily: both are needed
+  // by some request on this project, and a second decrypt later would be a
+  // second latency spike on whichever request happened to be first.
+  const [dbPassword, authenticatorPassword] = await Promise.all([
+    deps.secrets.get(row.id, SECRET_NAMES.authRole),
+    deps.secrets.get(row.id, SECRET_NAMES.authenticator),
+  ]);
   if (!dbPassword) {
     throw new AuthContextError(503,
       'This project has no auth-role credential. It predates the auth schema.');
@@ -259,7 +283,9 @@ export async function resolveProject(
     host: row.host, port: row.port,
     signing: { privateKeyPem: priv, publicKeyPem: pub, kid },
     publicKeys,
-    dbPassword, issuer, keyIssuer,
+    dbPassword,
+    ...(authenticatorPassword ? { authenticatorPassword } : {}),
+    issuer, keyIssuer,
     config: {
       autoconfirm: row.autoconfirm ?? AUTH_CONFIG_DEFAULTS.autoconfirm,
       disableSignup: row.disable_signup ?? AUTH_CONFIG_DEFAULTS.disableSignup,
