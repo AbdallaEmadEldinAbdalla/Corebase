@@ -13,6 +13,7 @@ import { createMemoryRateLimiter } from '@corebase/api/kernel/rate-limit.ts';
 import { createS3, s3FromEnv, type S3 } from '@corebase/s3';
 import { createDocker, type Docker } from './docker.ts';
 import { loadBackupEnv } from './staging-env.ts';
+import { createStorageSweep } from './storage-sweep.ts';
 import { buildSagas } from './jobs/sagas.ts';
 import { registerNode } from './placement.ts';
 import { IMAGE, POOLER_IMAGE, POSTGREST_IMAGE, LABEL_MANAGED } from './container-spec.ts';
@@ -904,4 +905,263 @@ describe('P6e — presigned direct upload', () => {
       '/storage/v1/object/upload/complete/11111111-1111-4111-8111-111111111111',
       { key: serviceKey, body: {} })).statusCode).toBe(404);
   });
+});
+
+describe('P6f — the reconciliation sweep', () => {
+  /**
+   * The sweep, with the grace window shortened so a test can prove it rather
+   * than wait a day. Everything else is the real thing: the real object store,
+   * the real project database, the real anti-join.
+   */
+  const sweep = (graceMs = 0) => createStorageSweep({
+    pool, secrets, s3, graceMs, log: () => {},
+  });
+
+  t('EXIT CRITERION: an orphan — bytes with no row — is collected', async () => {
+    // The F1/F2 crash injected directly: bytes put in the store with no metadata
+    // row, which is exactly the state a process death between the two writes
+    // leaves behind. Written through the raw client rather than the API, because
+    // the API would not leave this state — that is the point of the orderings.
+    const key = `projects/${ref}/files/orphan.bin`;
+    await s3.putObject(key, Buffer.alloc(2048, 4), { contentType: 'application/octet-stream' });
+    expect((await s3.headObject(key)).exists).toBe(true);
+
+    const report = await sweep().sweepOnce();
+    expect(report.orphansDeleted).toBeGreaterThanOrEqual(1);
+    expect(report.bytesReclaimed).toBeGreaterThanOrEqual(2048);
+    expect((await s3.headObject(key)).exists).toBe(false);
+    expect(report.failures).toEqual([]);
+  });
+
+  t('the grace window protects an upload that is still in flight', async () => {
+    // The other half of orphan collection, and the more dangerous half: an
+    // object younger than the window may be a request that is going fine, with
+    // its row a few milliseconds away. Deleting it would break a working upload,
+    // which is worse than paying for a stray object for a day.
+    const key = `projects/${ref}/files/inflight.bin`;
+    await s3.putObject(key, Buffer.alloc(64), { contentType: 'application/octet-stream' });
+    const report = await sweep(60_000).sweepOnce();
+    expect((await s3.headObject(key)).exists).toBe(true);
+    expect(report.orphansDeleted).toBe(0);
+    // And with the window closed it goes, so the protection is the window and
+    // not an inability to see the object.
+    await sweep(0).sweepOnce();
+    expect((await s3.headObject(key)).exists).toBe(false);
+  });
+
+  t('a live upload intent protects its key even past the grace window', async () => {
+    // The race the window alone does not cover: a presigned upload whose bytes
+    // arrived quickly but whose completion callback has not run. The intent is
+    // what says "someone is allowed to be mid-flight here".
+    const signed = await call('POST', '/storage/v1/object/upload/sign/files/pending.bin',
+      { key: serviceKey, body: { size: 128, content_type: 'application/octet-stream' } });
+    const key = `projects/${ref}/files/pending.bin`;
+    await s3.putObject(key, Buffer.alloc(128), { contentType: 'application/octet-stream' });
+
+    const report = await sweep(0).sweepOnce();
+    expect((await s3.headObject(key)).exists).toBe(true);
+    expect(report.orphansDeleted).toBe(0);
+
+    // Completing it turns the intent into a row, and the object stays protected
+    // for the ordinary reason from then on.
+    const done = await call('POST',
+      `/storage/v1/object/upload/complete/${signed.json().upload_id}`,
+      { key: serviceKey, body: {} });
+    expect(done.statusCode).toBe(201);
+    await sweep(0).sweepOnce();
+    expect((await s3.headObject(key)).exists).toBe(true);
+  });
+
+  t('an abandoned intent is expired, and its bytes go with it (F4)', async () => {
+    const signed = await call('POST', '/storage/v1/object/upload/sign/files/abandoned.bin',
+      { key: serviceKey, body: { size: 256, content_type: 'application/octet-stream' } });
+    const id = signed.json().upload_id;
+    const key = `projects/${ref}/files/abandoned.bin`;
+    await s3.putObject(key, Buffer.alloc(256), { contentType: 'application/octet-stream' });
+
+    // Age the intent past its expiry — the crash being injected is "the client
+    // never called complete".
+    await asOwnerQuery(
+      `update storage.upload_intents set expires_at = now() - interval '1 hour'
+        where id = '${id}'`);
+
+    const report = await sweep(0).sweepOnce();
+    expect(report.intentsExpired).toBeGreaterThanOrEqual(1);
+    expect((await s3.headObject(key)).exists).toBe(false);
+    // And completing it afterwards is refused, rather than resurrecting a row
+    // whose authorisation has lapsed.
+    expect((await call('POST', `/storage/v1/object/upload/complete/${id}`,
+      { key: serviceKey, body: {} })).statusCode).toBe(404);
+  });
+
+  t('EXIT CRITERION: the other direction — a row with no bytes is quarantined, not deleted',
+    async () => {
+      // The failure the orderings are supposed to make impossible, injected by
+      // deleting the object behind a good row. D-124 calls this a bug rather
+      // than a state, so the sweep must *not* tidy it away: auto-deleting the
+      // row would erase both the evidence and a file the customer believes they
+      // have.
+      await put('files', 'vanished.bin', Buffer.alloc(512, 5), { key: serviceKey });
+      const key = `projects/${ref}/files/vanished.bin`;
+      await s3.deleteObject(key);
+
+      const report = await sweep(0).sweepOnce();
+      expect(report.missingObjects).toBeGreaterThanOrEqual(1);
+
+      // The row survives.
+      expect((await call('GET', '/storage/v1/object/info/files/vanished.bin',
+        { key: serviceKey })).statusCode).toBe(200);
+
+      // And it is on an operator's queue, in the control plane where an operator
+      // looking for platform faults will actually find it.
+      const { rows } = await pool.query<{ name: string; seen_count: number; size: string }>(
+        `select name, seen_count, expected_size::text as size
+           from storage_missing_objects
+          where project_id = $1 and resolved_at is null`, [projectId]);
+      expect(rows.map((r) => r.name)).toContain('vanished.bin');
+      expect(rows[0]!.size).toBe('512');
+
+      // A second sweep counts it again rather than duplicating it — a rising
+      // count is an ongoing fault, which is a different problem from a one-off.
+      await sweep(0).sweepOnce();
+      const { rows: again } = await pool.query<{ seen_count: number }>(
+        `select seen_count from storage_missing_objects
+          where project_id = $1 and name = 'vanished.bin'`, [projectId]);
+      expect(again[0]!.seen_count).toBeGreaterThanOrEqual(2);
+
+      // Cleanup, so later assertions about usage are not thrown off by a row
+      // with no bytes behind it.
+      await call('POST', '/storage/v1/object/delete/files',
+        { key: serviceKey, body: { paths: ['vanished.bin'] } });
+    });
+
+  t('converges: a second sweep over a healthy project changes nothing', async () => {
+    // Convergence in the plain sense — the sweep is idempotent, so running it
+    // twice does not keep finding work. A sweep that always reports deletions is
+    // a sweep nobody can use to tell whether the system is healthy.
+    const first = await sweep(0).sweepOnce();
+    expect(first.failures).toEqual([]);
+    const second = await sweep(0).sweepOnce();
+    expect(second.orphansDeleted).toBe(0);
+    expect(second.intentsExpired).toBe(0);
+    expect(second.missingObjects).toBe(0);
+  });
+
+  t('one unreachable project does not stop the fleet', async () => {
+    // A second project whose node address is wrong. The sweep must record it and
+    // carry on: aborting the run means one bad node stops garbage collection
+    // everywhere, and the fleet is where the cost accumulates.
+    const { rows } = await pool.query<{ id: string }>(
+      `insert into projects (organization_id, ref, name, plan, status)
+       select organization_id, 'p6funreachablexxxxx1', 'unreachable', 'free', 'ready'
+         from projects where id = $1 returning id`, [projectId]);
+    const bad = rows[0]!.id;
+    // The whole row copied through a temp table, then repointed — rather than an
+    // explicit column list, which I tried twice and which needed a new column
+    // each time (`pooler_port`, then `ram_limit_mb`). This table has grown across
+    // three phases and will grow again; a literal insert in a test is a
+    // maintenance tax with no benefit, since the only thing this fixture cares
+    // about is that the *port* points nowhere.
+    await pool.query(
+      `create temp table p6f_copy as select * from project_databases where project_id = $1`,
+      [projectId]);
+    await pool.query(
+      // Every uniquely-indexed port moved, `postgrest_admin_port` included —
+      // there are four such indexes on this table and two of them are partial,
+      // so they do not show up in `pg_constraint`. Found the hard way, one
+      // violation at a time.
+      `update p6f_copy set id = gen_random_uuid(), project_id = $1, port = 59999,
+              pooler_port = 59998, postgrest_port = 59997, postgrest_admin_port = 59996,
+              volume_name = 'p6f-nope'`, [bad]);
+    await pool.query(`insert into project_databases select * from p6f_copy`);
+    await pool.query(`drop table p6f_copy`);
+    try {
+      const report = await sweep(0).sweepOnce();
+      expect(report.failures.map((f) => f.ref)).toContain('p6funreachablexxxxx1');
+      // The healthy project was still swept — `projects` counts what was
+      // attempted, and the failure list is what did not finish.
+      expect(report.projects).toBeGreaterThanOrEqual(2);
+    } finally {
+      await pool.query(`delete from project_databases where project_id = $1`, [bad]);
+      await pool.query(`delete from projects where id = $1`, [bad]);
+    }
+  });
+});
+
+describe('P6f — the quota true-up, and enforcement at the cap', () => {
+  t('the true-up corrects a drifted counter from the store\'s own totals', async () => {
+    // Drift injected directly: the trigger-maintained counter is set to a lie.
+    // The store is the authority, and billing reads the true-up rather than the
+    // counter precisely because the counter can drift.
+    await asOwnerQuery(`update storage.usage set total_bytes = 999999999`);
+    const report = await createStorageSweep({
+      pool, secrets, s3, graceMs: 0, log: () => {} }).sweepOnce();
+    expect(report.quotaCorrected).toBeGreaterThanOrEqual(1);
+
+    const after = await asOwnerQuery(
+      'select total_bytes::text as b, object_count::text as c from storage.usage') as
+      { b: string; c: string };
+    expect(Number(after.b)).toBeLessThan(999999999);
+    // And it matches what the store actually holds for this project.
+    const stored = await s3.listDetailed(`projects/${ref}/`);
+    expect(Number(after.b)).toBe(stored.reduce((n, o) => n + o.size, 0));
+    expect(Number(after.c)).toBe(stored.length);
+  });
+
+  t('leaves a counter alone when the drift is within tolerance', async () => {
+    // The thresholds exist so the true-up does not fight the trigger over a few
+    // bytes: a write between the listing and the read is normal, and rewriting
+    // the row every night for that would make the correction meaningless as a
+    // signal.
+    const before = await asOwnerQuery(
+      'select total_bytes::text as b from storage.usage') as { b: string };
+    await asOwnerQuery(`update storage.usage set total_bytes = ${Number(before.b) + 10}`);
+    const report = await createStorageSweep({
+      pool, secrets, s3, graceMs: 0, log: () => {} }).sweepOnce();
+    expect(report.quotaCorrected).toBe(0);
+  });
+
+  t('EXIT CRITERION: uploads are blocked at the cap, and reads keep working',
+    async () => {
+      // The pricing doc's contract, in one test: over quota means *uploads
+      // rejected, existing files keep serving*. A customer at their limit has a
+      // read-only bucket, not a broken product.
+      const free = 1 * 1024 ** 3;
+      await asOwnerQuery(`update storage.usage set total_bytes = ${free - 16}`);
+
+      const refused = await put('files', 'over-cap.bin', Buffer.alloc(1024),
+        { key: serviceKey });
+      expect(refused.statusCode).toBe(413);
+      expect(refused.json().error.code).toBe('storage_quota_exceeded');
+      // Nothing was stored: the check runs before the bytes, so an over-quota
+      // upload does not first cost the storage it was refused for.
+      expect((await s3.headObject(`projects/${ref}/files/over-cap.bin`)).exists).toBe(false);
+
+      // The presigned path refuses at signing time, before a URL exists.
+      const signRefused = await call('POST',
+        '/storage/v1/object/upload/sign/files/over-cap-2.bin',
+        { key: serviceKey, body: { size: 1024, content_type: 'application/octet-stream' } });
+      expect(signRefused.statusCode).toBe(413);
+      expect(signRefused.json().error.code).toBe('storage_quota_exceeded');
+
+      // Reads still work — the half of the contract that is easy to break by
+      // treating quota as a gate on the whole module.
+      const read = await app.inject({
+        method: 'GET', url: '/storage/v1/object/files/a/hello.png',
+        headers: { apikey: serviceKey } });
+      expect(read.statusCode).toBe(200);
+      // And so does deleting, which is how a customer gets back under the cap.
+      // A quota that blocked deletion would be a trap.
+      const deleted = await app.inject({
+        method: 'DELETE', url: '/storage/v1/object/files/gone-to-free-space.bin',
+        headers: { apikey: serviceKey } });
+      expect([204, 404]).toContain(deleted.statusCode);
+
+      // An upsert that *shrinks* an object is allowed at the cap, because only
+      // the delta counts — refusing it would leave a customer unable to reduce
+      // their own usage through the API they uploaded with.
+      const smaller = await put('files', 'a/hello.png', Buffer.alloc(8),
+        { key: serviceKey, type: 'image/png', upsert: true });
+      expect([200, 201]).toContain(smaller.statusCode);
+    });
 });
