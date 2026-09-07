@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Corebase Storage — demo</title>
+<!--
+  Phase 6's demo (roadmap §Phase 6): "avatar upload from the phase-4 demo page,
+  public URL renders, signed URL expires."
+
+  Plain HTML, no build step, like the two demos before it. This page is the
+  storage API's first browser client, and anything awkward in it is something a
+  customer's own frontend would hit.
+
+  **What is not on this page is still the subject.** There is no service_role key
+  here and there must never be one: it bypasses RLS by role attribute, so a page
+  carrying it would show every visitor every user's private files. Everything
+  below runs on the anon key plus the signed-in user's own access token, and
+  every success and every refusal comes from the policy the setup script printed.
+-->
+<style>
+  :root {
+    --ink: #1a1a1a; --ink-soft: #5c5c5c; --line: #e2ded8;
+    --bg: #f7f6f3; --card: #ffffff; --accent: #1a1a1a;
+    --ok: #14663a; --bad: #8c2318; --wait: #7a5a10;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 16px 64px;
+    background: var(--bg); color: var(--ink);
+    font: 15px/1.55 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--ink-soft); margin: 0 0 24px; font-size: 14px; }
+  section {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 18px 20px; margin: 0 0 16px;
+  }
+  h2 { font-size: 14px; margin: 0 0 12px; letter-spacing: .01em; }
+  pre {
+    background: #fbfaf8; border: 1px solid var(--line); border-radius: 6px;
+    padding: 12px; overflow-x: auto; font-size: 12.5px; margin: 12px 0 0;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  button {
+    font: inherit; font-weight: 600; padding: 9px 15px; margin: 14px 8px 0 0;
+    border: 1px solid var(--accent); border-radius: 6px;
+    background: var(--accent); color: #fff; cursor: pointer;
+  }
+  button.ghost { background: #fff; color: var(--ink); }
+  button:disabled { opacity: .45; cursor: default; }
+  .msg { margin: 12px 0 0; font-size: 13.5px; }
+  .msg.ok { color: var(--ok); } .msg.bad { color: var(--bad); }
+  .msg.wait { color: var(--wait); }
+  .hint { color: var(--ink-soft); font-size: 13px; margin: 10px 0 0; }
+  code { background: #f0eee9; padding: 1px 4px; border-radius: 3px; font-size: 12.5px; }
+  .who { display: flex; gap: 8px; flex-wrap: wrap; }
+  .shots { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; margin: 12px 0 0; }
+  .shot { text-align: center; font-size: 12px; color: var(--ink-soft); }
+  .shot img {
+    display: block; width: 96px; height: 96px; object-fit: cover;
+    border: 1px solid var(--line); border-radius: 8px; background: #fbfaf8;
+  }
+  .claims th { text-align: left; color: var(--ink-soft); font-weight: 500;
+               padding: 2px 14px 2px 0; vertical-align: top; font-size: 13px; }
+  .claims td { padding: 2px 0; font-family: ui-monospace, SFMono-Regular, monospace;
+               font-size: 12.5px; word-break: break-all; }
+  .warn { border-left: 3px solid var(--wait); padding-left: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Corebase Storage</h1>
+  <p class="sub" id="target">…</p>
+
+  <section>
+    <h2>1 · The policy everything below obeys</h2>
+    <p class="hint">
+      Applied by <code>scripts/storage-demo.sh</code> over the project's own
+      <code>DATABASE_URL</code>. There is no other permission system —
+      <b>RLS on <code>storage.objects</code> is the file ACL</b>, so these six
+      lines decide every success and every refusal on this page.
+    </p>
+<pre>create policy "avatars are readable by signed-in users"
+  on storage.objects for select to authenticated
+  using (bucket_id = storage.bucket_id('avatars'));
+
+create policy "users manage their own avatar folder"
+  on storage.objects for all to authenticated
+  using (bucket_id = storage.bucket_id('avatars')
+         and storage.prefix_owner(name) = auth.uid()::text)
+  with check (bucket_id = storage.bucket_id('avatars')
+              and storage.prefix_owner(name) = auth.uid()::text);</pre>
+    <p class="hint">
+      <code>prefix_owner</code> is the first path segment, so
+      <code>avatars/&lt;uid&gt;/photo.png</code> belongs to that uid. Reads are
+      deliberately wider than writes: any signed-in user may look at any avatar,
+      and only the owner may replace one.
+    </p>
+  </section>
+
+  <section>
+    <h2>2 · Sign in</h2>
+    <p class="hint">Both users exist with the password <code>demo-password-123</code>.</p>
+    <div class="who">
+      <button id="as-alice">Log in as alice</button>
+      <button id="as-bob" class="ghost">Log in as bob</button>
+    </div>
+    <p class="msg" id="login-msg"></p>
+    <table class="claims" id="claims-tbl" hidden><tbody id="claims"></tbody></table>
+  </section>
+
+  <section>
+    <h2>3 · Upload your own avatar</h2>
+    <p class="hint">
+      The bytes go to <code>POST /storage/v1/object/avatars/&lt;your uid&gt;/photo.png</code>
+      — proxied through the service, which counts them, checks the declared type
+      against the actual bytes, and writes the object before the row.
+    </p>
+    <button id="upload" disabled>Upload a generated avatar</button>
+    <p class="msg" id="upload-msg"></p>
+    <div class="shots" id="shots"></div>
+  </section>
+
+  <section>
+    <h2>4 · Try to write into the other user's folder</h2>
+    <p class="hint">
+      The same request, one path segment different. <code>WITH CHECK</code> is what
+      refuses it — a policy written with <code>USING</code> alone would filter
+      reads and let this write land.
+    </p>
+    <button id="forge" class="ghost" disabled>Upload into the other user's folder</button>
+    <p class="msg" id="forge-msg"></p>
+    <pre id="forge-out" hidden></pre>
+  </section>
+
+  <section>
+    <h2>5 · The public bucket renders with no credential at all</h2>
+    <p class="hint">
+      <code>GET /storage/v1/object/public/signage/poster.png</code> — no
+      <code>apikey</code>, no token, and per-object RLS deliberately skipped
+      because a public bucket <i>is</i> the ACL. The response carries
+      <code>Cache-Control: public, max-age=3600</code>, which is the free-tier
+      bandwidth story: cache hits never reach our nodes.
+    </p>
+    <div class="shots">
+      <div class="shot"><img id="public-img" alt="the public poster"><span>public bucket</span></div>
+    </div>
+    <p class="msg" id="public-msg"></p>
+  </section>
+
+  <section>
+    <h2>6 · A signed URL, and watching it expire</h2>
+    <p class="hint">
+      Avatars are in a <b>private</b> bucket, so sharing one means minting a
+      capability. This asks for a five-second URL so the expiry is watchable.
+    </p>
+    <p class="hint warn">
+      A signed URL <b>cannot be revoked before it expires</b> — there is no
+      per-URL kill switch, because a denylist check would put a database hop on
+      the hottest read path. That is why the default is one hour, the maximum is
+      seven days, and the documented advice for revocable access is to keep the
+      bucket private and let clients fetch through the RLS-checked endpoint.
+    </p>
+    <button id="sign" class="ghost" disabled>Mint a 5-second URL</button>
+    <p class="msg" id="sign-msg"></p>
+    <pre id="sign-out" hidden></pre>
+  </section>
+</main>
+
+<script src="config.js"></script>
+<script>
+(() => {
+  const cfg = window.COREBASE_DEMO;
+  const $ = (id) => document.getElementById(id);
+  if (!cfg) {
+    $('target').textContent = 'No config.js — run ./scripts/storage-demo.sh first.';
+    return;
+  }
+  $('target').innerHTML =
+    `project <code>${cfg.ref}</code> · anon key only · same-origin calls, `
+    + `forwarded with <code>Host: ${cfg.ref}.&lt;domain&gt;</code>`;
+
+  let session = null;   // { email, token, uid, label }
+  const say = (el, text, kind) => {
+    const n = $(el); n.textContent = text; n.className = 'msg' + (kind ? ' ' + kind : '');
+  };
+
+  const headers = (extra = {}) => ({
+    apikey: cfg.anonKey,
+    ...(session ? { authorization: 'Bearer ' + session.token } : {}),
+    ...extra,
+  });
+
+  /**
+   * A small PNG, generated in the browser so the demo needs no committed asset
+   * and each user's avatar is visibly different.
+   */
+  async function makeAvatar(seed) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 96;
+    const g = c.getContext('2d');
+    const hue = seed === 'alice' ? 200 : 20;
+    const grad = g.createLinearGradient(0, 0, 96, 96);
+    grad.addColorStop(0, `hsl(${hue}, 70%, 60%)`);
+    grad.addColorStop(1, `hsl(${hue + 40}, 60%, 35%)`);
+    g.fillStyle = grad; g.fillRect(0, 0, 96, 96);
+    g.fillStyle = '#fff'; g.font = 'bold 44px -apple-system, sans-serif';
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(seed[0].toUpperCase(), 48, 52);
+    const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+    return new Uint8Array(await blob.arrayBuffer());
+  }
+
+  async function login(email, label) {
+    say('login-msg', 'signing in…', 'wait');
+    const res = await fetch('/auth/v1/token?grant_type=password', {
+      method: 'POST',
+      headers: { apikey: cfg.anonKey, 'content-type': 'application/json' },
+      body: JSON.stringify({ email, password: 'demo-password-123' }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body.access_token) {
+      say('login-msg', `sign-in failed (HTTP ${res.status})`, 'bad');
+      return;
+    }
+    const claims = JSON.parse(
+      atob(body.access_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    session = { email, token: body.access_token, uid: claims.sub, label };
+    say('login-msg', `signed in as ${email}`, 'ok');
+    // `sub` is shown because it is the whole mechanism: it is what `auth.uid()`
+    // returns inside the policy, and it is the folder name the policy compares
+    // the upload path against.
+    $('claims').innerHTML = ['sub', 'role', 'exp']
+      .map((k) => `<tr><th>${k}</th><td>${claims[k]}</td></tr>`).join('');
+    $('claims-tbl').hidden = false;
+    for (const id of ['upload', 'forge', 'sign']) $(id).disabled = false;
+    say('upload-msg', ''); say('forge-msg', ''); say('sign-msg', '');
+    await showAvatars();
+  }
+
+  $('as-alice').onclick = () => login('alice@example.com', 'alice');
+  $('as-bob').onclick = () => login('bob@example.com', 'bob');
+
+  /** Every avatar the current user may *read* — wider than what they may write. */
+  async function showAvatars() {
+    const res = await fetch('/storage/v1/object/list/avatars', {
+      method: 'POST', headers: headers({ 'content-type': 'application/json' }),
+      body: JSON.stringify({}),
+    });
+    if (!res.ok) { $('shots').innerHTML = ''; return; }
+    const { objects } = await res.json();
+    // Each image is fetched through the authenticated endpoint and turned into a
+    // blob URL, because an <img src> cannot carry an apikey header.
+    const parts = await Promise.all(objects.map(async (o) => {
+      const r = await fetch(`/storage/v1/object/avatars/${o.name}`, { headers: headers() });
+      if (!r.ok) return '';
+      const url = URL.createObjectURL(await r.blob());
+      const own = o.name.startsWith(session.uid) ? ' (yours)' : '';
+      return `<div class="shot"><img src="${url}" alt="avatar">`
+        + `<span>${o.name.slice(0, 8)}…${own}</span></div>`;
+    }));
+    $('shots').innerHTML = parts.join('');
+  }
+
+  $('upload').onclick = async () => {
+    say('upload-msg', 'uploading…', 'wait');
+    const bytes = await makeAvatar(session.label);
+    const res = await fetch(`/storage/v1/object/avatars/${session.uid}/photo.png`, {
+      method: 'POST',
+      headers: headers({ 'content-type': 'image/png', 'x-upsert': 'true' }),
+      body: bytes,
+    });
+    const body = await res.json().catch(() => ({}));
+    if (res.ok) {
+      say('upload-msg',
+        `HTTP ${res.status} · ${body.object?.size} bytes stored, etag ${body.object?.etag}`, 'ok');
+      await showAvatars();
+    } else {
+      say('upload-msg', `HTTP ${res.status} — ${JSON.stringify(body)}`, 'bad');
+    }
+  };
+
+  $('forge').onclick = async () => {
+    say('forge-msg', 'uploading…', 'wait');
+    // A uid that is not ours. Any non-matching first segment does it; using a
+    // fixed one keeps the demo readable.
+    const other = '00000000-0000-4000-8000-000000000000';
+    const res = await fetch(`/storage/v1/object/avatars/${other}/photo.png`, {
+      method: 'POST',
+      headers: headers({ 'content-type': 'image/png', 'x-upsert': 'true' }),
+      body: await makeAvatar(session.label),
+    });
+    const text = await res.text();
+    $('forge-out').hidden = false;
+    $('forge-out').textContent = text;
+    if (res.status === 403 || res.status === 401) {
+      say('forge-msg',
+        `HTTP ${res.status} — refused by the WITH CHECK clause. The bytes were `
+        + 'never stored: the policy is evaluated before the object store is touched.', 'ok');
+    } else {
+      say('forge-msg', `HTTP ${res.status} — it went through, which is a policy failure`, 'bad');
+    }
+  };
+
+  // The public bucket needs nothing at all, so it loads on page open.
+  (async () => {
+    const res = await fetch('/storage/v1/object/public/signage/poster.png');
+    if (!res.ok) {
+      say('public-msg', `HTTP ${res.status} — is the setup script done?`, 'bad');
+      return;
+    }
+    $('public-img').src = URL.createObjectURL(await res.blob());
+    say('public-msg',
+      `HTTP 200 with no apikey and no token · ${res.headers.get('cache-control')}`, 'ok');
+  })();
+
+  $('sign').onclick = async () => {
+    say('sign-msg', 'minting…', 'wait');
+    const res = await fetch(
+      `/storage/v1/object/sign/avatars/${session.uid}/photo.png`,
+      { method: 'POST', headers: headers({ 'content-type': 'application/json' }),
+        body: JSON.stringify({ expires_in: 5 }) });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      say('sign-msg', `HTTP ${res.status} — upload an avatar first`, 'bad');
+      return;
+    }
+    const url = body.signed_url;
+    $('sign-out').hidden = false;
+    // Fetched with *no credentials whatsoever* to make the point: the token in
+    // the URL is the entire authority.
+    const now = await fetch(url);
+    $('sign-out').textContent =
+      `immediately: HTTP ${now.status} (${now.headers.get('content-type') ?? '—'})\n`
+      + `revocable: ${body.revocable}\n`;
+    say('sign-msg', 'works now with no apikey — waiting for it to expire…', 'wait');
+    await new Promise((r) => setTimeout(r, 6000));
+    const later = await fetch(url);
+    const laterBody = await later.text();
+    $('sign-out').textContent +=
+      `after 6 seconds: HTTP ${later.status}\n${laterBody}\n`;
+    if (later.status === 403) {
+      say('sign-msg',
+        'HTTP 403 after expiry — and the message is identical to a forged token, '
+        + 'so a holder cannot tell which it was.', 'ok');
+    } else {
+      say('sign-msg', `HTTP ${later.status} after expiry — the TTL is not holding`, 'bad');
+    }
+  };
+})();
+</script>
+</body>
+</html>
