@@ -201,6 +201,54 @@ export async function ensureDeveloperRole(client: Client): Promise<{ created: bo
   return { created };
 }
 
+/**
+ * Hand the `storage` metadata tables to the customer's role.
+ *
+ * **Only a table's owner may create a policy on it**, and policies on
+ * `storage.objects` *are* the file-permission system — the storage doc says so in
+ * those words, and every documented pattern is SQL a customer runs. Left owned by
+ * `postgres`, not one of them could be created: `CREATE POLICY` would fail with
+ * "must be owner of table objects", which reads as a platform fault.
+ *
+ * This is the opposite call from the `auth` schema, and deliberately so. There the
+ * tables hold password hashes and token digests and no customer role may even
+ * read them; here the tables hold the customer's own file inventory and the
+ * customer is expected to govern it. The asymmetry is the point rather than an
+ * inconsistency.
+ *
+ * Ownership does not weaken the platform's position: the storage service connects
+ * as `service_role`, which bypasses RLS by attribute (D-082), so nothing the
+ * customer writes here can lock the service out of its own bookkeeping. And
+ * `storage.usage` stays with `postgres` — a customer who owned it could edit
+ * their way to unlimited quota.
+ */
+export async function ensureStorageOwnership(client: Client): Promise<void> {
+  const dev = identifier(DEVELOPER_ROLE);
+  // USAGE on the schema first, and this is P5d's lesson repeating itself within
+  // one phase: the image grants schema USAGE to the roles a *request* runs as and
+  // to nobody else, so the role a customer runs migrations as could not so much
+  // as name `storage.objects` — owning the table is useless without the right to
+  // reach the schema it lives in. It failed with `permission denied for schema
+  // storage`, which is the same message and the same cause as the `auth` gap.
+  //
+  // USAGE, not CREATE: the schema stays owned by the platform so a customer
+  // cannot drop the schema the storage service depends on.
+  await client.query(`GRANT USAGE ON SCHEMA storage TO ${dev}`);
+  for (const table of ['storage.buckets', 'storage.objects', 'storage.upload_intents']) {
+    await client.query(`ALTER TABLE ${table} OWNER TO ${dev}`);
+  }
+  // The helper too, or `CREATE POLICY ... storage.prefix_owner(name)` resolves a
+  // function the customer may execute but a policy they own cannot depend on
+  // being able to — and more practically, a customer refining the helper for
+  // their own path layout should not need us.
+  await client.query(`ALTER FUNCTION storage.prefix_owner(text) OWNER TO ${dev}`);
+  // `bucket_id` is SECURITY DEFINER, so its owner is who it runs as. Moving it to
+  // the customer keeps it able to read `storage.buckets` — the customer owns that
+  // table — while making sure a platform-owned function is not executing customer
+  // SQL as `postgres`.
+  await client.query(`ALTER FUNCTION storage.bucket_id(text) OWNER TO ${dev}`);
+}
+
 /** The connected database's name, for a GRANT that must name it explicitly. */
 async function currentDatabase(client: Client): Promise<string> {
   const { rows } = await client.query<{ db: string }>('SELECT current_database() AS db');

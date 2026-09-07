@@ -21,7 +21,8 @@ import { SECRET_NAMES } from '@corebase/secrets';
 import { createHash } from 'node:crypto';
 import { generateKeypair, sign as signJwt, projectKeyClaims, toJwk } from '@corebase/jwt';
 import {
-  auditImageRoles, connectAsSuperuser, ensureDeveloperRole, setRolePassword,
+  auditImageRoles, connectAsSuperuser, ensureDeveloperRole, ensureStorageOwnership,
+  setRolePassword,
   DEVELOPER_ROLE, POOLER_AUTH_ROLE, AUTH_ROLE,
 } from '../project-admin.ts';
 
@@ -445,8 +446,14 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
             'is running an image that predates the role model (init/10-roles.sql)');
         }
         const { created } = await ensureDeveloperRole(client);
+        // The storage metadata tables move to the customer's role here, because
+        // only a table's owner may create a policy on it and policies on
+        // `storage.objects` *are* the file-permission system (P6a). It runs in
+        // this step rather than at initdb for the plain reason that the role does
+        // not exist until the line above.
+        await ensureStorageOwnership(client);
         ctx.log(created ? 'created the developer role' : 'developer role already present',
-          { roles_verified: audit.present.length });
+          { roles_verified: audit.present.length, storage_owned_by: 'developer' });
       } finally {
         await client.end().catch(() => {});
       }
