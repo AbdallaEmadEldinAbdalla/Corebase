@@ -461,6 +461,27 @@ The corpus covers, A to Z:
 - **[Open questions](docs/15-risks/02-open-questions.md)** — 142 questions left deliberately unresolved, each with an owning document and a decide-by trigger.
 - **[Measurement log](docs/14-roadmap/05-measurements.md)** — every number the plan assumed and the build later measured, append-only, and each entry states what it does **not** license. The drift between assumption and reality is the finding; the [Milestone-0 retro](docs/14-roadmap/06-milestone-0-retro.md) is where that drift was acted on.
 
+## The brand
+
+The product is being renamed **Corebase → Steadhold** (D-407) — *stead* (a holding,
+a place one stands) plus *hold* (to keep). The mark is a **chiselled S cut at the
+waist**: ink upper bowl, terracotta lower bowl — the stratum the letter stands in.
+
+Everything is generated from one authored path:
+
+```bash
+python3 design-exports/steadhold/build-identity.py
+```
+
+The showcase is [`design-exports/steadhold/identity.html`](design-exports/steadhold/identity.html),
+the assets are in `design-exports/steadhold/logo/`, and
+[the folder's README](design-exports/steadhold/README.md) records the four rounds and
+what was cut — including the round that killed the whole first direction, because a
+blocky S built from bars *is* a numeral 5.
+
+Palette: ink `#171310`, paper `#FAF6F0`, terracotta `#B4502E`. Type: Zilla Slab
+display, Space Grotesk UI.
+
 ## The design system
 
 Accent is **Electric Violet** — `#7C3AED` light, `#8B5CF6` dark — on cool violet-tinted neutrals. It was chosen over coral, emerald, deep forest and cyan for two reasons that outlived taste: it is the only candidate where white text clears AA contrast on the accent in *both* themes, and it collides with no semantic colour. In a product whose scariest button is *Delete project*, the brand hue must never be confusable with the error hue.

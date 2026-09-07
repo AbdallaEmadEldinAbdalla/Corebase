@@ -3759,6 +3759,69 @@ verified in a real browser (P6h).
 Three criteria, three met. Phase 6 also closes the isolation matrix's storage
 rows (P6g), which Phase 5 had recorded as a named gap.
 
+## 4h. Brand — the name and the mark
+
+This is not a numbered plan step. It sits between Phase 6 and Phase 7 because the
+dashboard cannot be rebuilt against a visual layer that does not exist yet, and the
+name had to settle before ~200 files were rewritten around it.
+
+### The name · Corebase → Steadhold · decided, not yet applied
+
+`corebase.co` is taken, as are the `.dev`/`.io` pairs around "corebase", and the
+name was generic besides — "core" plus "base" names a category, not a position.
+**Steadhold** is *stead* (a holding, a place one stands) plus *hold* (to keep; a
+stronghold): a backend you own outright rather than rent. **D-407.**
+
+**The rename has not been applied.** The repository, the `@corebase/*` packages, the
+container prefixes and every doc still say Corebase. That is deliberate — the mark
+had to exist and survive judgement first — but it means the identity in
+`design-exports/steadhold/` describes a name the code does not use yet. §8 carries
+this as an open item. `steadhold.dev` should be registered before the rename lands.
+
+### The mark · done · four rounds, 30 candidates, 1 shipped
+
+A **chiselled S cut at the waist**: ink upper bowl, terracotta lower bowl. The
+accent is the stratum the letter stands in — *founded, not rented*. **D-408.**
+
+Built and judged with the `logo-maker` skill. Everything is generated from one
+authored path by
+[`build-identity.py`](design-exports/steadhold/build-identity.py) — geometry lives
+in exactly one place, because a favicon that has drifted from its logo drifts
+invisibly (**D-409**). Eleven assets: two 1024-grid masters, `favicon.svg` +
+`.ico` + three PNGs, a maskable SVG, two PWA PNGs, and an opaque
+`apple-touch-icon.png`. Rasterisation goes through headless Chrome; `rsvg-convert`
+and ImageMagick are not on this machine, and the script warns and continues rather
+than pretending it wrote an `.ico` it could not.
+
+The mark ships free-standing everywhere. The favicon is the single exception that
+carries an ink field, because the ink upper bowl vanishes against a dark browser tab
+and the terracotta base alone is not the letter (**D-410**). The maskable icon
+scales the glyph to `0.82`: at full size its half-diagonal is 443px against the
+409px safe radius, so an unscaled maskable icon would have had its corners clipped
+by the OS.
+
+Palette: ink `#171310`, paper `#FAF6F0`, terracotta `#B4502E` / deep `#8E3D22` /
+bright `#E07A52`. Type: Zilla Slab 600/700 display, Space Grotesk 400/500/600 UI.
+Signature tilt `−15°`.
+
+**What it broke:** nothing — no source file changed. The existing dashboard still
+renders the old Pencil-derived tokens, which is now a known inconsistency rather
+than a regression.
+
+**Verification:** by looking, at every round. Headless-Chrome screenshots read at
+128 / 64 / 32 / 24 / 20 / 16px on both finishes, plus the actual rasterised
+`favicon-16.png` inspected at 4× nearest-neighbour to confirm the letter survives
+the pixel grid. The showcase is
+[`design-exports/steadhold/identity.html`](design-exports/steadhold/identity.html).
+
+**The round that mattered most was the one that failed.** Rounds 1 and 2 both built
+the S from three horizontal bars and two stems. It does not work: that construction
+*is* a numeral **5** — a 5 is the same shape minus one corner, and that corner is
+the first thing to disappear at favicon size. Only the two opposing curved bowls
+distinguish an S. The full record of what was cut and why is in
+[`design-exports/steadhold/README.md`](design-exports/steadhold/README.md); the
+rejected rounds are kept rather than deleted.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -4327,6 +4390,18 @@ also broader than it should be: any host on port 53, rather than the node's
 resolver.
 
 
+
+**The brand is decided but only half-applied.** The name is Steadhold (D-407)
+and the mark ships (§4h), but the rename has not touched the code: the repository,
+the `@corebase/*` package names, the container prefixes, the `corebase.co` domain
+in the docs and every reference in the planning corpus still say Corebase.
+`steadhold.dev` is not registered.
+
+**The design token system is the Pencil-derived layer, and it is being replaced.**
+`apps/dashboard/src/styles/tokens.css` and `components.css` predate the identity
+above and share none of its palette or type. Phase 7 rebuilds them from the
+identity; until then the dashboard renders in colours the brand no longer uses, and
+the D-178/D-179 tests enforce the *old* system's rules.
 
 ## 9. Where to look when you pick this up
 
