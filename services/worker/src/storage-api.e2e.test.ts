@@ -580,3 +580,164 @@ describe('P6c — listing, filtered by the caller\'s policies', () => {
     expect(res.json().object.etag).toBeTruthy();
   });
 });
+
+describe('P6d — signed URLs', () => {
+  let signed = '';
+
+  t('minting one requires the object to be visible to the requester', async () => {
+    await put('files', 'shared/report.pdf',
+      Buffer.concat([Buffer.from([0x25, 0x50, 0x44, 0x46]), Buffer.alloc(32)]),
+      { key: serviceKey, type: 'application/pdf' });
+
+    // anon has no object policy, so it cannot see the object and must not be
+    // able to mint a URL for it. Otherwise this endpoint launders access:
+    // "I cannot read it, but here is a link that can."
+    const denied = await call('POST', '/storage/v1/object/sign/files/shared/report.pdf',
+      { key: anonKey, body: {} });
+    expect(denied.statusCode).toBe(404);
+
+    const res = await call('POST', '/storage/v1/object/sign/files/shared/report.pdf',
+      { key: serviceKey, body: { expires_in: 600 } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().expires_in).toBe(600);
+    // Said out loud in the response, because the property is surprising: there is
+    // no per-URL kill switch before `exp`.
+    expect(res.json().revocable).toBe(false);
+    signed = res.json().signed_url;
+    expect(signed).toContain('token=');
+  });
+
+  t('redeeming needs no apikey at all — the token is the credential', async () => {
+    const res = await app.inject({ method: 'GET', url: signed });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('application/pdf');
+    // Never cacheable by an intermediary: the URL is per-recipient, and a shared
+    // cache holding it would serve one person's capability to the next.
+    expect(String(res.headers['cache-control'])).toMatch(/private/);
+    expect(res.rawPayload.length).toBe(36);
+  });
+
+  t('EXIT CRITERION: swapping the object in a valid signed URL is refused (ST-2)',
+    async () => {
+      await put('files', 'shared/secret.pdf',
+        Buffer.concat([Buffer.from([0x25, 0x50, 0x44, 0x46]), Buffer.alloc(8)]),
+        { key: serviceKey, type: 'application/pdf' });
+      // The signature covers the path, so the same token presented for a
+      // different object is not a valid signature for that object.
+      const swapped = signed.replace('shared/report.pdf', 'shared/secret.pdf');
+      const res = await app.inject({ method: 'GET', url: swapped });
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error.code).toBe('forbidden');
+      // And the body says nothing about *why*, so a holder of a bad token cannot
+      // use this as an oracle for which objects exist.
+      expect(res.json().error.message).not.toMatch(/expired|signature|bucket/i);
+    });
+
+  t('an expired URL is refused, and refused identically', async () => {
+    const res = await call('POST', '/storage/v1/object/sign/files/shared/report.pdf',
+      { key: serviceKey, body: { expires_in: 1 } });
+    const url = res.json().signed_url;
+    // Works now.
+    expect((await app.inject({ method: 'GET', url })).statusCode).toBe(200);
+    await new Promise((r) => setTimeout(r, 1300));
+    const after = await app.inject({ method: 'GET', url });
+    expect(after.statusCode).toBe(403);
+    expect(after.json().error.message).toBe('That signed URL is not valid.');
+  });
+
+  t('a tampered token is refused', async () => {
+    // Flip a character in the signature half.
+    const [base, token] = signed.split('token=');
+    const broken = token!.slice(0, -2) + (token!.endsWith('AA') ? 'BB' : 'AA');
+    expect((await app.inject({ method: 'GET', url: base + 'token=' + broken })).statusCode)
+      .toBe(403);
+    // And a missing token is a 401 rather than a 403: nothing was presented, so
+    // there is nothing to have been refused.
+    expect((await app.inject({
+      method: 'GET', url: '/storage/v1/object/sign/files/shared/report.pdf',
+    })).statusCode).toBe(401);
+  });
+
+  t('clamps a request for a longer life than the documented maximum', async () => {
+    const res = await call('POST', '/storage/v1/object/sign/files/shared/report.pdf',
+      { key: serviceKey, body: { expires_in: 60 * 60 * 24 * 365 } });
+    // Seven days is a ceiling, not a suggestion — a signed URL cannot be revoked,
+    // so its lifetime is the only bound on a leak.
+    expect(res.json().expires_in).toBe(604_800);
+  });
+});
+
+describe('P6d — public buckets', () => {
+  t('serves without authentication, and lets the CDN cache it', async () => {
+    await call('POST', '/storage/v1/bucket', {
+      key: serviceKey, body: { name: 'assets-pub', public: true } });
+    await put('assets-pub', 'logo.png', PNG, { key: serviceKey, type: 'image/png' });
+
+    const res = await app.inject({
+      method: 'GET', url: '/storage/v1/object/public/assets-pub/logo.png',
+      headers: { host: `${ref}.${DOMAIN}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(Buffer.compare(res.rawPayload, PNG)).toBe(0);
+    // The free-tier bandwidth story: cache hits never reach our nodes. The
+    // honest contract that comes with it is documented staleness up to max-age.
+    expect(String(res.headers['cache-control'])).toMatch(/public, max-age=3600/);
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+  });
+
+  t('per-object RLS is skipped, because the bucket is the ACL', async () => {
+    // There is no policy on `storage.objects` granting anon anything, and the
+    // public read works anyway — deliberately. "Public bucket" means the bucket
+    // already answered the permission question for everything in it.
+    const asAnon = await call('GET', '/storage/v1/object/assets-pub/logo.png',
+      { key: anonKey });
+    expect(asAnon.statusCode).toBe(404);      // the authenticated path still denies
+    const viaPublic = await app.inject({
+      method: 'GET', url: '/storage/v1/object/public/assets-pub/logo.png',
+      headers: { host: `${ref}.${DOMAIN}` },
+    });
+    expect(viaPublic.statusCode).toBe(200);   // the public path does not
+  });
+
+  t('a private bucket is a 404 on the public path, not a 403', async () => {
+    // A private bucket must not confirm its own existence to an unauthenticated
+    // caller probing the public path.
+    const res = await app.inject({
+      method: 'GET', url: '/storage/v1/object/public/files/shared/report.pdf',
+      headers: { host: `${ref}.${DOMAIN}` },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  t('the project comes from the Host, never from the client', async () => {
+    // No Host that resolves to a project, no project. A `?ref=` parameter here
+    // would make this endpoint a way to read any project's public buckets from
+    // any hostname.
+    const wrong = await app.inject({
+      method: 'GET', url: '/storage/v1/object/public/assets-pub/logo.png',
+      headers: { host: `nosuchproject.${DOMAIN}` },
+    });
+    expect(wrong.statusCode).toBe(404);
+    // And a Host outside the project domain resolves to nothing, so a
+    // lookalike domain cannot borrow the routing.
+    const evil = await app.inject({
+      method: 'GET', url: '/storage/v1/object/public/assets-pub/logo.png',
+      headers: { host: `${ref}.evil-corebase.test` },
+    });
+    expect(evil.statusCode).toBe(404);
+  });
+
+  t('flipping public off closes the path, once the config cache expires', async () => {
+    // The 30-second in-process cache is deliberate (D-051 keeps the control
+    // plane off this path), and the doc's own contract is that a `public` flip
+    // takes up to 30 s to propagate. Asserted through the *bucket config*, which
+    // is read per request, rather than by waiting out the project cache.
+    await call('PATCH', '/storage/v1/bucket/assets-pub',
+      { key: serviceKey, body: { public: false } });
+    const res = await app.inject({
+      method: 'GET', url: '/storage/v1/object/public/assets-pub/logo.png',
+      headers: { host: `${ref}.${DOMAIN}` },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+});
