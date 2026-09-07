@@ -50,6 +50,17 @@ import {
 export const PROXY_MAX_BYTES = 50 * 1024 * 1024;
 
 /**
+ * How long a presigned upload URL lives.
+ *
+ * An hour, and the reasoning is the upload it has to survive rather than the
+ * risk it carries: a 4 GB file over a domestic connection is tens of minutes,
+ * and a URL that expired mid-transfer would fail an upload that was going fine.
+ * Its blast radius is bounded by more than time — the length and content type are
+ * signed into it, so it can only ever create the one object it was issued for.
+ */
+export const UPLOAD_URL_SECONDS = 3600;
+
+/**
  * Per-project storage quotas, from the pricing table.
  *
  * Over quota, the contract is *uploads rejected, existing files keep serving* —
@@ -399,6 +410,200 @@ export function registerObjectReads(app: FastifyInstance, deps: ObjectRouteDeps)
       .catch((e: Error) => deps.onError?.(e, { at: 'delete', name }));
     return reply.status(204).send();
   });
+
+  // ── POST /object/upload/sign/:bucket/* — createSignedUploadUrl ────────────
+  //
+  // D-122's > 50 MB half. The bytes bypass this service entirely, which is the
+  // whole point — every byte proxied costs a node's ingress twice — and the cost
+  // is that nothing here observes the upload completing. An **intent row** is
+  // what makes that gap recoverable: it records exactly what was authorised, so
+  // completion can be checked against it and an abandoned upload can be swept
+  // (D-124's F4).
+  app.post('/storage/v1/object/upload/sign/:bucket/*', async (req, reply) => {
+    const { ctx, caller } = await deps.admit(req);
+    const bucket = bucketOrThrow((req.params as Record<string, string>)['bucket'] ?? '');
+    const name = pathOrThrow(wildcard(req));
+    const body = (req.body ?? {}) as Record<string, unknown>;
+
+    const size = Number(body['size']);
+    if (!Number.isInteger(size) || size <= 0) {
+      throw new ApiError(400, E.VALIDATION_FAILED,
+        '`size` is the exact byte count you will upload. It is signed into the URL, '
+        + 'so the upload must match it.');
+    }
+    const declared = typeof body['content_type'] === 'string'
+      ? body['content_type'] : 'application/octet-stream';
+
+    // ── authorisation, before anything is signed ────────────────────────────
+    //
+    // The doc asks for an "RLS check on the intended path", and the only way to
+    // ask Postgres whether *this* caller may create *this* row is to try: the
+    // customer's `WITH CHECK` clause can depend on the path, the bucket, their
+    // claims and anything else they wrote. So the insert is attempted as the
+    // caller and then rolled back.
+    //
+    // A trial write is an unusual shape and worth defending. The alternatives are
+    // worse: re-implementing the customer's policy in TypeScript means two
+    // authorities that can disagree, and skipping the check until completion
+    // means a client can upload gigabytes before being told no. The rollback is
+    // inside the same transaction, so the usage trigger's effect goes with it.
+    const cfgAndAllowed = await deps.asCaller(ctx, caller, async (q) => {
+      const cfg = await bucketConfig(q, bucket);
+      const bucketLimit = cfg.file_size_limit === null ? null : Number(cfg.file_size_limit);
+      if (bucketLimit !== null && size > bucketLimit) {
+        throw new ApiError(413, E.FILE_SIZE_LIMIT_EXCEEDED,
+          `This bucket accepts objects up to ${bucketLimit} bytes.`);
+      }
+      if (!mimeAllowed(declared, cfg.allowed_mime_types)) {
+        throw new ApiError(415, E.MIME_TYPE_NOT_ALLOWED,
+          `This bucket does not accept ${declared}.`);
+      }
+      // Quota is checked against the *declared* size here and again against the
+      // true size at completion. Declared is all there is before the upload
+      // exists, and a client that lies is caught by the second check — after
+      // spending their own bandwidth rather than our storage.
+      const plan = await deps.planOf(ctx);
+      const ceiling = PLAN_STORAGE_BYTES[plan] ?? PLAN_STORAGE_BYTES['free']!;
+      const usage = (await q(`SELECT total_bytes FROM storage.usage`)).rows as
+        Array<{ total_bytes: string }>;
+      const used = usage[0] ? Number(usage[0].total_bytes) : 0;
+      if (used + size > ceiling) {
+        throw new ApiError(413, E.STORAGE_QUOTA_EXCEEDED,
+          'This project has no storage left. Delete something, or move to a larger plan.');
+      }
+
+      await q('SAVEPOINT policy_probe');
+      try {
+        await q(
+          `INSERT INTO storage.objects (bucket_id, name, owner, size, mime_type, etag)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [cfg.id, name, caller.userId, size, declared, 'probe']);
+      } finally {
+        // Rolled back whether it succeeded or not: a probe that left the row
+        // behind would be an upload that had not happened.
+        await q('ROLLBACK TO SAVEPOINT policy_probe');
+      }
+      return { bucketId: cfg.id };
+    });
+
+    // ── the intent, then the URL ────────────────────────────────────────────
+    //
+    // Written as `service_role` because it is platform bookkeeping, not the
+    // customer's data — the authorisation question was answered above, and the
+    // intent is the *record* of that answer rather than a second decision.
+    const intent = await deps.asServiceRole(ctx, async (q) => ((await q(
+      `INSERT INTO storage.upload_intents
+         (bucket_id, name, owner, declared_size, content_type, expires_at)
+       VALUES ($1, $2, $3, $4, $5, now() + make_interval(secs => $6))
+       RETURNING id`,
+      [cfgAndAllowed.bucketId, name, caller.userId, size, declared,
+       UPLOAD_URL_SECONDS])).rows as Array<{ id: string }>)[0]!);
+
+    const uploadUrl = deps.s3.presignPut(objectKey(ctx.ref, bucket, name), {
+      expiresInSeconds: UPLOAD_URL_SECONDS,
+      contentType: declared,
+      contentLength: size,
+    });
+    return reply.send({
+      upload_url: uploadUrl,
+      upload_id: intent.id,
+      expires_in: UPLOAD_URL_SECONDS,
+      // Spelled out because a presigned PUT is unforgiving: both headers are
+      // signed, so sending a different length or type fails the signature rather
+      // than producing a helpful error.
+      required_headers: { 'content-type': declared, 'content-length': String(size) },
+    });
+  });
+
+  // ── POST /object/upload/complete/:upload_id ───────────────────────────────
+  //
+  // The service reads what the store actually holds and finalises from that. It
+  // believes nothing the client says about the upload, because the client is the
+  // one party that was not watched.
+  app.post<{ Params: { upload_id: string } }>(
+    '/storage/v1/object/upload/complete/:upload_id', async (req, reply) => {
+      const { ctx } = await deps.admit(req);
+      const id = req.params.upload_id;
+      if (!/^[0-9a-f-]{36}$/i.test(id)) {
+        throw new ApiError(400, E.VALIDATION_FAILED, 'That is not an upload id.');
+      }
+
+      const intent = await deps.asServiceRole(ctx, async (q) => ((await q(
+        `SELECT i.id, i.bucket_id, i.name, i.owner, i.declared_size, i.content_type,
+                i.expires_at < now() AS expired, b.name AS bucket
+           FROM storage.upload_intents i JOIN storage.buckets b ON b.id = i.bucket_id
+          WHERE i.id = $1`, [id])).rows as Array<{
+        id: string; bucket_id: string; name: string; owner: string | null;
+        declared_size: string; content_type: string; expired: boolean; bucket: string;
+      }>)[0]);
+      if (!intent) throw new ApiError(404, E.NOT_FOUND, 'No such upload.');
+      if (intent.expired) {
+        // The intent outlived its URL. The bytes may or may not be there; either
+        // way the sweep collects them, and finalising now would materialise a row
+        // whose authorisation has expired.
+        throw new ApiError(410, E.NOT_FOUND,
+          'That upload expired. Request a new signed upload URL.');
+      }
+
+      const key = objectKey(ctx.ref, intent.bucket, intent.name);
+      const head = await deps.s3.headObject(key);
+      if (!head.exists) {
+        throw new ApiError(409, E.CONFLICT,
+          'Nothing has been uploaded to that URL yet.');
+      }
+
+      // The true size, from the store. The presigned URL signed a
+      // `content-length`, so a mismatch should be impossible — which is exactly
+      // why it is checked: an impossible state reached anyway means the
+      // assumption was wrong, and finalising on it would put a false number in
+      // the customer's quota.
+      if (head.size !== Number(intent.declared_size)) {
+        await deps.s3.deleteObject(key).catch((e: Error) =>
+          deps.onError?.(e, { at: 'complete-size-mismatch', key }));
+        throw new ApiError(413, E.FILE_SIZE_LIMIT_EXCEEDED,
+          `The uploaded object is ${head.size} bytes, not the ${intent.declared_size} `
+          + 'that was authorised. It has been deleted.');
+      }
+
+      // The same content check the proxied path does, deferred to here because
+      // there was no moment earlier at which the bytes existed (D-123). A ranged
+      // read of the first bytes rather than the whole object: the signatures all
+      // live in the first twelve, and fetching a 4 GB video to look at its header
+      // would make this endpoint the bandwidth cost the presigned path exists to
+      // avoid.
+      const sniffRange = await deps.s3.getObject(key, { range: `bytes=0-${SNIFF_BYTES - 1}` });
+      const verdict = sniff(sniffRange.bytes, intent.content_type);
+      if (!verdict.ok) {
+        await deps.s3.deleteObject(key).catch((e: Error) =>
+          deps.onError?.(e, { at: 'complete-sniff-reject', key }));
+        throw new ApiError(415, E.MIME_TYPE_NOT_ALLOWED,
+          `Upload refused: ${verdict.reason}. It has been deleted.`);
+      }
+
+      // Finalise as `service_role`, using the intent's owner rather than the
+      // completing caller. The authorisation decision was made when the URL was
+      // signed (D-399's pattern), and the row must record whose upload it was,
+      // not who happened to press the button.
+      const row = await deps.asServiceRole(ctx, async (q) => {
+        const inserted = ((await q(
+          `INSERT INTO storage.objects (bucket_id, name, owner, size, mime_type, etag)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (bucket_id, name) DO UPDATE
+             SET size = EXCLUDED.size, mime_type = EXCLUDED.mime_type,
+                 etag = EXCLUDED.etag, updated_at = now()
+           RETURNING name, size, mime_type, etag`,
+          [intent.bucket_id, intent.name, intent.owner, head.size,
+           intent.content_type, head.etag])).rows as Array<Record<string, unknown>>)[0]!;
+        // The intent is spent. Deleted after the row exists, so a crash between
+        // them leaves an intent whose object *does* have a row — which the sweep
+        // reads as complete and simply drops.
+        await q(`DELETE FROM storage.upload_intents WHERE id = $1`, [intent.id]);
+        return inserted;
+      });
+      return reply.status(201).send({
+        object: { ...row, size: Number(row['size']), bucket: intent.bucket },
+      });
+    });
 
   // ── POST /object/sign/:bucket/* — createSignedUrl ─────────────────────────
   //
