@@ -248,6 +248,10 @@ export async function ensureStorageOwnership(client: Client): Promise<void> {
   // SQL as `postgres`.
   await client.query(`ALTER FUNCTION storage.bucket_id(text) OWNER TO ${dev}`);
   await client.query(`ALTER FUNCTION storage.bucket_config(text) OWNER TO ${dev}`);
+  // Deliberately **not** transferred: `usage_bytes` runs as its owner, and its
+  // owner must not be a role the customer controls — otherwise a customer could
+  // redefine the function and report whatever headroom they liked. It stays with
+  // the platform, like `storage.usage` itself.
 }
 
 /** The connected database's name, for a GRANT that must name it explicitly. */

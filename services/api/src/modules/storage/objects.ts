@@ -239,12 +239,17 @@ export function registerObjectWrites(app: FastifyInstance, deps: ObjectRouteDeps
       // the hot path.
       const plan = await deps.planOf(ctx);
       const ceiling = PLAN_STORAGE_BYTES[plan] ?? PLAN_STORAGE_BYTES['free']!;
-      const usage = (await q(`SELECT total_bytes FROM storage.usage`)).rows as
-        Array<{ total_bytes: string }>;
-      // `service_role` alone may read it; for any other caller the row is simply
-      // absent, and an upload must not fail because the *quota check* was
-      // unreadable. Absent means unenforced here and enforced by the true-up.
-      const used = usage[0] ? Number(usage[0].total_bytes) : 0;
+      // Through the SECURITY DEFINER reader, not the table.
+      //
+      // The table is readable only by `service_role`, and the comment that used
+      // to sit here claimed a non-service caller would simply see no row. That
+      // was wrong: it raises `permission denied` (42501), which this module maps
+      // to 403 — so **every authenticated user's upload failed with a message
+      // blaming a policy that was correct.** Found by the Phase 6 demo, because
+      // every test until then had uploaded with the service key.
+      const usage = (await q(`SELECT storage.usage_bytes() AS total_bytes`)).rows as
+        Array<{ total_bytes: string | null }>;
+      const used = Number(usage[0]?.total_bytes ?? 0);
       // An upsert replaces bytes, so only the delta counts against the ceiling.
       const existing = (await q(
         `SELECT size FROM storage.objects WHERE bucket_id = $1 AND name = $2`,
@@ -464,9 +469,9 @@ export function registerObjectReads(app: FastifyInstance, deps: ObjectRouteDeps)
       // spending their own bandwidth rather than our storage.
       const plan = await deps.planOf(ctx);
       const ceiling = PLAN_STORAGE_BYTES[plan] ?? PLAN_STORAGE_BYTES['free']!;
-      const usage = (await q(`SELECT total_bytes FROM storage.usage`)).rows as
-        Array<{ total_bytes: string }>;
-      const used = usage[0] ? Number(usage[0].total_bytes) : 0;
+      const usage = (await q(`SELECT storage.usage_bytes() AS total_bytes`)).rows as
+        Array<{ total_bytes: string | null }>;
+      const used = Number(usage[0]?.total_bytes ?? 0);
       if (used + size > ceiling) {
         throw new ApiError(413, E.STORAGE_QUOTA_EXCEEDED,
           'This project has no storage left. Delete something, or move to a larger plan.');

@@ -234,3 +234,22 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON storage.upload_intents TO authenticated,
 -- did — makes every upload fail its quota check on a permission error.
 REVOKE ALL ON storage.usage FROM PUBLIC;
 GRANT SELECT ON storage.usage TO service_role;
+
+-- And a SECURITY DEFINER reader for everyone else, because the quota check runs
+-- on **every** upload and an upload is usually made by a *user* (P6h).
+--
+-- Granting `SELECT` to `authenticated` directly would work and is the wrong
+-- shape: it exposes the whole row and invites a future column here to become
+-- customer-visible by accident. A function returning one number is the narrow
+-- version, and it matches how `bucket_config` solved the same problem.
+--
+-- The bug this fixes was found by the Phase 6 demo, and only by the demo: every
+-- automated test until then had uploaded with the `service_role` key, which *can*
+-- read the table. A real user's upload failed with `permission denied for table
+-- usage` — SQLSTATE 42501 — which the service maps to "the project's policies do
+-- not allow this operation", so the reported cause was a policy that was in fact
+-- correct.
+CREATE FUNCTION storage.usage_bytes() RETURNS bigint
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''
+  AS $$ SELECT total_bytes FROM storage.usage $$;
+GRANT EXECUTE ON FUNCTION storage.usage_bytes() TO anon, authenticated, service_role;
