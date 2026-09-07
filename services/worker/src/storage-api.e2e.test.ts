@@ -10,7 +10,9 @@ import { createSecretStore, SECRET_NAMES } from '@corebase/secrets';
 import { sign as signJwt } from '@corebase/jwt';
 import { buildApp } from '@corebase/api';
 import { createMemoryRateLimiter } from '@corebase/api/kernel/rate-limit.ts';
+import { createS3, s3FromEnv, type S3 } from '@corebase/s3';
 import { createDocker, type Docker } from './docker.ts';
+import { loadBackupEnv } from './staging-env.ts';
 import { buildSagas } from './jobs/sagas.ts';
 import { registerNode } from './placement.ts';
 import { IMAGE, POOLER_IMAGE, POSTGREST_IMAGE, LABEL_MANAGED } from './container-spec.ts';
@@ -41,9 +43,11 @@ let secrets: ReturnType<typeof createSecretStore>;
 let app: FastifyInstance;
 let ref = ''; let projectId = '';
 let anonKey = ''; let serviceKey = '';
+let s3: S3;
 let up = false; let reason = '';
 
 beforeAll(async () => {
+  loadBackupEnv();
   kekDir = mkdtempSync(join(tmpdir(), 'cb-kek-p6b-'));
   writeFileSync(join(kekDir, 'kek_2026_09.key'), randomBytes(32));
   try {
@@ -86,10 +90,21 @@ beforeAll(async () => {
     anonKey = (await secrets.get(projectId, SECRET_NAMES.anonKey))!;
     serviceKey = (await secrets.get(projectId, SECRET_NAMES.serviceRoleKey))!;
 
+    // The real object store, from the same environment the backup path uses.
+    // Refusing to run without it rather than skipping the object tests: an
+    // upload suite that quietly covers only metadata is worse than one that
+    // fails, because it reports green over the untested half.
+    const s3cfg = s3FromEnv();
+    if (!s3cfg) {
+      throw new Error('no object store configured — ./scripts/staging.sh backup-store');
+    }
+    s3 = createS3(s3cfg);
+
     app = buildApp({
       storage: {
         pool, secrets, projectDomain: DOMAIN,
         limiter: createMemoryRateLimiter({ limit: 10_000, windowSeconds: 60 }),
+        objects: { s3 },
       },
     });
     up = true;
@@ -308,5 +323,260 @@ describe('P6b — bucket CRUD, decided by the customer\'s policies', () => {
       { key: serviceKey, body: { name: 'assets' } });
     expect(again.statusCode).toBe(409);
     expect(again.json().error.code).toBe('conflict');
+  });
+});
+
+/** An upload, exactly as a client makes one: bytes in the body, type in a header. */
+const put = (
+  bucket: string, path: string, body: Buffer,
+  opts: { key?: string; bearer?: string; type?: string; upsert?: boolean; method?: string } = {},
+) => app.inject({
+  method: (opts.method ?? 'POST') as 'POST',
+  url: `/storage/v1/object/${bucket}/${path}`,
+  headers: {
+    ...(opts.key ? { apikey: opts.key } : {}),
+    ...(opts.bearer ? { authorization: `Bearer ${opts.bearer}` } : {}),
+    'content-type': opts.type ?? 'application/octet-stream',
+    ...(opts.upsert ? { 'x-upsert': 'true' } : {}),
+  },
+  payload: body,
+});
+
+const PNG = Buffer.concat([
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  Buffer.alloc(64, 7),
+]);
+
+describe('P6c — the proxied upload path', () => {
+  t('stores the bytes, then the row — and the bytes are really in the store', async () => {
+    await call('POST', '/storage/v1/bucket', { key: serviceKey, body: { name: 'files' } });
+
+    const res = await put('files', 'a/hello.png', PNG, { key: serviceKey, type: 'image/png' });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().object).toMatchObject({ name: 'a/hello.png', size: PNG.length });
+
+    // The etag the row carries is the store's, not a locally computed hash —
+    // which is the only version of it that lets a later sweep tell "these are
+    // the bytes the row describes" from "something overwrote them".
+    const head = await s3.headObject(`projects/${ref}/files/a/hello.png`);
+    expect(head.exists).toBe(true);
+    expect(head.size).toBe(PNG.length);
+    expect(res.json().object.etag).toBe(head.etag);
+  });
+
+  t('downloads what was uploaded, byte for byte', async () => {
+    const res = await app.inject({
+      method: 'GET', url: '/storage/v1/object/files/a/hello.png',
+      headers: { apikey: serviceKey },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(Buffer.compare(res.rawPayload, PNG)).toBe(0);
+    expect(res.headers['content-type']).toBe('image/png');
+    // Unconditional, per D-123: a browser that sniffs can be talked into
+    // executing an object whose declared type was harmless.
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(res.headers['etag']).toMatch(/^".+"$/);
+  });
+
+  t('honours If-None-Match from the row, without fetching the bytes', async () => {
+    const first = await app.inject({
+      method: 'GET', url: '/storage/v1/object/files/a/hello.png',
+      headers: { apikey: serviceKey },
+    });
+    const etag = String(first.headers['etag']);
+    const again = await app.inject({
+      method: 'GET', url: '/storage/v1/object/files/a/hello.png',
+      headers: { apikey: serviceKey, 'if-none-match': etag },
+    });
+    expect(again.statusCode).toBe(304);
+    expect(again.rawPayload.length).toBe(0);
+  });
+
+  t('honours Range, and says 206 rather than pretending it sent everything', async () => {
+    const res = await app.inject({
+      method: 'GET', url: '/storage/v1/object/files/a/hello.png',
+      headers: { apikey: serviceKey, range: 'bytes=0-7' },
+    });
+    expect(res.statusCode).toBe(206);
+    expect(res.rawPayload.length).toBe(8);
+    // The PNG signature, which is what the first eight bytes are.
+    expect(Buffer.compare(res.rawPayload, PNG.subarray(0, 8))).toBe(0);
+    expect(res.headers['content-range']).toMatch(/^bytes 0-7\//);
+  });
+
+  t('POST refuses to overwrite; PUT and x-upsert replace', async () => {
+    const bigger = Buffer.concat([PNG, Buffer.alloc(32, 9)]);
+    const clash = await put('files', 'a/hello.png', bigger,
+      { key: serviceKey, type: 'image/png' });
+    expect(clash.statusCode).toBe(409);
+    expect(clash.json().error.code).toBe('conflict');
+
+    const upsert = await put('files', 'a/hello.png', bigger,
+      { key: serviceKey, type: 'image/png', upsert: true });
+    expect(upsert.statusCode).toBe(200);
+    expect(upsert.json().object.size).toBe(bigger.length);
+
+    const viaPut = await put('files', 'a/hello.png', PNG,
+      { key: serviceKey, type: 'image/png', method: 'PUT' });
+    expect(viaPut.statusCode).toBe(200);
+
+    // And the store holds the *replacement*, not both.
+    const head = await s3.headObject(`projects/${ref}/files/a/hello.png`);
+    expect(head.size).toBe(PNG.length);
+  });
+
+  t('an upload the policy refuses leaves no bytes behind', async () => {
+    // The F2 case from D-124: the object is written before the row, so a row
+    // rejected by RLS leaves an orphan — which the service deletes immediately
+    // on a best-effort basis, with the sweep as the backstop. Asserting the
+    // immediate cleanup is what keeps "best effort" from meaning "never".
+    await call('POST', '/storage/v1/bucket', { key: serviceKey, body: { name: 'closed' } });
+    const res = await put('closed', 'nope.bin', Buffer.alloc(16),
+      { key: anonKey });
+    expect(res.statusCode).toBe(403);
+    const head = await s3.headObject(`projects/${ref}/closed/nope.bin`);
+    expect(head.exists).toBe(false);
+  });
+
+  t('a delete removes the row and then the bytes', async () => {
+    await put('files', 'gone.bin', Buffer.alloc(8), { key: serviceKey });
+    expect((await s3.headObject(`projects/${ref}/files/gone.bin`)).exists).toBe(true);
+
+    const res = await app.inject({
+      method: 'DELETE', url: '/storage/v1/object/files/gone.bin',
+      headers: { apikey: serviceKey },
+    });
+    expect(res.statusCode).toBe(204);
+    expect((await s3.headObject(`projects/${ref}/files/gone.bin`)).exists).toBe(false);
+
+    // A second delete is a 404, not a 500 — and not a 204 either, because
+    // reporting success for something that was not there hides a client bug.
+    expect((await app.inject({
+      method: 'DELETE', url: '/storage/v1/object/files/gone.bin',
+      headers: { apikey: serviceKey },
+    })).statusCode).toBe(404);
+  });
+});
+
+describe('P6c — enforcement at the storage service (D-123)', () => {
+  t('refuses an executable whatever it claims to be', async () => {
+    const mz = Buffer.concat([Buffer.from([0x4d, 0x5a]), Buffer.alloc(64)]);
+    for (const type of ['image/png', 'application/octet-stream']) {
+      const res = await put('files', 'evil.bin', mz, { key: serviceKey, type });
+      expect(res.statusCode, type).toBe(415);
+      expect(res.json().error.code).toBe('mime_type_not_allowed');
+      // And the reason is returned rather than swallowed: a caller told only
+      // "rejected" retries the same file.
+      expect(res.json().error.message).toMatch(/Windows executable/);
+    }
+    expect((await s3.headObject(`projects/${ref}/files/evil.bin`)).exists).toBe(false);
+  });
+
+  t('refuses markup declared as an image — the stored-XSS shape', async () => {
+    const res = await put('files', 'x.svg',
+      Buffer.from('<script>alert(1)</script>' + ' '.repeat(64)),
+      { key: serviceKey, type: 'image/svg+xml' });
+    expect(res.statusCode).toBe(415);
+  });
+
+  t('serves the two types that execute as attachments', async () => {
+    // Storable, not refused — customers legitimately store HTML — but the
+    // browser is told not to run it in the origin's context. That serving
+    // hygiene is load-bearing in V1, because public objects share the project's
+    // own origin.
+    await put('files', 'page.html', Buffer.from('<h1>hi</h1>'),
+      { key: serviceKey, type: 'text/html' });
+    const res = await app.inject({
+      method: 'GET', url: '/storage/v1/object/files/page.html',
+      headers: { apikey: serviceKey },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-disposition']).toBe('attachment');
+    expect(String(res.headers['content-security-policy'])).toMatch(/sandbox/);
+  });
+
+  t('honours the bucket\'s size limit and MIME allowlist', async () => {
+    await call('POST', '/storage/v1/bucket', {
+      key: serviceKey,
+      body: { name: 'tight', file_size_limit: 32, allowed_mime_types: ['image/png'] },
+    });
+    const tooBig = await put('tight', 'big.png', Buffer.concat([PNG, Buffer.alloc(64)]),
+      { key: serviceKey, type: 'image/png' });
+    expect(tooBig.statusCode).toBe(413);
+    expect(tooBig.json().error.code).toBe('file_size_limit_exceeded');
+
+    const wrongType = await put('tight', 'a.txt', Buffer.from('hi'),
+      { key: serviceKey, type: 'text/plain' });
+    expect(wrongType.statusCode).toBe(415);
+
+    // The control: a small PNG is accepted, so the two refusals above are the
+    // limits and not a broken bucket.
+    const ok = await put('tight', 'small.png', PNG.subarray(0, 24),
+      { key: serviceKey, type: 'image/png' });
+    expect([201, 200]).toContain(ok.statusCode);
+  });
+
+  t('refuses a path that could climb out of the project prefix', async () => {
+    for (const bad of ['..%2fescape.bin', 'a%2f..%2fb.bin']) {
+      const res = await put('files', bad, Buffer.alloc(8), { key: serviceKey });
+      expect(res.statusCode, bad).toBe(400);
+      expect(res.json().error.code).toBe('validation_failed');
+    }
+  });
+});
+
+describe('P6c — listing, filtered by the caller\'s policies', () => {
+  t('lists by prefix, pages by keyset, and hides what the policy hides', async () => {
+    await call('POST', '/storage/v1/bucket', { key: serviceKey, body: { name: 'listing' } });
+    for (const n of ['x/1.txt', 'x/2.txt', 'x/3.txt', 'y/1.txt']) {
+      await put('listing', n, Buffer.from(n), { key: serviceKey });
+    }
+    const all = await call('POST', '/storage/v1/object/list/listing',
+      { key: serviceKey, body: { prefix: 'x/' } });
+    expect(all.json().objects.map((o: { name: string }) => o.name))
+      .toEqual(['x/1.txt', 'x/2.txt', 'x/3.txt']);
+
+    // Keyset paging rather than OFFSET: a bucket someone is uploading into
+    // would make offset pagination skip and repeat rows, which for a file
+    // listing means a client that misses files without knowing it.
+    const page1 = await call('POST', '/storage/v1/object/list/listing',
+      { key: serviceKey, body: { prefix: 'x/', limit: 2 } });
+    expect(page1.json().objects.length).toBe(2);
+    expect(page1.json().next_cursor).toBe('x/2.txt');
+    const page2 = await call('POST', '/storage/v1/object/list/listing',
+      { key: serviceKey, body: { prefix: 'x/', limit: 2, cursor: 'x/2.txt' } });
+    expect(page2.json().objects.map((o: { name: string }) => o.name)).toEqual(['x/3.txt']);
+    expect(page2.json().next_cursor).toBeNull();
+
+    // anon has no object policy, so the listing is empty rather than refused —
+    // there is no filtering step in the handler at all.
+    const asAnon = await call('POST', '/storage/v1/object/list/listing',
+      { key: anonKey, body: {} });
+    expect(asAnon.statusCode).toBe(200);
+    expect(asAnon.json().objects).toEqual([]);
+  });
+
+  t('batch delete removes only what the policy permitted', async () => {
+    const res = await call('POST', '/storage/v1/object/delete/listing',
+      { key: serviceKey, body: { paths: ['x/1.txt', 'x/2.txt'] } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().deleted.sort()).toEqual(['x/1.txt', 'x/2.txt']);
+    for (const n of ['x/1.txt', 'x/2.txt']) {
+      expect((await s3.headObject(`projects/${ref}/listing/${n}`)).exists, n).toBe(false);
+    }
+    // Untouched, because it was not asked for.
+    expect((await s3.headObject(`projects/${ref}/listing/x/3.txt`)).exists).toBe(true);
+
+    const tooMany = await call('POST', '/storage/v1/object/delete/listing',
+      { key: serviceKey, body: { paths: [] } });
+    expect(tooMany.statusCode).toBe(400);
+  });
+
+  t('info returns metadata and no bytes', async () => {
+    const res = await call('GET', '/storage/v1/object/info/listing/y/1.txt',
+      { key: serviceKey });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().object).toMatchObject({ name: 'y/1.txt', size: 7 });
+    expect(res.json().object.etag).toBeTruthy();
   });
 });
