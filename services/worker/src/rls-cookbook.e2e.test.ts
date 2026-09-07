@@ -180,14 +180,32 @@ beforeAll(async () => {
       NetworkingConfig: { EndpointsConfig: { [NET]: {} } },
     });
     await docker.startContainer(PG);
-    // `pg_isready` is not the signal here, and CI proved it: during `initdb` the
-    // official image runs a temporary server on the unix socket, so `pg_isready`
-    // *inside the container* answers yes while none of the image's init SQL has
-    // run yet. The next statement then failed with `role "authenticator" does not
-    // exist` — on a fresh CI volume, where init takes longer than on a warm local
-    // one. So the wait is for the thing actually depended on.
+    // Waiting for a Postgres container to be usable takes **two** signals, and
+    // CI taught both of them one at a time.
+    //
+    // `pg_isready` alone is wrong: during `initdb` the official image runs a
+    // *temporary* server on the unix socket, so it answers yes while none of the
+    // image's init SQL has run. That failed with `role "authenticator" does not
+    // exist` on a fresh CI volume, where init takes longer than on a warm local
+    // one.
+    //
+    // Polling for the role alone is also wrong, and fails later and more
+    // confusingly: the role appears on that same temporary server, which the
+    // entrypoint then **shuts down** before starting the real one. The next
+    // statement lands in that window and reads `FATAL: the database system is
+    // shutting down`.
+    //
+    // So the log line that separates the two phases comes first — the entrypoint
+    // prints it after the init SQL and before the real server starts — and only
+    // then is the role polled for, on the server that will still be there.
+    let initDone = false;
+    for (let i = 0; i < 180; i++) {
+      const log = String(await docker.containerLogs(PG).catch(() => ''));
+      if (log.includes('init process complete')) { initDone = true; break; }
+      await new Promise((r2) => setTimeout(r2, 1000));
+    }
     let ready = false;
-    for (let i = 0; i < 120; i++) {
+    for (let i = 0; initDone && i < 120; i++) {
       const r = await docker.execCapture(PG, ['psql', '-U', 'postgres', '-tAc',
         `select 1 from pg_roles where rolname = 'authenticator'`]);
       if (r.exitCode === 0 && r.stdout.trim() === '1') { ready = true; break; }
@@ -195,8 +213,10 @@ beforeAll(async () => {
     }
     if (!ready) {
       const logs = await docker.containerLogs(PG).catch(() => '');
-      throw new Error(`the project database never finished its init SQL — `
-        + `'authenticator' never appeared:\n${String(logs).slice(-1200)}`);
+      throw new Error('the project database never became usable — '
+        + `init ${initDone ? 'completed' : 'never completed'}, `
+        + `'authenticator' ${ready ? 'present' : 'never appeared'}:\n`
+        + String(logs).slice(-1500));
     }
 
     pair = generateKeypair();
