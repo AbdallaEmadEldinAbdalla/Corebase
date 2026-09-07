@@ -15,7 +15,8 @@
     "@corebase/crypto": "workspace:*",
     "@corebase/secrets": "workspace:*",
     "@corebase/jwt": "workspace:*",
-    "pg": "^8.13.1"
+    "pg": "^8.13.1",
+    "@corebase/s3": "workspace:*"
   },
   "devDependencies": {
     "@corebase/config": "workspace:*",

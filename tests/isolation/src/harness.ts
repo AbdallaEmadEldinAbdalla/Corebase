@@ -15,6 +15,8 @@ import {
 import type { JobRecord } from '@corebase/worker/jobs/repo.ts';
 import type { SagaStep, SagaContext } from '@corebase/worker/jobs/runner.ts';
 import { DEVELOPER_ROLE } from '@corebase/worker/project-admin.ts';
+import { loadBackupEnv } from '@corebase/worker/staging-env.ts';
+import { createS3, s3FromEnv, type S3 } from '@corebase/s3';
 
 /**
  * The tenant-isolation harness (P5e) — the fixtures behind proposal §74.
@@ -84,6 +86,16 @@ export interface Harness {
   pool: Pool;
   docker: Docker;
   secrets: ReturnType<typeof createSecretStore>;
+  /**
+   * The object store, as the platform sees it.
+   *
+   * Held by the harness rather than by a test because it is *seed* capability:
+   * it puts a neighbour's bytes in place so an attack has something real to try
+   * for. No assertion reads through it to decide whether an attack succeeded —
+   * that would be observing through privilege, which proves nothing about what an
+   * attacker can see (D-380).
+   */
+  s3: S3;
   a: Fixture;
   b: Fixture;
 }
@@ -111,7 +123,17 @@ export async function requirePreconditions(): Promise<{ pool: Pool; docker: Dock
 }
 
 export async function setUp(): Promise<Harness> {
+  loadBackupEnv();
   const { pool, docker } = await requirePreconditions();
+  // Refusing rather than skipping the storage rows. An isolation suite that
+  // quietly covers three boundaries out of four is a release gate reporting green
+  // over an untested one — which is the failure D-085 exists to prevent.
+  const s3cfg = s3FromEnv();
+  if (!s3cfg) {
+    throw new Error('no object store configured — ./scripts/staging.sh backup-store. '
+      + 'The storage isolation rows cannot run without it, and must not be skipped.');
+  }
+  const s3 = createS3(s3cfg);
   kekDir = mkdtempSync(join(tmpdir(), 'cb-kek-iso-'));
   writeFileSync(join(kekDir, 'kek_2026_09.key'), randomBytes(32));
   const secrets = createSecretStore(pool, createEnvelope({ kekDir }));
@@ -133,7 +155,9 @@ export async function setUp(): Promise<Harness> {
 
   const a = await provision(pool, docker, secrets, orgId, 'a');
   const b = await provision(pool, docker, secrets, orgId, 'b');
-  return { pool, docker, secrets, a, b };
+  await seedStorage(docker, s3, a);
+  await seedStorage(docker, s3, b);
+  return { pool, docker, secrets, s3, a, b };
 }
 
 export async function tearDown(h: Harness | undefined): Promise<void> {
@@ -208,6 +232,83 @@ async function provision(
   };
   await seedCanary(docker, fixture);
   return fixture;
+}
+
+/**
+ * Storage, seeded to the same shape as the canary: a private bucket, a public
+ * one, an object in each, and the documented avatar policy so an *authenticated*
+ * caller has a legitimate view to exceed.
+ *
+ * The object bytes are written straight to the store and the rows straight to the
+ * database, in that order — the same ordering the service uses, so the fixture is
+ * a state the platform could actually be in rather than one only a test can
+ * construct.
+ *
+ * Every secret string here contains the project's own ref, which is what lets an
+ * assertion say "no byte of B's appeared in this response" without knowing which
+ * project served it.
+ */
+async function seedStorage(docker: Docker, s3: S3, f: Fixture): Promise<void> {
+  const sql = `
+    -- The auth users first, because storage.objects.owner references them. The
+    -- canary table's owner column is a plain uuid, so its fixtures never needed
+    -- real users; storage's does, and the foreign key is the schema saying that
+    -- a file's owner has to be somebody.
+    insert into auth.users (id, email, encrypted_password, email_confirmed_at)
+    values ('${f.ownerUid}', 'owner@${f.ref}.test', 'x', now()),
+           ('${f.otherUid}', 'other@${f.ref}.test', 'x', now())
+    on conflict (id) do nothing;
+
+    insert into storage.buckets (name, public) values ('vault', false), ('signage', true);
+
+    -- The documented avatar pattern, so an authenticated caller can read within
+    -- this project and the cross-project attempt has a policy to be refused by
+    -- rather than an absence of one. An empty policy set would make ST-4 pass for
+    -- the uninteresting reason that nothing is readable anywhere.
+    create policy "own vault files" on storage.objects for all to authenticated
+      using (bucket_id = storage.bucket_id('vault')
+             and storage.prefix_owner(name) = auth.uid()::text)
+      with check (bucket_id = storage.bucket_id('vault')
+                  and storage.prefix_owner(name) = auth.uid()::text);
+    create policy "signage is public to read" on storage.objects for select
+      to anon, authenticated using (bucket_id = storage.bucket_id('signage'));
+
+    -- Two objects in the vault, and the difference between them is the point.
+    --
+    -- The first sits at a path *both* projects use, under an owner uid both
+    -- fixtures share. That is the trap worth keeping: auth.uid() matching is not
+    -- isolation, because two projects can mint the same subject, so the same URL
+    -- with the same uid must still return two different projects' bytes.
+    --
+    -- The second is named after its own project, so it exists in exactly one of
+    -- them. That is what makes a path-swap test meaningful — with only the shared
+    -- path, "swap A's path for B's" produces the identical string and proves
+    -- nothing.
+    insert into storage.objects (bucket_id, name, owner, size, mime_type, etag) values
+      (storage.bucket_id('vault'), '${f.ownerUid}/private.txt', '${f.ownerUid}',
+       ${`${f.ref}-VAULT-SECRET`.length}, 'text/plain', 'seed1'),
+      (storage.bucket_id('vault'), '${f.ownerUid}/${f.ref}-only.txt', '${f.ownerUid}',
+       ${`${f.ref}-ONLY-HERE`.length}, 'text/plain', 'seed3'),
+      (storage.bucket_id('signage'), 'poster.txt', null,
+       ${`${f.ref}-PUBLIC-POSTER`.length}, 'text/plain', 'seed2');
+  `;
+  const r = await docker.execCapture(
+    f.pg, ['psql', '-U', 'postgres', '-q', '-v', 'ON_ERROR_STOP=1', '-c', sql]);
+  if (r.exitCode !== 0) {
+    // The exit code included, because psql can fail with both streams empty and
+    // "failed: " followed by nothing is not a diagnostic.
+    throw new Error(`seeding storage in ${f.ref} failed (exit ${r.exitCode}): `
+      + `${r.stdout || '<no stdout>'} | ${r.stderr || '<no stderr>'}`);
+  }
+  // Bytes after rows here only because both are fixture writes in one moment;
+  // the *service's* ordering is object-then-row and is tested in the storage
+  // suite. What matters for isolation is that the two agree.
+  await s3.putObject(`projects/${f.ref}/vault/${f.ownerUid}/private.txt`,
+    Buffer.from(`${f.ref}-VAULT-SECRET`), { contentType: 'text/plain' });
+  await s3.putObject(`projects/${f.ref}/vault/${f.ownerUid}/${f.ref}-only.txt`,
+    Buffer.from(`${f.ref}-ONLY-HERE`), { contentType: 'text/plain' });
+  await s3.putObject(`projects/${f.ref}/signage/poster.txt`,
+    Buffer.from(`${f.ref}-PUBLIC-POSTER`), { contentType: 'text/plain' });
 }
 
 /**
@@ -337,4 +438,38 @@ export function mint(signer: Fixture, o: MintOptions = {}): string {
     iat: now,
     exp: now + (o.expSeconds ?? 3600),
   }, { privateKeyPem: signer.signing.privateKeyPem, kid: o.kid ?? signer.signing.kid });
+}
+
+/**
+ * The storage module, wired to both projects' real databases and the real object
+ * store — not a stub.
+ *
+ * One app serving both projects, which is the arrangement that makes the
+ * cross-tenant tests meaningful: the module resolves whichever project the
+ * presented `apikey` names, so A's key and B's key reach the same process and
+ * only the resolution keeps them apart. Two apps would prove nothing about
+ * isolation, only about routing.
+ */
+export function storageApp(h: Harness): FastifyInstance {
+  return buildApp({
+    storage: {
+      pool: h.pool,
+      secrets: h.secrets,
+      projectDomain: PROJECT_DOMAIN,
+      limiter: createMemoryRateLimiter({ limit: 100_000, windowSeconds: 60 }),
+      objects: { s3: h.s3 },
+    },
+  });
+}
+
+/** A user access token for a project, in the shape the bearer verifier requires. */
+export function userToken(f: Fixture, sub: string): string {
+  const now = Math.floor(Date.now() / 1000);
+  return signJwt({
+    iss: `https://${f.ref}.${PROJECT_DOMAIN}/auth/v1`, ref: f.ref,
+    role: 'authenticated', sub, aud: 'authenticated',
+    session_id: '88888888-8888-4888-8888-888888888888',
+    iat: now, exp: now + 3600,
+  } as Parameters<typeof signJwt>[0],
+  { privateKeyPem: f.signing.privateKeyPem, kid: f.signing.kid });
 }
