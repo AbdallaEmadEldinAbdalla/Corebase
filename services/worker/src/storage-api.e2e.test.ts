@@ -38,6 +38,7 @@ const PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
 const SECRET = 'p6b-bootstrap-secret-0123456789';
 const DOMAIN = 'corebase.test';
 const ALICE = '11111111-1111-4111-8111-111111111111';
+const BOB = '22222222-2222-4222-8222-222222222222';
 
 let pool: Pool; let docker: Docker; let kekDir: string;
 let secrets: ReturnType<typeof createSecretStore>;
@@ -1163,5 +1164,81 @@ describe('P6f — the quota true-up, and enforcement at the cap', () => {
       const smaller = await put('files', 'a/hello.png', Buffer.alloc(8),
         { key: serviceKey, type: 'image/png', upsert: true });
       expect([200, 201]).toContain(smaller.statusCode);
+
+      // The counter is put back. This test deliberately pins the project at its
+      // ceiling, and leaving it there makes every later upload in the file fail
+      // with a quota error that has nothing to do with what it was testing —
+      // which is precisely what happened before this line existed. A test that
+      // clobbers shared state restores it.
+      await asOwnerQuery(`update storage.usage set total_bytes = 0`);
     });
+});
+
+describe('P6h — an upload by a real user, which every earlier test missed', () => {
+  t('a signed-in user can upload into their own folder', async () => {
+    // The gap that let a genuine bug ship through five green steps: every upload
+    // test until now presented the **service_role** key, which can read
+    // `storage.usage`. A real user cannot, so the quota check raised `permission
+    // denied` (42501) and the module mapped it to 403 — reporting a policy
+    // failure for a policy that was correct.
+    //
+    // Found by the Phase 6 demo, which was the first caller in the whole
+    // codebase to upload as a user rather than as a backend.
+    await asOwner(`
+      insert into storage.buckets (name, public) values ('user-uploads', false)
+        on conflict (name) do nothing;
+      create policy "own folder" on storage.objects for all to authenticated
+        using (bucket_id = storage.bucket_id('user-uploads')
+               and storage.prefix_owner(name) = auth.uid()::text)
+        with check (bucket_id = storage.bucket_id('user-uploads')
+                    and storage.prefix_owner(name) = auth.uid()::text);
+      create policy "read user uploads" on storage.objects for select to authenticated
+        using (bucket_id = storage.bucket_id('user-uploads'));`);
+    // The uid has to be a real auth user, because `storage.objects.owner`
+    // references the table — and the insert runs as the **superuser**, not as the
+    // customer. `developer` cannot write `auth.users`, which is exactly what the
+    // isolation suite's DB-3 asserts; using `asOwner` here failed with
+    // `permission denied for table users` and was the boundary working.
+    await asOwnerQuery(`
+      insert into auth.users (id, email, encrypted_password, email_confirmed_at)
+      values ('${ALICE}', 'p6h-alice@example.com', 'x', now())
+      on conflict (id) do nothing`);
+
+    const token = await userToken(ALICE);
+    const res = await put('user-uploads', `${ALICE}/photo.png`, PNG,
+      { key: anonKey, bearer: token, type: 'image/png' });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().object).toMatchObject({ size: PNG.length });
+    // The row records the *user* as owner, which is what makes the own-folder
+    // policy meaningful on every later read.
+    const info = await call('GET', `/storage/v1/object/info/user-uploads/${ALICE}/photo.png`,
+      { key: serviceKey });
+    expect(info.statusCode).toBe(200);
+  });
+
+  t('and is refused in somebody else\'s folder, by WITH CHECK', async () => {
+    const token = await userToken(ALICE);
+    const res = await put('user-uploads', `${BOB}/photo.png`, PNG,
+      { key: anonKey, bearer: token, type: 'image/png' });
+    expect(res.statusCode).toBe(403);
+    // The bytes were never stored: the policy is evaluated before the object
+    // store is touched.
+    expect((await s3.headObject(`projects/${ref}/user-uploads/${BOB}/photo.png`)).exists)
+      .toBe(false);
+  });
+
+  t('a user\'s signed upload URL is minted and refused on the same rule', async () => {
+    // The presigned path read the same table and had the same bug.
+    const token = await userToken(ALICE);
+    const own = await call('POST',
+      `/storage/v1/object/upload/sign/user-uploads/${ALICE}/big.png`,
+      { key: anonKey, bearer: token, body: { size: 1024, content_type: 'image/png' } });
+    expect(own.statusCode).toBe(200);
+    expect(own.json().upload_id).toBeTruthy();
+
+    const theirs = await call('POST',
+      `/storage/v1/object/upload/sign/user-uploads/${BOB}/big.png`,
+      { key: anonKey, bearer: token, body: { size: 1024, content_type: 'image/png' } });
+    expect(theirs.statusCode).toBe(403);
+  });
 });
