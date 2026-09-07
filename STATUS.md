@@ -3642,6 +3642,57 @@ a new column on each attempt and then tripped two *partial* unique indexes that
 do not appear in `pg_constraint`. It copies the whole row through a temp table now
 and repoints only the ports — shorter, and immune to the next column.
 
+### P6g — the storage isolation rows · done · 13 tests · gate now 52/52
+
+ST-1 through ST-4 of the matrix, which P5e recorded as a named gap because there
+was no storage service to attack. There is now, so the gap closes and the release
+gate covers all four boundaries rather than three.
+
+**ST-1's premise in the doc does not survive contact with the API, and the tests
+say so rather than working around it.** The doc frames it as "A's token against
+B's bucket, expect 401" — which assumes the project is named in the request, true
+for `/rest/v1` where the Host says which project and the key must match it.
+`/storage/v1` identifies the project from the **apikey itself**, so there is no
+such thing as pointing A's key at B: the request simply operates on A. The
+isolation is therefore *stronger* than a 401 and shows up differently — the same
+URL with two different keys returns two different projects' bytes, and neither
+ever sees the other's.
+
+The first version of the file asserted 401 and failed. That was the test being
+wrong about the mechanism, not the platform being wrong — and the 401 the doc was
+reaching for does exist: a **forged key naming the other project**, which is now
+its own test.
+
+**The fixture had to be redesigned mid-step for a reason worth keeping.** Both
+projects seed their vault under the *same* owner uid — deliberately, since
+`auth.uid()` matching is not isolation and two projects can mint the same
+subject. But that means "A's path" and "B's path" were the identical string, so a
+path-swap test swapped nothing and five assertions passed or failed for reasons
+unrelated to what they claimed. Each project now also seeds an object named after
+its own ref, existing in exactly one of them, which is what makes a substitution a
+substitution.
+
+Every assertion checks the response *body* for the neighbour's seeded content, not
+just the status: storage returns bytes, and a status code cannot distinguish
+"refused" from "refused after leaking". Every secret embeds its own project's ref
+so that check needs no knowledge of which project answered.
+
+The write direction gets its own test because it is the more dangerous one — a
+leak reads, a misrouted write *modifies* a neighbour. ST-2 swaps to a path that
+exists only in B and fails for two independent reasons (the signature covers the
+path; the token names A), and checking both is the point. ST-3 asserts a replayed
+URL is refused with the *same message* as a forged one. ST-4 is tested in the
+shape that matters — B's own public anon key gets past resolution while A's user
+token supplies the identity, and it fails on the signature — then mirrored, so a
+token B minted for the same uid legitimately reads B's file, which is what proves
+the separation is the project binding rather than the uid.
+
+The suite refuses to run without an object store rather than skipping these rows.
+An isolation suite covering three boundaries out of four is a release gate
+reporting green over an untested one.
+
+**Verification:** 13/13, and the whole gate at 52/52 across five files.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -4184,14 +4235,14 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   second page of results is not linkable — acceptable while an org has tens of
   projects, and a real gap against gate question 3 at hundreds.
 
-**The isolation matrix is not complete, and the missing rows are named.** ST-1
-through ST-4 (storage-path isolation) need Phase 6: there is no storage service
-to attack. D-084 also asks for a **cross-node** variant alongside the same-node
-one — staging has a single data node, so adjacency is automatic and the cross-node
-path is untested. And the **persistent prod canaries** (daily, non-destructive,
-against the live fleet) need a prod fleet to live on; today only the ephemeral
-staging half of D-084 exists, which proves the build is isolation-safe but not
-that a running system has stayed that way.
+**The isolation matrix is nearly complete, and what remains is named.**
+~~ST-1 through ST-4 (storage-path isolation)~~ — **closed by P6g**, 13 tests in
+the release gate. D-084 still asks for a **cross-node** variant alongside the
+same-node one — staging has a single data node, so adjacency is automatic and the
+cross-node path is untested. And the **persistent prod canaries** (daily,
+non-destructive, against the live fleet) need a prod fleet to live on; today only
+the ephemeral staging half of D-084 exists, which proves the build is
+isolation-safe but not that a running system has stayed that way.
 
 **The egress policy is applied by `staging.sh`, not by a node agent.** D-081 makes
 it part of the node baseline, so in production it belongs to the agent at join
