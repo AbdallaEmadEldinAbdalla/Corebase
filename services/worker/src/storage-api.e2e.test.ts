@@ -175,6 +175,19 @@ const call = (
   ...(opts.body !== undefined ? { payload: JSON.stringify(opts.body) } : {}),
 });
 
+/** One scalar, read as the owner. For assertions about platform bookkeeping. */
+async function asOwnerQuery(sql: string): Promise<unknown> {
+  const { rows } = await pool.query<{ port: number }>(
+    `select port from project_databases where project_id = $1`, [projectId]);
+  const pw = (await secrets.get(projectId, SECRET_NAMES.postgres))!;
+  const { Client } = await import('pg');
+  const client = new Client({
+    host: '127.0.0.1', port: rows[0]!.port, database: 'postgres',
+    user: 'postgres', password: pw, connectionTimeoutMillis: 8000 });
+  await client.connect();
+  try { return (await client.query(sql)).rows[0]; } finally { await client.end(); }
+}
+
 /** SQL as the project's owner — the customer's voice, for writing policies. */
 async function asOwner(sql: string): Promise<void> {
   const { rows } = await pool.query<{ port: number }>(
@@ -739,5 +752,156 @@ describe('P6d — public buckets', () => {
       headers: { host: `${ref}.${DOMAIN}` },
     });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+describe('P6e — presigned direct upload', () => {
+  /** PUT straight at the object store, exactly as a client would. */
+  async function directPut(
+    url: string, body: Buffer, headers: Record<string, string>,
+  ): Promise<number> {
+    const { request } = await import('node:https');
+    const u = new URL(url);
+    return new Promise((resolve, reject) => {
+      const r = request({
+        host: u.hostname, port: Number(u.port || 443),
+        path: u.pathname + u.search, method: 'PUT',
+        headers: { ...headers, 'content-length': String(body.length) },
+        // The staging store's certificate is self-signed, as everywhere else
+        // this repo talks to it.
+        rejectUnauthorized: false,
+      }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode ?? 0)); });
+      r.on('error', reject);
+      r.write(body);
+      r.end();
+    });
+  }
+
+  const BIG = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(4096, 3)]);
+
+  t('EXIT-ADJACENT: sign, upload straight to the store, then complete', async () => {
+    const signed = await call('POST', '/storage/v1/object/upload/sign/files/big/photo.png',
+      { key: serviceKey, body: { size: BIG.length, content_type: 'image/png' } });
+    expect(signed.statusCode).toBe(200);
+    const { upload_url: url, upload_id: id, required_headers: required } = signed.json();
+    expect(id).toMatch(/^[0-9a-f-]{36}$/i);
+
+    // The intent exists and no object row does yet — the gap the intent covers.
+    const before = await call('GET', '/storage/v1/object/info/files/big/photo.png',
+      { key: serviceKey });
+    expect(before.statusCode).toBe(404);
+
+    // The bytes never touch the API. This is the whole point of the path.
+    expect(await directPut(url, BIG, required)).toBe(200);
+
+    const done = await call('POST', `/storage/v1/object/upload/complete/${id}`,
+      { key: serviceKey, body: {} });
+    expect(done.statusCode).toBe(201);
+    expect(done.json().object).toMatchObject({ name: 'big/photo.png', size: BIG.length });
+
+    // And the row now describes what the store actually holds — size and etag
+    // read back from it rather than believed from the client.
+    const head = await s3.headObject(`projects/${ref}/files/big/photo.png`);
+    expect(done.json().object.etag).toBe(head.etag);
+    expect(head.size).toBe(BIG.length);
+    // Downloadable through the ordinary path, which is the proof the two halves
+    // produced one coherent object.
+    const got = await app.inject({
+      method: 'GET', url: '/storage/v1/object/files/big/photo.png',
+      headers: { apikey: serviceKey } });
+    expect(Buffer.compare(got.rawPayload, BIG)).toBe(0);
+  });
+
+  t('the URL is good for exactly the length and type it was signed for', async () => {
+    const signed = await call('POST', '/storage/v1/object/upload/sign/files/big/exact.png',
+      { key: serviceKey, body: { size: BIG.length, content_type: 'image/png' } });
+    const { upload_url: url, required_headers: required } = signed.json();
+
+    // A different length fails the *signature*, not a size check — which is a
+    // stronger guarantee than a range would be: the store refuses it before a
+    // byte of ours is involved.
+    expect(await directPut(url, Buffer.alloc(10), required)).toBeGreaterThanOrEqual(400);
+    // And a different content type likewise, so a leaked upload URL cannot be
+    // repurposed for another file shape.
+    expect(await directPut(url, BIG, { ...required, 'content-type': 'text/html' }))
+      .toBeGreaterThanOrEqual(400);
+  });
+
+  t('completing before uploading anything is a 409, not a phantom row', async () => {
+    const signed = await call('POST', '/storage/v1/object/upload/sign/files/big/never.png',
+      { key: serviceKey, body: { size: 64, content_type: 'image/png' } });
+    const res = await call('POST',
+      `/storage/v1/object/upload/complete/${signed.json().upload_id}`,
+      { key: serviceKey, body: {} });
+    expect(res.statusCode).toBe(409);
+    // No row, because a row referencing bytes that do not exist is exactly what
+    // D-124's invariant forbids.
+    expect((await call('GET', '/storage/v1/object/info/files/big/never.png',
+      { key: serviceKey })).statusCode).toBe(404);
+  });
+
+  t('content is sniffed at completion, and a refusal deletes the bytes', async () => {
+    // The check the proxied path does inline, deferred here because there was no
+    // earlier moment at which the bytes existed. A client can declare `image/png`
+    // at signing time and upload a Windows binary — this is where that is caught.
+    const mz = Buffer.concat([Buffer.from([0x4d, 0x5a]), Buffer.alloc(512, 1)]);
+    const signed = await call('POST', '/storage/v1/object/upload/sign/files/big/evil.png',
+      { key: serviceKey, body: { size: mz.length, content_type: 'image/png' } });
+    const { upload_url: url, upload_id: id, required_headers: required } = signed.json();
+    expect(await directPut(url, mz, required)).toBe(200);
+
+    const res = await call('POST', `/storage/v1/object/upload/complete/${id}`,
+      { key: serviceKey, body: {} });
+    expect(res.statusCode).toBe(415);
+    expect(res.json().error.message).toMatch(/Windows executable/);
+    // Deleted, not left as an orphan for the sweep to find later: the service
+    // knows right now that these bytes are unwanted.
+    expect((await s3.headObject(`projects/${ref}/files/big/evil.png`)).exists).toBe(false);
+    expect((await call('GET', '/storage/v1/object/info/files/big/evil.png',
+      { key: serviceKey })).statusCode).toBe(404);
+  });
+
+  t('signing is refused when the caller\'s policy would refuse the row', async () => {
+    // The trial insert doing its job. `anon` has no INSERT policy on
+    // `storage.objects`, so there is nothing to sign — and the refusal happens
+    // *before* a URL exists rather than after gigabytes have moved.
+    const res = await call('POST', '/storage/v1/object/upload/sign/files/big/nope.png',
+      { key: anonKey, body: { size: 64, content_type: 'image/png' } });
+    expect(res.statusCode).toBe(403);
+  });
+
+  t('the trial insert leaves nothing behind', async () => {
+    // The probe is rolled back, so a signed-but-never-uploaded object must not
+    // appear anywhere — not as a row, and not in the project's usage.
+    const usageBefore = await asOwnerQuery('select total_bytes::text as b from storage.usage');
+    await call('POST', '/storage/v1/object/upload/sign/files/big/probe.png',
+      { key: serviceKey, body: { size: 999_999, content_type: 'image/png' } });
+    expect((await call('GET', '/storage/v1/object/info/files/big/probe.png',
+      { key: serviceKey })).statusCode).toBe(404);
+    const usageAfter = await asOwnerQuery('select total_bytes::text as b from storage.usage');
+    expect(usageAfter).toEqual(usageBefore);
+  });
+
+  t('honours the bucket limit and the project quota before signing anything', async () => {
+    const tooBig = await call('POST', '/storage/v1/object/upload/sign/tight/big.png',
+      { key: serviceKey, body: { size: 10_000, content_type: 'image/png' } });
+    expect(tooBig.statusCode).toBe(413);
+    expect(tooBig.json().error.code).toBe('file_size_limit_exceeded');
+
+    // A size beyond the whole plan's ceiling is refused as a quota problem, which
+    // is a different message and a different remedy from the per-file one.
+    const beyondPlan = await call('POST', '/storage/v1/object/upload/sign/files/huge.bin',
+      { key: serviceKey, body: { size: 2 * 1024 ** 3, content_type: 'application/octet-stream' } });
+    expect(beyondPlan.statusCode).toBe(413);
+    expect(beyondPlan.json().error.code).toBe('storage_quota_exceeded');
+  });
+
+  t('an unknown or malformed upload id is refused cleanly', async () => {
+    expect((await call('POST', '/storage/v1/object/upload/complete/not-a-uuid',
+      { key: serviceKey, body: {} })).statusCode).toBe(400);
+    expect((await call('POST',
+      '/storage/v1/object/upload/complete/11111111-1111-4111-8111-111111111111',
+      { key: serviceKey, body: {} })).statusCode).toBe(404);
   });
 });
