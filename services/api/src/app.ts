@@ -8,6 +8,7 @@ import { registerAuth, type AuthDeps } from './modules/auth/routes.ts';
 import { registerOrgs, type OrgDeps } from './modules/orgs/routes.ts';
 import { registerProjectAuth, type ProjectAuthDeps } from './modules/project-auth/routes.ts';
 import { registerGateway, type GatewayDeps } from './modules/gateway/routes.ts';
+import { registerStorage, type StorageDeps } from './modules/storage/routes.ts';
 import type { PrincipalDeps } from './kernel/principal.ts';
 
 export interface BuildOptions {
@@ -69,6 +70,12 @@ export interface BuildOptions {
    * a route that 503s every request.
    */
   gateway?: GatewayDeps;
+  /**
+   * The storage module at `/storage/v1/*` (P6b). Absent means the routes do not
+   * exist, for the same reason the others do: a route that exists and cannot
+   * work is worse than a 404, because a client codes against it.
+   */
+  storage?: StorageDeps;
 }
 
 /** Composition root: the only place that wires modules together. */
@@ -101,6 +108,7 @@ export function buildApp(opts: BuildOptions = {}): FastifyInstance {
   // overlap — but registering it first would invite a future wildcard to swallow
   // routes the monolith serves itself.
   if (opts.gateway) registerGateway(app, opts.gateway);
+  if (opts.storage) registerStorage(app, opts.storage);
 
   registerControlPlane(app, {
     store: opts.store ?? createMemoryStore(),

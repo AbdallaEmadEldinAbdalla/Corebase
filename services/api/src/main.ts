@@ -346,6 +346,32 @@ if (gateway && !gateway.projectDomain) {
        + 'Host can resolve to a ref. Set it to the domain projects are served under.' }));
 }
 
+/**
+ * The storage module (P6b). Registered under the same condition as the rest of
+ * the data plane: a control-plane database and a secret store, because without
+ * both there is no project to resolve and no credential to reach one with.
+ *
+ * It reuses `projectAuth`'s pool and secret store deliberately — the two modules
+ * resolve the *same* project from the *same* apikey, and two resolvers would be
+ * two chances to disagree about who a caller is.
+ */
+const storage = projectAuth && secretsForApi
+  ? {
+      pool: projectAuth.pool,
+      secrets: secretsForApi,
+      // Storage's own bucket, separate from the gateway's: an upload is a
+      // heavier and rarer request than a row read, so sharing one ceiling would
+      // either throttle reads to protect uploads or the reverse.
+      limiter: redisUrl
+        ? createRateLimiter(createRedis(redisUrl),
+            { limit: Number(process.env['CB_STORAGE_RPS'] ?? 200), windowSeconds: 10 })
+        : createMemoryRateLimiter(
+            { limit: Number(process.env['CB_STORAGE_RPS'] ?? 200), windowSeconds: 10 }),
+      ...(process.env.CB_PROJECT_DOMAIN ? { projectDomain: process.env.CB_PROJECT_DOMAIN } : {}),
+      ...(process.env.CB_JWT_ISSUER ? { keyIssuer: process.env.CB_JWT_ISSUER } : {}),
+    }
+  : undefined;
+
 // Unset means no browser may call this API. See kernel/cors.ts: a localhost
 // default would be a production hole the first time someone forgot the variable.
 const corsOrigins = parseOrigins(process.env.CB_DASHBOARD_ORIGINS);
@@ -394,6 +420,7 @@ const app = buildApp({
   ...(actorUserId ? { actorUserId } : {}),
   ...(enqueue ? { enqueue } : {}),
   ...(gateway ? { gateway } : {}),
+  ...(storage ? { storage } : {}),
 });
 // Said out loud at boot, because "the dashboard cannot log in" and "CORS is off"
 // look nothing alike from the browser's console.
