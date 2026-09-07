@@ -174,6 +174,81 @@ export function createS3(cfg: S3Config) {
 
   return {
     /**
+     * A presigned PUT the client uses to upload **directly to the store**.
+     *
+     * The one place raw store presigning appears (D-122). Every other capability
+     * we hand out is a Corebase-signed token this service verifies; here the
+     * client genuinely must talk to the store, so the credential has to be one
+     * the store recognises.
+     *
+     * ## The cap, and what it actually is
+     *
+     * `content-length` is a **signed header**, not a range. The doc calls for a
+     * `content-length-range`, which is a POST-policy construct and belongs to a
+     * different upload shape (browser form POST); for a presigned PUT the
+     * equivalent guarantee is stronger: the client must send exactly the length
+     * that was signed, or the signature does not match. So a URL issued for a
+     * 200 MB upload cannot be reused to push 2 GB.
+     *
+     * `content-type` is signed for the same reason — a leaked upload URL cannot
+     * be repurposed for a different file shape.
+     *
+     * ## `UNSIGNED-PAYLOAD`
+     *
+     * Unavoidable and correct here: the bytes do not exist yet when the URL is
+     * signed, so their hash cannot be. That is precisely why the completion
+     * callback re-reads the object's true size and etag from the store rather
+     * than believing the client — see the storage module.
+     */
+    presignPut(
+      key: string,
+      opts: { expiresInSeconds: number; contentType: string; contentLength: number },
+    ): string {
+      const now = new Date();
+      const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
+      const dateStamp = amzDate.slice(0, 8);
+      const scope = `${dateStamp}/${cfg.region}/${service}/aws4_request`;
+
+      const path = cfg.uriStyle === 'path'
+        ? `/${cfg.bucket}/${encodeKeyPath(key)}`
+        : `/${encodeKeyPath(key)}`;
+      const host = cfg.uriStyle === 'path'
+        ? `${cfg.endpoint}:${cfg.port}`
+        : `${cfg.bucket}.${cfg.endpoint}:${cfg.port}`;
+
+      // Both headers are signed, so both are in `SignedHeaders` and both must be
+      // sent by the client exactly as signed.
+      const signedHeaders = 'content-length;content-type;host';
+      const canonicalHeaders =
+        `content-length:${opts.contentLength}\n`
+        + `content-type:${opts.contentType}\n`
+        + `host:${host}\n`;
+
+      const query: Record<string, string> = {
+        'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
+        'X-Amz-Credential': `${cfg.key}/${scope}`,
+        'X-Amz-Date': amzDate,
+        'X-Amz-Expires': String(opts.expiresInSeconds),
+        'X-Amz-SignedHeaders': signedHeaders,
+      };
+      const canonicalQuery = Object.keys(query).sort()
+        .map((k) => `${uriEncode(k)}=${uriEncode(query[k]!)}`).join('&');
+
+      const canonicalRequest = [
+        'PUT', path, canonicalQuery, canonicalHeaders, signedHeaders, 'UNSIGNED-PAYLOAD',
+      ].join('\n');
+      const stringToSign = [
+        'AWS4-HMAC-SHA256', amzDate, scope, sha256Hex(canonicalRequest),
+      ].join('\n');
+      const signingKey = hmac(
+        hmac(hmac(hmac(`AWS4${cfg.secret}`, dateStamp), cfg.region), service), 'aws4_request');
+      const signature = createHmac('sha256', signingKey).update(stringToSign).digest('hex');
+
+      return `https://${host}${path}?${canonicalQuery}`
+        + `&X-Amz-Signature=${signature}`;
+    },
+
+    /**
      * Store bytes at a key, and hand back the store's own etag.
      *
      * The etag is the reason this returns anything: it is what the metadata row

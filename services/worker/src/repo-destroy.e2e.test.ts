@@ -269,6 +269,7 @@ describe('P3g — what must never be destroyed', () => {
       putObject: unreachable('putObject') as S3['putObject'],
       getObject: unreachable('getObject') as S3['getObject'],
       headObject: unreachable('headObject') as S3['headObject'],
+      presignPut: unreachable('presignPut') as S3['presignPut'],
     };
     const r = await createRepoDestroy({ pool, s3: lying }).scanOnce();
     expect(r.destroyed).toBe(0);
