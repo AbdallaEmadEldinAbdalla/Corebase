@@ -3381,6 +3381,73 @@ same key alone is refused (the difference is the token and nothing else), a
 broken token is refused rather than downgraded to anonymous, PATCH moves only
 what was sent, and a non-empty bucket is a 409.
 
+### P6c — the proxied object path · done · 17 unit + 15 integration
+
+D-122's ≤ 50 MB half: upload, download, info, list, delete and batch delete,
+with the bytes going through the service so size and content can be enforced
+inline.
+
+**The two orderings are the entire consistency model** (D-124). Upload writes the
+object first and then the row; delete removes the row first and then the object.
+Postgres and the object store share no transaction, so the orderings *are* the
+guarantee, and the invariant they buy is that a metadata row never references
+bytes that do not exist. A row without bytes is a visible 500 and a false quota
+charge; bytes without a row are invisible garbage. Both failure directions cost
+money, never correctness — which is why the sweep (P6f) is a requirement rather
+than a nicety. The RLS check always precedes the bytes, and when a row is
+refused *after* an object is written the object is deleted immediately, which the
+suite asserts against the store — otherwise "best effort" quietly means "never".
+
+**Key construction is where project isolation in object storage lives, and
+nowhere else.** One bucket per region with projects as key prefixes (D-120) means
+the store draws no boundary between customers; the only thing that does is
+deriving `projects/<ref>/` from the authenticated context. Percent-encoded
+separators are refused *unparsed*, because a client sending `a%2f..%2fb` is
+betting on something downstream decoding after the check — refusing the encoded
+form is the only version that does not depend on guessing how many decode passes
+the path will see. Half the tests assert the opposite direction: `v1.2/photo..png`,
+spaces and Unicode must be **accepted**, or the check is a bug wearing security's
+clothes.
+
+**Two Fastify scopes, split by body type** (**D-395**), and that split cost two
+rounds of debugging. Uploads take bytes of any content type — including the two
+Fastify parses by default, so a `.json` or `.txt` upload arrived parsed and the
+handler answered "send the object bytes as the request body", which is a baffling
+thing to be told when you did. The first correction grouped by *subject* and was
+still wrong: `POST /object/list` has a JSON body, so in the bytes scope its
+`prefix` read as `undefined` and the endpoint **silently listed the whole
+bucket**. Nothing errored. Grouping by body type is the distinction that actually
+exists.
+
+**The S3 client became shared and learned to carry bytes.** A hand-written SigV4
+client already existed for repo destruction; writing a second would have put two
+implementations of one specified algorithm in the repo, whose drift shows up as a
+signature that works for one caller and not the other. It moved to
+`packages/s3` and gained `putObject`/`getObject`/`headObject`. The substantive
+change is that bodies are Buffers: the old `string` signature is right for a
+delete's XML and silently wrong for an object, since decoding a PNG to UTF-8
+corrupts both the payload hash and the bytes.
+
+Smaller calls, each with its reason in the code: measured size rather than
+`Content-Length`, because the header is a claim and the body is the fact; the
+*store's* etag in the row, because that is what lets a sweep tell "the bytes this
+row describes" from "something overwrote them"; keyset paging rather than OFFSET,
+since offset pagination over a bucket being written to means a client missing
+files without knowing; a conditional GET answered from the row; 404 rather than
+403 for an object a policy hides; and **502 rather than 404** for a row whose
+bytes are gone, because reporting a platform fault as "never existed" hides it.
+
+Bucket enforcement config is read through a SECURITY DEFINER function
+(**D-394**) — the service needs it for an unauthenticated public-bucket GET,
+which has no caller identity at all.
+
+**Verification:** 17 unit tests over the two pure modules (the refused path set,
+the accepted path set, the dangerous-signature sniff, the allowlist, the serving
+headers) and 15 integration tests against a real object store — bytes verified at
+the derived key, the row's etag matching the store's, a refused upload leaving
+nothing behind, Range answering 206, and each refusal paired with a control that
+succeeds. 24/24 in the storage suite, 202/202 in the api package.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
