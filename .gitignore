@@ -34,3 +34,9 @@ demo/data/config.js
 # p5f-latency.json, which the harness writes and which is worth a diff;
 # these two are intermediate output and would churn on every run.
 docs/14-roadmap/measurements/*.summary.json
+
+demo/storage/config.js
+demo/storage/poster.png
+
+# Python bytecode from the demos' shared proxy module.
+demo/__pycache__/
