@@ -3327,6 +3327,60 @@ edit their own quota row, and path traversal refused by the constraint while
 `v1.2/photo..png` is accepted. Plus auth-schema, credentials and the RLS cookbook
 (49) unchanged.
 
+### P6b — the storage module, and bucket CRUD · done · 9 tests
+
+`/storage/v1/*` as a module of the data-plane monolith (D-121), structured like
+auth: its own routes, its own boundary, splittable later if bandwidth profiles
+demand it.
+
+**There is no object-store call anywhere in this step, and that is the
+demonstration.** Every route is a metadata operation, so every one is a single
+statement run *as the caller* inside a transaction with `SET LOCAL ROLE` and
+their claims in place. The customer's policies decide; the storage service holds
+no ACL engine at all, and there is no second place where permissions could
+disagree with them.
+
+**Storage connects as `authenticator`, not as a role of its own** — the switching
+role, NOINHERIT, able to do nothing as itself. That is not a detail: storage
+authorization *is* RLS on the metadata tables, and RLS can only decide for a role
+it can see. A module with its own role would have to reimplement the customer's
+policies to decide anything, which is the design being avoided. The credential
+joins `ProjectContext` in the same parallel fetch as the signing keys, and is
+optional there — a project predating the role model gets a 503 naming the reason
+rather than silently running as something else.
+
+`SET LOCAL` and `set_config(..., true)` rather than their session-wide forms,
+because a `SET ROLE` outliving its transaction would leak one caller's identity
+into whoever got the connection next. On a pooled port that is a cross-user
+authorization bug, not an untidiness. The role name is matched against a closed
+set before it reaches SQL, since `SET ROLE` cannot be parameterised — a literal
+match rather than escaping is the difference between "cannot be injected" and "is
+escaped correctly", and only the first survives someone later taking a role name
+from a claim.
+
+Three smaller calls, each in the code with its reason. A refusal gets one meaning
+in one place, because Postgres reports a blocked *write* as an error and a
+blocked *read* as an empty result. `GET /bucket/:name` answers **404 rather than
+403** for a bucket the caller cannot see — "not yours" and "not there" are the
+same answer, or the endpoint is a probe for which buckets exist. And bucket
+deletion checks emptiness inside the deleting transaction *as the caller*, so an
+object they cannot see still blocks them: refusing over a row you may not know
+about is an inconvenience, while succeeding would strand somebody else's bytes
+with no row left to sweep them by.
+
+Storage error codes are lowercase like auth's, for the same reason (D-317): a
+client branches on them. `file_size_limit_exceeded` and `storage_quota_exceeded`
+stay separate because one means *this file* is too big and a smaller one would
+work, while the other means the project is full and none will.
+
+**Verification:** 9/9 against a saga-provisioned project. The sequence is the
+argument — `service_role` creates a bucket and sees it, `anon` gets `200 []`
+because it holds the grant and no policy, then the customer writes one policy and
+the same request returns it. Plus: an anon key with a user token creates where the
+same key alone is refused (the difference is the token and nothing else), a
+broken token is refused rather than downgraded to anonymous, PATCH moves only
+what was sent, and a non-empty bucket is a 409.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
