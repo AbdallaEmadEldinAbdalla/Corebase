@@ -64,6 +64,18 @@ Path-prefix helper, shipped in every project's base migration (plain SQL, export
 -- First path segment of an object name: storage.prefix_owner('42/photo.png') = '42'
 CREATE FUNCTION storage.prefix_owner(name text) RETURNS text
 LANGUAGE sql IMMUTABLE AS $$ SELECT split_part(name, '/', 1) $$;
+
+-- Resolve a bucket name to its id **from inside a policy**. SECURITY DEFINER, and
+-- that is not an optimisation (D-392): a policy's subselect runs as the caller,
+-- `storage.buckets` is RLS-enabled with no policies, so
+-- `(SELECT id FROM storage.buckets WHERE name = 'avatars')` returns NULL for
+-- `anon` and `authenticated` and every policy built on it is false for every row.
+-- The failure is silent — reads come back empty and writes affect zero rows
+-- without error — so a customer following this page would install a policy that
+-- appears correct and governs nothing.
+CREATE FUNCTION storage.bucket_id(bucket_name text) RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''
+AS $$ SELECT id FROM storage.buckets WHERE name = bucket_name $$;
 ```
 
 Policy examples (documented patterns, mirrored in the dashboard policy editor):
@@ -73,29 +85,43 @@ Policy examples (documented patterns, mirrored in the dashboard policy editor):
 CREATE POLICY "assets are readable by all"
   ON storage.objects FOR SELECT
   TO anon, authenticated
-  USING (bucket_id = (SELECT id FROM storage.buckets WHERE name = 'assets'));
+  USING (bucket_id = storage.bucket_id('assets'));
 -- (no INSERT/UPDATE/DELETE policy ⇒ only service_role can write)
 
 -- 2. Avatars: any signed-in user reads; each user writes only under avatars/{auth.uid()}/*
 CREATE POLICY "avatars are readable by signed-in users"
   ON storage.objects FOR SELECT TO authenticated
-  USING (bucket_id = (SELECT id FROM storage.buckets WHERE name = 'avatars'));
+  USING (bucket_id = storage.bucket_id('avatars'));
 
 CREATE POLICY "users manage their own avatar folder"
   ON storage.objects FOR ALL TO authenticated
-  USING (bucket_id = (SELECT id FROM storage.buckets WHERE name = 'avatars')
+  USING (bucket_id = storage.bucket_id('avatars')
          AND storage.prefix_owner(name) = auth.uid()::text)
-  WITH CHECK (bucket_id = (SELECT id FROM storage.buckets WHERE name = 'avatars')
+  WITH CHECK (bucket_id = storage.bucket_id('avatars')
               AND storage.prefix_owner(name) = auth.uid()::text);
 
 -- 3. Org-shared files: membership table in the customer's schema gates a shared bucket,
 --    with paths namespaced org-first: '<org_id>/<file>'.
+--
+--    The membership table needs a policy of its own, and forgetting it is the
+--    same silent failure as the bucket lookup above (D-392): the subselect below
+--    runs as the caller, `public.org_members` gets RLS at creation, and with no
+--    policy the caller sees no memberships — so the predicate is false and the
+--    bucket is closed to everyone with no error anywhere.
+CREATE POLICY "members read their own memberships"
+  ON public.org_members FOR SELECT TO authenticated
+  USING (user_id = (SELECT auth.uid()));
+
+--    For a large or volatile membership this per-row subselect is the wrong
+--    shape; use the `SECURITY DEFINER` helper from the RLS cookbook
+--    (../06-security/02-rls-design.md, performance section) instead, which does
+--    the lookup once per statement and needs no policy on the membership table.
 CREATE POLICY "org members access org files"
   ON storage.objects FOR ALL TO authenticated
-  USING (bucket_id = (SELECT id FROM storage.buckets WHERE name = 'org-files')
+  USING (bucket_id = storage.bucket_id('org-files')
          AND storage.prefix_owner(name) IN
              (SELECT org_id::text FROM public.org_members WHERE user_id = auth.uid()))
-  WITH CHECK (bucket_id = (SELECT id FROM storage.buckets WHERE name = 'org-files')
+  WITH CHECK (bucket_id = storage.bucket_id('org-files')
               AND storage.prefix_owner(name) IN
                   (SELECT org_id::text FROM public.org_members WHERE user_id = auth.uid()));
 ```
