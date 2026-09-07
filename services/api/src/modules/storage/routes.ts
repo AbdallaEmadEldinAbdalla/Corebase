@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
 import { STORAGE_ERROR_CODES as E } from '@corebase/types';
-import type { SecretStore } from '@corebase/secrets';
+import { SECRET_NAMES, type SecretStore } from '@corebase/secrets';
 import { ApiError } from '../../kernel/errors.ts';
 import type { RateLimiter } from '../../kernel/rate-limit.ts';
 import { rateLimitKey } from '../../kernel/rate-limit.ts';
@@ -9,6 +9,8 @@ import {
   resolveProject, AuthContextError, type ProjectContext,
 } from '../project-auth/context.ts';
 import { callerFrom, withCaller, policyError, type Caller } from './context.ts';
+import { refFromHost } from '../gateway/routing.ts';
+import { masterSecret } from './signing.ts';
 import {
   registerObjectReads, registerObjectWrites, PROXY_MAX_BYTES, type ObjectDeps,
 } from './objects.ts';
@@ -42,7 +44,12 @@ export interface StorageDeps {
    * usual reason: a route that exists and cannot reach the bytes is worse than a
    * 404, because a client codes against it.
    */
-  objects?: Omit<ObjectDeps, 'planOf'> | undefined;
+  //
+  // `secrets` and `planOf` are supplied here rather than by the caller: the
+  // module already holds a secret store and knows how to read a project's plan,
+  // and asking a caller to pass either would be asking them to reconstruct
+  // something this file has.
+  objects?: Omit<ObjectDeps, 'planOf' | 'secrets'> | undefined;
 }
 
 interface BucketRow {
@@ -94,8 +101,12 @@ export function registerStorage(app: FastifyInstance, deps: StorageDeps): void {
   const objectDeps = deps.objects
     ? {
         ...deps.objects,
+        secrets: deps.secrets,
         admit: shared.admit,
         asCaller: shared.asCaller,
+        asServiceRole: shared.asServiceRole,
+        projectFromToken: shared.projectFromToken,
+        projectFromHost: shared.projectFromHost,
         /**
          * The plan, for the quota ceiling. One indexed read against the control
          * plane per upload — the only control-plane query on this path, and it
@@ -146,6 +157,14 @@ interface Shared {
     ctx: ProjectContext, caller: Caller,
     fn: (q: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }>) => Promise<T>,
   ) => Promise<T>;
+  asServiceRole: <T>(
+    ctx: ProjectContext,
+    fn: (q: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }>) => Promise<T>,
+  ) => Promise<T>;
+  projectFromToken: (
+    token: string,
+  ) => Promise<{ ctx: ProjectContext; master: Buffer } | undefined>;
+  projectFromHost: (req: FastifyRequest) => Promise<ProjectContext | undefined>;
 }
 
 /**
@@ -221,7 +240,102 @@ function buildShared(deps: StorageDeps): Shared {
     }
   }
 
-  return { admit, asCaller };
+  /**
+   * The same transaction, as `service_role`.
+   *
+   * For the two routes with nobody to be: a redeemed signed URL and a public
+   * bucket. Their permission decisions were made earlier — when the URL was
+   * minted, and when the bucket was marked public — so there is no identity here
+   * to evaluate policies against, and running RLS as nobody would refuse every
+   * one of them.
+   */
+  const asServiceRole = <T>(
+    ctx: ProjectContext,
+    fn: (q: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }>) => Promise<T>,
+  ): Promise<T> => asCaller(
+    ctx, { role: 'service_role', userId: null, claims: { role: 'service_role' } }, fn);
+
+  /**
+   * Resolve a project from a project ref, with a short in-process cache.
+   *
+   * Cached because the public-object path has no apikey and therefore no other
+   * way to identify a project, and resolving it means a control-plane query — on
+   * a path D-051 wants free of them. Thirty seconds is the doc's own figure for
+   * the bucket-config cache, and the same reasoning applies: a `public` flag or a
+   * key that changed moments ago being honoured a little late is a smaller
+   * problem than putting the control plane in front of every cached-object miss.
+   */
+  const cache = new Map<string, { ctx: ProjectContext; at: number }>();
+  const CACHE_MS = 30_000;
+  async function contextForRef(ref: string): Promise<ProjectContext | undefined> {
+    const hit = cache.get(ref);
+    if (hit && Date.now() - hit.at < CACHE_MS) return hit.ctx;
+    // Resolve through the *project's own anon key*, which is how the resolver is
+    // built: it takes a key and returns everything about the project. Reading the
+    // key from the secret store here rather than trusting anything in the
+    // request is the point — nothing the caller sent selects the project.
+    const { rows } = await deps.pool.query<{ id: string }>(
+      `SELECT id FROM projects WHERE ref = $1 AND status <> 'deleted'`, [ref]);
+    if (!rows[0]) return undefined;
+    const anon = await deps.secrets.get(rows[0].id, SECRET_NAMES.anonKey);
+    if (!anon) return undefined;
+    try {
+      const ctx = await resolveProject(
+        {
+          pool: deps.pool, secrets: deps.secrets,
+          ...(deps.projectDomain ? { projectDomain: deps.projectDomain } : {}),
+          ...(deps.keyIssuer ? { keyIssuer: deps.keyIssuer } : {}),
+        },
+        anon);
+      cache.set(ref, { ctx, at: Date.now() });
+      return ctx;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * The project a signed token names, plus the secret to check the token with.
+   *
+   * The ref is read from the token **unverified**, and that is safe for exactly
+   * one purpose: choosing which key to verify against. It is the same discipline
+   * the gateway applies to a `kid` — an unverified field may select a key and may
+   * decide nothing else. `verifyToken` re-checks the ref against the request's
+   * own target afterwards, so a token claiming a ref it was not signed for fails
+   * there.
+   */
+  const projectFromToken = async (
+    token: string,
+  ): Promise<{ ctx: ProjectContext; master: Buffer } | undefined> => {
+    const dot = token.indexOf('.');
+    if (dot <= 0) return undefined;
+    let ref: string;
+    try {
+      const payload = JSON.parse(
+        Buffer.from(token.slice(0, dot), 'base64url').toString('utf8')) as { ref?: unknown };
+      if (typeof payload.ref !== 'string') return undefined;
+      ref = payload.ref;
+    } catch {
+      return undefined;
+    }
+    const ctx = await contextForRef(ref);
+    if (!ctx) return undefined;
+    return { ctx, master: await masterSecret(deps.secrets, ctx.projectId) };
+  };
+
+  /**
+   * The project from the routed Host, for the public path.
+   *
+   * The same rule as the gateway's: identity comes from the route, never from a
+   * header the client chose. A `?ref=` parameter here would make this endpoint a
+   * way to read any project's public buckets from any hostname.
+   */
+  const projectFromHost = async (req: FastifyRequest): Promise<ProjectContext | undefined> => {
+    const ref = refFromHost(req.headers['host'], deps.projectDomain ?? '');
+    return ref ? contextForRef(ref) : undefined;
+  };
+
+  return { admit, asCaller, asServiceRole, projectFromToken, projectFromHost };
 }
 
 function registerBuckets(app: FastifyInstance, _deps: StorageDeps, shared: Shared): void {

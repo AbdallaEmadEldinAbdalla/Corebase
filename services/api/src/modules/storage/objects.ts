@@ -1,11 +1,15 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { STORAGE_ERROR_CODES as E } from '@corebase/types';
 import type { S3 } from '@corebase/s3';
+import type { SecretStore } from '@corebase/secrets';
 import { ApiError } from '../../kernel/errors.ts';
 import type { ProjectContext } from '../project-auth/context.ts';
 import { policyError, type Caller } from './context.ts';
 import { normalizeBucket, normalizePath, objectKey, PathError } from './keys.ts';
 import { mimeAllowed, servingHeaders, sniff, SNIFF_BYTES } from './mime.ts';
+import {
+  clampExpiry, masterSecret, signToken, verifyToken, CURRENT_KID,
+} from './signing.ts';
 
 /**
  * The proxied object path (P6c, D-122's ≤ 50 MB half).
@@ -61,6 +65,13 @@ export const PLAN_STORAGE_BYTES: Record<string, number> = {
 
 export interface ObjectDeps {
   s3: S3;
+  /**
+   * The secret store, for the per-project signing master.
+   *
+   * Storage's own, rather than reaching through the shared context: the master
+   * secret is created on first use and this is the only module that touches it.
+   */
+  secrets: SecretStore;
   /** The plan, for the quota ceiling. Resolved with the project. */
   planOf: (ctx: ProjectContext) => Promise<string>;
   onError?: ((err: Error, ctx: Record<string, unknown>) => void) | undefined;
@@ -86,6 +97,28 @@ export interface ObjectRouteDeps extends ObjectDeps {
   asCaller: <T>(
     ctx: ProjectContext, caller: Caller, fn: (q: Query) => Promise<T>,
   ) => Promise<T>;
+  /**
+   * As `service_role`, for the two routes with no caller to be.
+   *
+   * A signed URL's permission decision was made when it was minted, and a public
+   * bucket's was made when it was marked public. Both are redeemed by someone who
+   * may not be able to authenticate at all, so there is no identity to evaluate
+   * policies against — running RLS as nobody would deny every one of them.
+   */
+  asServiceRole: <T>(ctx: ProjectContext, fn: (q: Query) => Promise<T>) => Promise<T>;
+  /**
+   * Find the project a signed token names, and the secret to check it with.
+   *
+   * The ref is read from the token *unverified*, which is safe for exactly one
+   * purpose: choosing which key to verify against. Nothing else may be believed
+   * until `verifyToken` has run — the same discipline the gateway applies to a
+   * `kid`.
+   */
+  projectFromToken: (
+    token: string,
+  ) => Promise<{ ctx: ProjectContext; master: Buffer } | undefined>;
+  /** The project from the routed Host, for the unauthenticated public path. */
+  projectFromHost: (req: FastifyRequest) => Promise<ProjectContext | undefined>;
 }
 
 /**
@@ -367,6 +400,124 @@ export function registerObjectReads(app: FastifyInstance, deps: ObjectRouteDeps)
     return reply.status(204).send();
   });
 
+  // ── POST /object/sign/:bucket/* — createSignedUrl ─────────────────────────
+  //
+  // The RLS check happens *here*, when the URL is minted, and not again when it
+  // is redeemed. That is the design and it is worth being explicit about: a
+  // signed URL is a capability handed to someone who may not be able to
+  // authenticate at all, so redemption cannot consult the caller's policies —
+  // there is no caller. The permission question is therefore asked once, of the
+  // person doing the sharing.
+  app.post('/storage/v1/object/sign/:bucket/*', async (req, reply) => {
+    const { ctx, caller } = await deps.admit(req);
+    const bucket = bucketOrThrow((req.params as Record<string, string>)['bucket'] ?? '');
+    const name = pathOrThrow(wildcard(req));
+    const body = (req.body ?? {}) as Record<string, unknown>;
+
+    // Visible to *this* caller under their own policies, or there is nothing to
+    // sign. Minting a URL for an object the requester cannot read would turn
+    // this endpoint into a way to launder access.
+    const visible = await deps.asCaller(ctx, caller, async (q) => {
+      const cfg = await bucketConfig(q, bucket);
+      return (await q(
+        `SELECT 1 FROM storage.objects WHERE bucket_id = $1 AND name = $2`,
+        [cfg.id, name])).rows.length > 0;
+    });
+    if (!visible) throw new ApiError(404, E.NOT_FOUND, 'No such object.');
+
+    const seconds = clampExpiry(body['expires_in']);
+    const master = await masterSecret(deps.secrets, ctx.projectId);
+    const token = signToken(master, {
+      ref: ctx.ref, bucket, path: name,
+      exp: Math.floor(Date.now() / 1000) + seconds,
+      kid: CURRENT_KID,
+    });
+    return reply.send({
+      // A path rather than an absolute URL: the service does not reliably know
+      // its own public origin behind a proxy, and guessing it produces links
+      // that work in staging and point at the wrong host in production.
+      signed_url: `/storage/v1/object/sign/${bucket}/${name}?token=${token}`,
+      expires_in: seconds,
+      // Said out loud, because the property is surprising and the docs say to be
+      // plain about it: this cannot be revoked before it expires.
+      revocable: false,
+    });
+  });
+
+  // ── GET /object/sign/:bucket/*?token=… — redeem ───────────────────────────
+  //
+  // No `apikey`: the token *is* the credential. So this route does not call
+  // `admit` at all, and must resolve the project some other way — from the ref
+  // inside the token, checked against the token's own signature.
+  app.get('/storage/v1/object/sign/:bucket/*', async (req, reply) => {
+    const bucket = bucketOrThrow((req.params as Record<string, string>)['bucket'] ?? '');
+    const name = pathOrThrow(wildcard(req));
+    const token = (req.query as Record<string, string> | undefined)?.['token'];
+    if (typeof token !== 'string' || !token) {
+      throw new ApiError(401, E.UNAUTHORIZED, 'This URL needs its `token` query parameter.');
+    }
+    const resolved = await deps.projectFromToken(token);
+    if (!resolved) {
+      throw new ApiError(403, E.FORBIDDEN, 'That signed URL is not valid.');
+    }
+    const { ctx, master } = resolved;
+    const verdict = verifyToken(master, token, { ref: ctx.ref, bucket, path: name });
+    if (!verdict.ok) {
+      // One status and one message for every failure — expired, forged, wrong
+      // object, unknown kid. The distinction is in the service's own logs; giving
+      // it to the holder of a bad token turns this into an oracle for which
+      // objects exist and when links expire.
+      deps.onError?.(new Error(`signed URL refused: ${verdict.failure}`),
+        { at: 'signed-get', ref: ctx.ref, bucket, name });
+      throw new ApiError(403, E.FORBIDDEN, 'That signed URL is not valid.');
+    }
+
+    // Read as `service_role`, deliberately: the permission decision was made
+    // when the URL was signed, by a caller whose policies allowed it. Re-running
+    // RLS here would be running it as *nobody*, which denies every signed URL and
+    // makes the feature useless.
+    const row = await deps.asServiceRole(ctx, async (q) => {
+      const cfg = await bucketConfig(q, bucket);
+      return ((await q(
+        `SELECT size, mime_type, etag FROM storage.objects
+          WHERE bucket_id = $1 AND name = $2`, [cfg.id, name])).rows as
+        Array<{ size: string; mime_type: string; etag: string }>)[0];
+    });
+    if (!row) throw new ApiError(404, E.NOT_FOUND, 'No such object.');
+    return streamObject(reply, req, deps, ctx.ref, bucket, name, row, { cache: 'private' });
+  });
+
+  // ── GET /object/public/:bucket/* — no authentication at all ───────────────
+  //
+  // "Public bucket" means **the bucket is the ACL**: per-object RLS is skipped
+  // here on purpose, because a bucket marked public has already answered the
+  // permission question for everything in it. That is why the `public` flag is
+  // checked and nothing else is.
+  app.get('/storage/v1/object/public/:bucket/*', async (req, reply) => {
+    const bucket = bucketOrThrow((req.params as Record<string, string>)['bucket'] ?? '');
+    const name = pathOrThrow(wildcard(req));
+    // The project comes from the routed Host, exactly as the data API's does —
+    // there is no apikey to resolve from, and a client-supplied ref would make
+    // this endpoint a way to read any project's public buckets.
+    const ctx = await deps.projectFromHost(req);
+    if (!ctx) throw new ApiError(404, E.NOT_FOUND, 'No such project.');
+
+    const row = await deps.asServiceRole(ctx, async (q) => {
+      const cfg = await bucketConfig(q, bucket);
+      if (!cfg.is_public) {
+        // 404 rather than 403: a private bucket should not confirm its own
+        // existence to an unauthenticated caller probing the public path.
+        throw new ApiError(404, E.NOT_FOUND, 'No such object.');
+      }
+      return ((await q(
+        `SELECT size, mime_type, etag FROM storage.objects
+          WHERE bucket_id = $1 AND name = $2`, [cfg.id, name])).rows as
+        Array<{ size: string; mime_type: string; etag: string }>)[0];
+    });
+    if (!row) throw new ApiError(404, E.NOT_FOUND, 'No such object.');
+    return streamObject(reply, req, deps, ctx.ref, bucket, name, row, { cache: 'public' });
+  });
+
   // ── GET /object/:bucket/* — the download ──────────────────────────────────
   app.get('/storage/v1/object/:bucket/*', async (req, reply) => {
     const { ctx, caller } = await deps.admit(req);
@@ -381,40 +532,65 @@ export function registerObjectReads(app: FastifyInstance, deps: ObjectRouteDeps)
         Array<{ size: string; mime_type: string; etag: string }>)[0];
     });
     if (!row) throw new ApiError(404, E.NOT_FOUND, 'No such object.');
-
-    // Conditional request, answered from the metadata row rather than from the
-    // store: a cache revalidating an unchanged object should cost one indexed
-    // read, not a fetch of bytes that get thrown away.
-    const inm = req.headers['if-none-match'];
-    if (typeof inm === 'string' && inm.replace(/"/g, '').split(/,\s*/).includes(row.etag)) {
-      reply.header('etag', `"${row.etag}"`);
-      return reply.status(304).send();
-    }
-
-    const range = typeof req.headers['range'] === 'string' ? req.headers['range'] : undefined;
-    const fetched = await deps.s3.getObject(objectKey(ctx.ref, bucket, name),
-      ...(range ? [{ range }] : []));
-    if (fetched.status === 404) {
-      // A row with no bytes. D-124 calls this a bug rather than a state to
-      // handle gracefully, and it is reported as one — 502, not 404, because the
-      // object *should* be there and telling the caller it never existed would
-      // hide a platform fault as a client mistake.
-      deps.onError?.(new Error('metadata row with no object behind it'),
-        { at: 'download', ref: ctx.ref, bucket, name });
-      throw new ApiError(502, E.INTERNAL,
-        'The stored object behind this row is missing. This has been recorded.');
-    }
-    if (fetched.status !== 200 && fetched.status !== 206) {
-      throw new ApiError(502, E.INTERNAL, 'The object store did not return the object.');
-    }
-
-    for (const [k, v] of Object.entries(servingHeaders(row.mime_type))) reply.header(k, v);
-    reply.header('content-type', row.mime_type);
-    reply.header('etag', `"${row.etag}"`);
-    reply.header('accept-ranges', 'bytes');
-    if (fetched.headers['content-range']) {
-      reply.header('content-range', fetched.headers['content-range']);
-    }
-    return reply.status(fetched.status).send(fetched.bytes);
+    return streamObject(reply, req, deps, ctx.ref, bucket, name, row, { cache: 'private' });
   });
+}
+
+/**
+ * Send an object's bytes, with the headers that make doing so safe.
+ *
+ * Shared by all three download paths — authenticated, signed and public —
+ * because the *serving* rules do not depend on how permission was established.
+ * Three copies would be three places for the `nosniff` and attachment-disposition
+ * handling to drift, and that handling is load-bearing rather than decorative
+ * (D-123): public objects share the project's own origin in V1, so a stored
+ * `.html` served inline executes against the customer's own API.
+ */
+async function streamObject(
+  reply: FastifyReply, req: FastifyRequest, deps: ObjectRouteDeps,
+  ref: string, bucket: string, name: string,
+  row: { size: string; mime_type: string; etag: string },
+  opts: { cache: 'public' | 'private' },
+): Promise<FastifyReply> {
+  // Conditional request, answered from the metadata row rather than the store: a
+  // cache revalidating an unchanged object should cost one indexed read, not a
+  // fetch of bytes that get thrown away.
+  const inm = req.headers['if-none-match'];
+  if (typeof inm === 'string' && inm.replace(/"/g, '').split(/,\s*/).includes(row.etag)) {
+    reply.header('etag', `"${row.etag}"`);
+    return reply.status(304).send();
+  }
+
+  const range = typeof req.headers['range'] === 'string' ? req.headers['range'] : undefined;
+  const fetched = await deps.s3.getObject(objectKey(ref, bucket, name),
+    ...(range ? [{ range }] : []));
+  if (fetched.status === 404) {
+    // A row with no bytes. D-124 calls this a bug rather than a state to handle
+    // gracefully, and it is reported as one — 502, not 404, because the object
+    // *should* be there and telling the caller it never existed would file a
+    // platform fault as a client mistake.
+    deps.onError?.(new Error('metadata row with no object behind it'),
+      { at: 'download', ref, bucket, name });
+    throw new ApiError(502, E.INTERNAL,
+      'The stored object behind this row is missing. This has been recorded.');
+  }
+  if (fetched.status !== 200 && fetched.status !== 206) {
+    throw new ApiError(502, E.INTERNAL, 'The object store did not return the object.');
+  }
+
+  for (const [k, v] of Object.entries(servingHeaders(row.mime_type))) reply.header(k, v);
+  reply.header('content-type', row.mime_type);
+  reply.header('etag', `"${row.etag}"`);
+  reply.header('accept-ranges', 'bytes');
+  // Public objects are the CDN's to cache — that is the free-tier bandwidth
+  // story, and the honest contract that comes with it is that content may be
+  // served stale for up to `max-age` after an overwrite. Everything else is
+  // per-caller and must never be shared by an intermediary.
+  reply.header('cache-control', opts.cache === 'public'
+    ? 'public, max-age=3600'
+    : 'private, no-store');
+  if (fetched.headers['content-range']) {
+    reply.header('content-range', fetched.headers['content-range']);
+  }
+  return reply.status(fetched.status).send(fetched.bytes);
 }
