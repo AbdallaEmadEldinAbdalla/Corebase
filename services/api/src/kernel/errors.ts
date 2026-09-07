@@ -1,5 +1,7 @@
 import type { FastifyInstance } from 'fastify';
-import { ERROR_CODES, type ErrorCode, type AuthErrorCode } from '@corebase/types';
+import {
+  ERROR_CODES, type ErrorCode, type AuthErrorCode, type StorageErrorCode,
+} from '@corebase/types';
 
 /** Thrown by modules; the kernel renders it into the D-032 envelope. */
 export class ApiError extends Error {
@@ -12,9 +14,11 @@ export class ApiError extends Error {
   // client-matched (AUTH_ERROR_CODES, D-317). One error class rather than two, so
   // both surfaces render through the same D-032 envelope and the same handler —
   // a second handler is a second place for an internal message to leak out of.
-  readonly code: ErrorCode | AuthErrorCode;
+  readonly code: ErrorCode | AuthErrorCode | StorageErrorCode;
 
-  constructor(statusCode: number, code: ErrorCode | AuthErrorCode, message: string) {
+  constructor(
+    statusCode: number, code: ErrorCode | AuthErrorCode | StorageErrorCode, message: string,
+  ) {
     super(message);
     this.name = 'ApiError';
     this.statusCode = statusCode;

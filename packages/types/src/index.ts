@@ -120,6 +120,43 @@ export const AUTH_ERROR_CODES = {
 } as const;
 export type AuthErrorCode = (typeof AUTH_ERROR_CODES)[keyof typeof AUTH_ERROR_CODES];
 
+/**
+ * Error codes for the **storage** API at `/storage/v1/*` (P6b).
+ *
+ * Lowercase for the same reason the auth codes are (D-317): client code branches
+ * on them. A storage SDK decides between "ask the user to pick a smaller file"
+ * and "tell them the bucket is full" by comparing this string, so these are a
+ * compatibility surface rather than ours to restyle.
+ *
+ * `STORAGE_QUOTA_EXCEEDED` is named in the storage doc as the 413 body, which is
+ * why it is distinct from the per-file limit: one means *this file* is too big
+ * and a smaller one would work, the other means the *project* is full and no file
+ * will work until something is deleted. Collapsing them would leave a client
+ * unable to say which.
+ */
+export const STORAGE_ERROR_CODES = {
+  VALIDATION_FAILED: 'validation_failed',
+  UNAUTHORIZED: 'unauthorized',
+  /** A policy refused it. Distinct from 404: something is there. */
+  FORBIDDEN: 'forbidden',
+  NOT_FOUND: 'not_found',
+  /** An object already exists at that path and upsert was not requested. */
+  CONFLICT: 'conflict',
+  /** Bucket deletion with objects still in it. */
+  BUCKET_NOT_EMPTY: 'bucket_not_empty',
+  /** This file exceeds the bucket's or the plan's per-file limit. */
+  FILE_SIZE_LIMIT_EXCEEDED: 'file_size_limit_exceeded',
+  /** The project has no room left, regardless of this file's size. */
+  STORAGE_QUOTA_EXCEEDED: 'storage_quota_exceeded',
+  /** Declared type is not in the bucket's allowlist, or the bytes contradict it. */
+  MIME_TYPE_NOT_ALLOWED: 'mime_type_not_allowed',
+  OVER_RATE_LIMIT: 'over_rate_limit',
+  UNAVAILABLE: 'service_unavailable',
+  INTERNAL: 'internal_error',
+} as const;
+export type StorageErrorCode =
+  (typeof STORAGE_ERROR_CODES)[keyof typeof STORAGE_ERROR_CODES];
+
 /** Job payloads consumed by services/worker (two-phase enqueue, D-067). */
 export const ProvisionProjectJob = z.object({
   kind: z.literal('provision_project'),
