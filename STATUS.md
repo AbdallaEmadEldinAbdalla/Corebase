@@ -3254,6 +3254,79 @@ the cross-node isolation variant and the prod canaries as named gaps rather than
 quiet omissions — all three need something a single-node Docker substitute does
 not have.
 
+## 4g. Phase 6 — storage
+
+### P6a — the `storage` schema in every project database · done · 9 tests
+
+Object metadata lives in the project's own Postgres (D-017), which is
+load-bearing twice: RLS on these tables **is** the file-permission system — there
+is no second ACL engine anywhere — and `corebase export` carries a customer's
+file inventory out with a plain `pg_dump`. Installed at initdb like the `auth`
+schema, for the same reasons: fleet-wide, identical per project, and the one
+moment no client can observe a half-created schema.
+
+**Running the documented policies as a customer found two ways they could not
+work, and both failed silently.**
+
+The first is the one that matters (**D-392**): every documented object policy
+resolved a bucket name with `(SELECT id FROM storage.buckets WHERE name = …)`,
+and a policy's subselect **runs as the caller** — against a table that is
+RLS-enabled with no policies. So it returned NULL for `anon` and `authenticated`,
+every policy built on it was false for every row, and the symptom was not an
+error: reads came back empty and writes affected *zero rows without complaint*. A
+customer following this repository's own documentation would have installed a
+policy that looked correct and governed nothing. Fixed with a SECURITY DEFINER
+`storage.bucket_id(name)` — the same fix, for the same reason, that P5d's RLS
+cookbook already uses for a policy needing to read a membership table the caller
+cannot.
+
+The second: **pattern 3 was incomplete.** It gates a bucket on the customer's
+`org_members`, read by a subselect that also runs as the caller — and the event
+trigger puts RLS on that table at creation. With no policy on it the caller sees
+no memberships, so the bucket was closed to everyone. The doc now carries the
+missing policy and points at the cookbook's helper for large memberships.
+
+**The tables belong to the customer** (**D-393**), because only a table's owner
+may create a policy on it. That is the opposite call from the `auth` schema and
+deliberately so: those tables hold password hashes no customer role may read,
+these hold the customer's own file inventory they are expected to govern.
+`storage.usage` stays with the platform — a customer who owned it could edit
+their way to unlimited quota — and so does the schema, so it cannot be dropped
+from under the service. **Schema USAGE had to come with ownership, which is P5d's
+lesson repeating inside one phase**: owning a table is useless without the right
+to reach the schema it lives in, and the error was the same
+`permission denied for schema …`.
+
+**Grants reach `anon` too** (**D-391**), departing from D-108's asymmetry. D-108
+protects *customer* tables a customer can `GRANT` on; this is platform DDL whose
+documented way to open a bucket is a policy naming `TO anon`, and withholding the
+grant turns every such example into a privilege error. Default-deny is unaffected
+— RLS is on with zero policies either way.
+
+Two smaller decisions worth their lines. The **path constraint lives in the
+column**, not only in the service: object keys are assembled from the
+authenticated project ref plus this name, so a name containing `..` is the one
+input that could climb out of the prefix, and a service-only check is one
+refactor from being skipped. And the **quota trigger is SECURITY DEFINER**,
+because it fires as whoever inserted the object and that role has no business
+writing the usage table; its read grant goes to `service_role` alone and is not
+optional, since the service checks quota before accepting a byte — the first
+version revoked everything and granted nobody, which would have failed every
+upload on a permission error.
+
+**The harness was wrong once, instructively:** it had the customer's role
+`SET ROLE authenticated` and failed with `permission denied to set role` —
+correctly, because the isolation suite's DB-3 forbids exactly that. It
+impersonates through `authenticator` now, the role that legitimately holds that
+power and the one the storage service will connect as.
+
+**Verification:** 9/9 — the schema arriving closed, all three documented patterns
+run verbatim by a customer, the avatars own-path case (this phase's first exit
+criterion), quota tracked across insert/overwrite/delete, a customer unable to
+edit their own quota row, and path traversal refused by the constraint while
+`v1.2/photo..png` is accepted. Plus auth-schema, credentials and the RLS cookbook
+(49) unchanged.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
