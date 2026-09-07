@@ -3199,6 +3199,61 @@ in the direction that flatters us. The doc's ~1.5 ms gateway figure is not met a
 2.91 ms on a laptop whose Redis round-trips are Docker-forwarded, and whether it
 is achievable at all is now **OQ-184** rather than a silent miss.
 
+### P5g — the Phase 5 demo · done · Phase 5 complete
+
+The proposal's §80 five-minute flow minus storage: a table and its policies via
+SQL, an insert as `service_role`, and an authenticated user reading only their own
+rows. `./scripts/data-demo.sh` stands it up; `demo/data/` is the page.
+
+**The split between the script and the page is the demo.** The script plays the
+customer's backend — it applies the migration over the project's own
+`DATABASE_URL`, printing the SQL, and inserts the seed rows with the
+`service_role` key. The page plays the frontend and holds nothing but the anon
+key. That is not staging convenience: `service_role` carries `BYPASSRLS`, so a
+page holding one would show every visitor every user's notes.
+
+**`serve.py` is the edge, and it exists because of a real constraint.** The
+gateway resolves a project from the `Host` header, and a browser is *forbidden*
+from setting `Host` — so something in front of the gateway must supply it. In
+production that is Cloudflare and Caddy; here it is forty lines of Python
+forwarding two path prefixes to one fixed upstream. It also puts the page and the
+API on one origin, which takes CORS out of a demo whose subject is RLS.
+
+**The script's first version reached past a boundary this repository asserts
+elsewhere.** It read the demo users' ids from `auth.users` over the project's
+DATABASE_URL and got `permission denied for table users` — correctly, and the
+isolation suite's DB-3 is the test that says so. It reads them from each user's
+own access token now: `sub` is right there, it needs no privilege, and it is what
+a real backend does.
+
+**Verified in a browser, every step:** Alice sees only her rows and Bob only his
+from a byte-identical request; the anon key alone gets `401 permission denied for
+table notes` (D-108's asymmetry); posting a row owned by the other user gets `403
+new row violates row-level security policy` (the `WITH CHECK` half); the same post
+owned by *you* returns `201`, which is the control proving the refusal was the
+policy and not a broken endpoint.
+
+The browser also caught the page making a small false claim: it reported "N of M
+rows" using a total the script had captured with `service_role` before the page
+loaded, so after step 5 writes a row both that fraction and "the other M − N"
+were wrong. It now asserts only what it can verify from where it stands — who
+owns what came back.
+
+### Phase 5 — exit criteria, honestly
+
+| Criterion | Status |
+|---|---|
+| The full filter/embed/RPC surface works through the gateway against a seeded project | **met** — P5d, 15 tests: filters, `or=`, ordering, limit/offset, Range headers, embeds both directions, RPC by POST and GET |
+| The isolation suite passes and is release-blocking | **met** — P5e, 39 tests, its own CI job, `--passWithNoTests` deliberately absent. The §74 cross-tenant test runs per deploy rather than "continuously in staging": hourly needs a scheduler this repo does not have yet |
+| Latency budget met under k6 smoke load | **met for the origin SLO** — P5f: read p50 6.79 ms against 20 ms, p99 62 ms against 100 ms. The doc's ~1.5 ms *gateway overhead* figure is **not** met at 2.91 ms on this hardware (OQ-184) |
+| A request to a paused project resumes it per the specified UX | **met** — P5c: 503 + `Retry-After: 5` + `project_resuming`, one resume enqueued per admitted request, through the control plane's lifecycle path (D-378) |
+
+Four criteria, three met outright and one met in the half that staging can
+measure. Phase 5 also carries the storage rows of the isolation matrix (ST-1..4),
+the cross-node isolation variant and the prod canaries as named gaps rather than
+quiet omissions — all three need something a single-node Docker substitute does
+not have.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real

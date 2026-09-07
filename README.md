@@ -8,7 +8,7 @@ Corebase is a developer-focused Backend-as-a-Service: a developer creates a proj
 
 ## Status
 
-**Milestone 0 and Phases 1–4 complete; Phase 5 in progress** (P5a–P5f: the traffic signal, PostgREST per project, the gateway in front of it, the tenant-isolation suite now gating releases, the RLS posture and policy cookbook proven through the gateway, and the latency budget measured under k6). Phase 4 met two of its three exit criteria; the third needs a real sending domain and cannot be met on Docker.
+**Milestone 0 and Phases 1–5 complete.** Phase 5 met three of its four exit criteria outright; the fourth — the latency budget — is met for the origin SLO it can measure on Docker, while the gateway-overhead figure needs production hardware to settle (OQ-184). Phase 4 met two of its three exit criteria; the third needs a real sending domain and cannot be met on Docker.
 
 **The provisioning spine (Milestone 0).** `POST /v1/projects` returns a real, isolated PostgreSQL 17.5 database on a data node about **2.5 seconds** later, with its own volume, cgroup limits, the full role model, envelope-encrypted credentials, and a connection string you can `psql` into immediately. Twenty consecutive creates are measured end to end.
 
@@ -277,6 +277,26 @@ What blocks a build is chosen carefully: absolute latency is a property of the
 machine, so a shared CI runner enforces only what travels between machines — the
 error rate, the RLS correctness, and the gateway's *added* cost measured against a
 direct arm in the same interleaved run.
+
+**Phase 5 ends with a demo, and the split inside it is the lesson.**
+`./scripts/data-demo.sh` plays the customer's backend: it applies the migration
+over the project's own `DATABASE_URL` — printing the SQL, because a demo that
+hides its DDL teaches the wrong thing — and inserts the rows with the
+`service_role` key. `demo/data/` is a plain HTML page playing the frontend, and it
+holds nothing but the anon key. `service_role` bypasses RLS entirely, so a page
+carrying one would show every visitor every user's notes.
+
+In the browser: Alice sees only her rows and Bob only his, from a request that is
+byte-identical apart from the token. The anon key alone gets a permission error.
+Posting a row owned by somebody else is refused by the `WITH CHECK` half of the
+policy — and the same post owned by *you* succeeds, which is the control that
+proves the refusal was the policy rather than a broken endpoint.
+
+There is a small piece of Python in front of the gateway, and it is there for a
+real reason: the gateway identifies a project by the `Host` header, and a browser
+is *forbidden* from setting `Host`. Something upstream has to supply it. In
+production that is Cloudflare and Caddy; on a laptop it is forty lines that
+forward two path prefixes.
 
 ## Run it
 
