@@ -13,6 +13,7 @@ import { createRateLimiter, createMemoryRateLimiter } from './kernel/rate-limit.
 import type { ProjectAuthDeps } from './modules/project-auth/routes.ts';
 import { createMailer } from './modules/project-auth/mailer.ts';
 import { createTrafficMeter } from './modules/project-auth/traffic.ts';
+import { createS3, s3FromEnv } from '@corebase/s3';
 import { createRoutingTable } from './modules/gateway/routing.ts';
 import type { GatewayDeps } from './modules/gateway/routes.ts';
 import { SECRET_NAMES } from '@corebase/secrets';
@@ -355,6 +356,23 @@ if (gateway && !gateway.projectDomain) {
  * resolve the *same* project from the *same* apikey, and two resolvers would be
  * two chances to disagree about who a caller is.
  */
+/**
+ * The object store, from the same environment the backup path reads.
+ *
+ * Absent means the bucket routes work and the object routes are not registered:
+ * a deployment with no store configured can still create buckets, and cannot
+ * pretend to accept bytes.
+ */
+const objectStore = (() => {
+  const cfg = s3FromEnv();
+  return cfg ? createS3(cfg) : undefined;
+})();
+if (!objectStore) {
+  console.warn(JSON.stringify({ level: 'warn', service: 'api',
+    msg: 'no object store configured — /storage/v1/object/* is not registered. '
+       + 'Set the CB_BACKUP_S3_* variables (./scripts/staging.sh backup-store).' }));
+}
+
 const storage = projectAuth && secretsForApi
   ? {
       pool: projectAuth.pool,
@@ -369,6 +387,16 @@ const storage = projectAuth && secretsForApi
             { limit: Number(process.env['CB_STORAGE_RPS'] ?? 200), windowSeconds: 10 }),
       ...(process.env.CB_PROJECT_DOMAIN ? { projectDomain: process.env.CB_PROJECT_DOMAIN } : {}),
       ...(process.env.CB_JWT_ISSUER ? { keyIssuer: process.env.CB_JWT_ISSUER } : {}),
+      ...(objectStore
+        ? {
+            objects: {
+              s3: objectStore,
+              onError: (err: Error, at: Record<string, unknown>) => console.error(
+                JSON.stringify({ level: 'error', service: 'api',
+                  msg: 'storage object operation failed', error: err.message, ...at })),
+            },
+          }
+        : {}),
     }
   : undefined;
 

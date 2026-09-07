@@ -9,6 +9,9 @@ import {
   resolveProject, AuthContextError, type ProjectContext,
 } from '../project-auth/context.ts';
 import { callerFrom, withCaller, policyError, type Caller } from './context.ts';
+import {
+  registerObjectReads, registerObjectWrites, PROXY_MAX_BYTES, type ObjectDeps,
+} from './objects.ts';
 
 /**
  * The storage module at `/storage/v1/*` (P6b, D-121).
@@ -33,6 +36,13 @@ export interface StorageDeps {
   limiter?: RateLimiter | undefined;
   projectDomain?: string | undefined;
   keyIssuer?: string | undefined;
+  /**
+   * The object store. Absent means the *bucket* routes still work — they are
+   * pure metadata — and the object routes are not registered at all, for the
+   * usual reason: a route that exists and cannot reach the bytes is worse than a
+   * 404, because a client codes against it.
+   */
+  objects?: Omit<ObjectDeps, 'planOf'> | undefined;
 }
 
 interface BucketRow {
@@ -60,12 +70,98 @@ const BUCKET_NAME = /^[a-z0-9][a-z0-9._-]{1,62}$/;
 
 export function registerStorage(app: FastifyInstance, deps: StorageDeps): void {
   /**
+   * **Two encapsulated scopes, because the two halves of this module need
+   * opposite body handling** — and finding that out cost a confusing 400.
+   *
+   * Bucket routes take JSON. Object routes take *bytes*, of any content type,
+   * including the two Fastify parses by default: `application/json` and
+   * `text/plain`. Uploading a `.json` or a `.txt` file is entirely ordinary, and
+   * with the built-in parsers in force those arrive as a parsed object or a
+   * string rather than a Buffer — so the upload handler saw a non-Buffer body
+   * and answered "send the object bytes as the request body", which is a
+   * baffling thing to be told when you did.
+   *
+   * Overriding the parsers on one shared scope is not an option either: the
+   * bucket routes would then receive their own JSON bodies as Buffers.
+   *
+   * And neither parser may be registered on the *root* instance, because the
+   * gateway's routes live there and re-serialise `req.body` on the way upstream
+   * — a proxied request with an unusual content type would reach PostgREST as
+   * the JSON encoding of a Buffer. Fastify scopes parsers to the instance they
+   * are registered on, which is what makes all of this expressible.
+   */
+  const shared = buildShared(deps);
+  const objectDeps = deps.objects
+    ? {
+        ...deps.objects,
+        admit: shared.admit,
+        asCaller: shared.asCaller,
+        /**
+         * The plan, for the quota ceiling. One indexed read against the control
+         * plane per upload — the only control-plane query on this path, and it
+         * is on the *upload* side rather than the read side, where D-051's
+         * hot-path rule bites hardest.
+         */
+        planOf: async (ctx: ProjectContext) => {
+          const { rows } = await deps.pool.query<{ plan: string }>(
+            `SELECT plan::text AS plan FROM projects WHERE id = $1`, [ctx.projectId]);
+          return rows[0]?.plan ?? 'free';
+        },
+      }
+    : undefined;
+
+  // The JSON scope: bucket CRUD, plus every object route whose body is JSON or
+  // absent. Grouping by *body type* rather than by subject is the correction —
+  // see the note on the object routes.
+  void app.register(async (scope) => {
+    registerBuckets(scope, deps, shared);
+    if (objectDeps) registerObjectReads(scope, objectDeps);
+  });
+
+  // The bytes scope: uploads only.
+  if (objectDeps) {
+    void app.register(async (scope) => {
+      // Every content type as raw bytes, the two built-ins included. The
+      // explicit limit matters: Fastify's default body limit is 1 MB, and an
+      // upload path that truncated at 1 MB would present as a client bug.
+      //
+      // The parsers inherited from the parent are *removed* rather than
+      // overridden, because Fastify refuses to re-register a content type it
+      // already knows ("Content type parser 'application/json' already
+      // present."). Clearing them first also states the intent more plainly than
+      // three overrides would: in this scope every body is bytes, whatever the
+      // header claims.
+      scope.removeAllContentTypeParsers();
+      scope.addContentTypeParser('*',
+        { parseAs: 'buffer', bodyLimit: PROXY_MAX_BYTES + 1024 },
+        (_req, body, done) => { done(null, body as Buffer); });
+      registerObjectWrites(scope, objectDeps);
+    });
+  }
+}
+
+interface Shared {
+  admit: (req: FastifyRequest) => Promise<{ ctx: ProjectContext; caller: Caller }>;
+  asCaller: <T>(
+    ctx: ProjectContext, caller: Caller,
+    fn: (q: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }>) => Promise<T>,
+  ) => Promise<T>;
+}
+
+/**
+ * Admission and the as-caller helper, built once and shared by both scopes.
+ *
+ * One resolver rather than one per scope: both halves resolve the same project
+ * from the same apikey, and two copies would be two chances to disagree about
+ * who a caller is.
+ */
+function buildShared(deps: StorageDeps): Shared {
+  /**
    * Resolve the project and the caller, in that order.
    *
    * Identical to the auth module's front door, deliberately: the `apikey` header
    * says which project and what kind of key, and a user's `Authorization` says
-   * which person. Sharing the resolver rather than writing a second one is how
-   * the two surfaces stay unable to disagree about who a caller is.
+   * which person.
    */
   async function admit(req: FastifyRequest): Promise<{ ctx: ProjectContext; caller: Caller }> {
     const apikey = req.headers['apikey'];
@@ -124,6 +220,12 @@ export function registerStorage(app: FastifyInstance, deps: StorageDeps): void {
       throw err;
     }
   }
+
+  return { admit, asCaller };
+}
+
+function registerBuckets(app: FastifyInstance, _deps: StorageDeps, shared: Shared): void {
+  const { admit, asCaller } = shared;
 
   // ── POST /bucket ───────────────────────────────────────────────────────────
   app.post('/storage/v1/bucket', async (req, reply) => {
