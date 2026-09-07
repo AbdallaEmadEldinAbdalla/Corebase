@@ -3575,6 +3575,73 @@ refused *by the store*; completing before uploading is a 409 with no row; a
 deleted; signing refused before a URL exists when the policy would refuse the row;
 and the trial insert leaving nothing behind in either the table or the quota.
 
+### P6f — the reconciliation sweep and the quota true-up · done · 11 tests · two exit criteria
+
+The other half of D-124. The write orderings make every two-system failure land
+in the same harmless direction — bytes with no row, which nothing can see — and
+that is a deliberate trade of correctness for cost. **The sweep is what stops
+"harmless" from becoming "we pay for it forever."** The orderings plus this file
+are the entire consistency model.
+
+**Four passes, separate because they fail differently.** An unreachable store must
+stop orphan collection *without* letting the true-up conclude a project holds
+nothing and zero a customer's usage (**D-405**).
+
+1. **Orphans** — no row, no live intent, older than the grace window.
+2. **Expired intents** (F4) — object first, then the intent, the same ordering
+   discipline as a delete: dropping the intent first would leave bytes nothing
+   knows about, which is an orphan this pass had the information to avoid making.
+3. **Rows with no bytes** — quarantined and alerted, **never deleted**
+   (**D-403**).
+4. **Quota true-up** — after the deletions, so the total reflects what is left.
+
+**A live upload intent protects its key** as well as the grace window
+(**D-404**). The window covers an upload whose row is milliseconds away; it does
+not cover a presigned upload whose bytes arrived quickly and whose completion has
+not run, which can be older than any window while still legitimately in flight.
+
+**Rows with no bytes are the direction the orderings make impossible**, so
+finding one means an assumption broke — and the response is to preserve the
+evidence, not tidy it away. Auto-deleting the row would erase both the platform
+fault and a file the customer believes they have. The queue lives in the control
+plane because an operator hunting faults should not visit two hundred project
+databases; a repeat sighting raises a count rather than duplicating the row.
+
+The sweep connects as `postgres` rather than switching into an API role — the one
+place in storage where RLS is deliberately not the authority, and safe because
+nothing here returns data to a caller: it compares two inventories and deletes
+from one of them. A project that fails is recorded and the run continues, because
+aborting lets one unreachable node stop garbage collection for the whole fleet.
+
+It logs **every** run rather than only failures: "the sweep ran and found
+nothing" is what tells an operator the system is healthy, and a sweep that speaks
+up only on trouble is indistinguishable from one that is not running. With no
+object store configured it says so loudly, since a deployment whose sweep never
+runs accumulates cost in silence.
+
+**Both exit criteria, verified.** The crashes are injected through the raw
+object-store client rather than by killing a process, because the states under
+test are precisely the ones the API *cannot* produce — which is the point of the
+orderings. Bytes with no row are collected with the reclaimed total reported; a
+row with no bytes is quarantined with the row intact and the seen-count rising on
+a second pass. Convergence is asserted plainly too — a second sweep over a
+healthy project finds nothing, because a sweep that always reports deletions is
+one nobody can read as a health signal.
+
+**The cap test is the pricing contract in one place:** over quota means uploads
+rejected and existing files still serving. The proxied path refuses with 413 and
+stores nothing; the presigned path refuses at signing, before a URL exists; reads
+keep working; deletes keep working, because a quota that blocked deletion would
+be a trap; and an upsert that *shrinks* an object is allowed, since only the delta
+counts — refusing it would leave a customer unable to reduce their own usage
+through the API they uploaded with.
+
+One fixture is worth a note as a lesson rather than a detail: building the
+unreachable project's `project_databases` row from an explicit column list needed
+a new column on each attempt and then tripped two *partial* unique indexes that
+do not appear in `pg_constraint`. It copies the whole row through a temp table now
+and repoints only the ports — shorter, and immune to the next column.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
