@@ -69,6 +69,12 @@ export const SECRET_NAMES = {
    * is a leak of every user's credentials.
    */
   authRole: 'AUTH_ROLE_PASSWORD',
+  /**
+   * The per-project master secret the storage signing keys are derived from
+   * (P6d). Never used directly: HKDF turns it into a key per `kid`, so rotating
+   * a project's signed URLs is a new salt rather than a new secret.
+   */
+  storageSigningSecret: 'STORAGE_SIGNING_SECRET',
 } as const;
 
 export type SecretName = (typeof SECRET_NAMES)[keyof typeof SECRET_NAMES];
