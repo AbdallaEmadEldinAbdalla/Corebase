@@ -3,20 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Corebase Component Reference</title>
+<title>Steadhold Component Reference</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap">
 <link rel="stylesheet" href="tokens.css">
 <link rel="stylesheet" href="components.css">
 </head>
 <body>
-<div class="ref-toggle"><button class="cb-btn cb-btn--secondary cb-btn--sm" onclick="cbToggle()">Theme: <span class="js-theme-label">Light</span></button></div>
+<div class="ref-toggle"><button class="sh-btn sh-btn--secondary sh-btn--sm" onclick="cbToggle()">Theme: <span class="js-theme-label">Light</span></button></div>
 <header class="ref-head">
-  <h1 class="ref-title">Corebase Component Reference</h1>
+  <h1 class="ref-title">Steadhold Component Reference</h1>
   <p class="ref-sub">43 components built from <code>tokens.css</code>. Every component references
   role tokens only — never ramp steps — so the theme toggle is the whole of dark mode.
   Each block shows the live component and its markup; single-component files live in
   <code>components/</code>.</p>
-  <p class="ref-sub" style="font:var(--cb-body-s);color:var(--cb-text-muted)"><a href="#button-sizes">button-sizes</a> · <a href="#button-variants">button-variants</a> · <a href="#button-states-primary">button-states-primary</a> · <a href="#button-states-secondary">button-states-secondary</a> · <a href="#button-in-context">button-in-context</a> · <a href="#button-icon-only">button-icon-only</a> · <a href="#field-default">field-default</a> · <a href="#field-focus">field-focus</a> · <a href="#field-error">field-error</a> · <a href="#field-disabled">field-disabled</a> · <a href="#select">select</a> · <a href="#textarea">textarea</a> · <a href="#field-copy-readonly">field-copy-readonly</a> · <a href="#checkbox-all-states">checkbox-all-states</a> · <a href="#radio">radio</a> · <a href="#switch">switch</a> · <a href="#badge-project-state">badge-project-state</a> · <a href="#badge-plan">badge-plan</a> · <a href="#status-inline-dot">status-inline-dot</a> · <a href="#badge-count">badge-count</a> · <a href="#banner-success">banner-success</a> · <a href="#banner-info">banner-info</a> · <a href="#banner-warning">banner-warning</a> · <a href="#banner-error">banner-error</a> · <a href="#toast-success">toast-success</a> · <a href="#toast-error">toast-error</a> · <a href="#tooltip">tooltip</a> · <a href="#validation-inline">validation-inline</a> · <a href="#card-project-ready">card-project-ready</a> · <a href="#card-project-paused">card-project-paused</a> · <a href="#card-project-failed">card-project-failed</a> · <a href="#card-stat">card-stat</a> · <a href="#table-full">table-full</a> · <a href="#pagination">pagination</a> · <a href="#tabs">tabs</a> · <a href="#breadcrumb">breadcrumb</a> · <a href="#segmented-control">segmented-control</a> · <a href="#sidebar">sidebar</a> · <a href="#project-switcher">project-switcher</a> · <a href="#dialog-destructive">dialog-destructive</a> · <a href="#code-block">code-block</a> · <a href="#empty-state">empty-state</a> · <a href="#loading-progress-skeleton">loading-progress-skeleton</a></p>
+  <p class="ref-sub" style="font:var(--sh-body-s);color:var(--sh-text-muted)"><a href="#button-sizes">button-sizes</a> · <a href="#button-variants">button-variants</a> · <a href="#button-states-primary">button-states-primary</a> · <a href="#button-states-secondary">button-states-secondary</a> · <a href="#button-in-context">button-in-context</a> · <a href="#button-icon-only">button-icon-only</a> · <a href="#field-default">field-default</a> · <a href="#field-focus">field-focus</a> · <a href="#field-error">field-error</a> · <a href="#field-disabled">field-disabled</a> · <a href="#select">select</a> · <a href="#textarea">textarea</a> · <a href="#field-copy-readonly">field-copy-readonly</a> · <a href="#checkbox-all-states">checkbox-all-states</a> · <a href="#radio">radio</a> · <a href="#switch">switch</a> · <a href="#badge-project-state">badge-project-state</a> · <a href="#badge-plan">badge-plan</a> · <a href="#status-inline-dot">status-inline-dot</a> · <a href="#badge-count">badge-count</a> · <a href="#banner-success">banner-success</a> · <a href="#banner-info">banner-info</a> · <a href="#banner-warning">banner-warning</a> · <a href="#banner-error">banner-error</a> · <a href="#toast-success">toast-success</a> · <a href="#toast-error">toast-error</a> · <a href="#tooltip">tooltip</a> · <a href="#validation-inline">validation-inline</a> · <a href="#card-project-ready">card-project-ready</a> · <a href="#card-project-paused">card-project-paused</a> · <a href="#card-project-failed">card-project-failed</a> · <a href="#card-stat">card-stat</a> · <a href="#table-full">table-full</a> · <a href="#pagination">pagination</a> · <a href="#tabs">tabs</a> · <a href="#breadcrumb">breadcrumb</a> · <a href="#segmented-control">segmented-control</a> · <a href="#sidebar">sidebar</a> · <a href="#project-switcher">project-switcher</a> · <a href="#dialog-destructive">dialog-destructive</a> · <a href="#code-block">code-block</a> · <a href="#empty-state">empty-state</a> · <a href="#loading-progress-skeleton">loading-progress-skeleton</a></p>
 </header>
 <main class="ref-main">
   <section class="ref-group"><h2 class="ref-group__title">Buttons</h2>
@@ -25,82 +25,82 @@
         <span class="ref-item__file">components/button-sizes.html</span></div>
       <p class="ref-item__note">Heights 32 / 40 / 48. Labels hug: padding 12 / 16 / 20.</p>
       <div class="ref-demo">
-<div class="ref-labelled"><span>sm · 32</span><button class="cb-btn cb-btn--sm">Button</button></div>
-<div class="ref-labelled"><span>md · 40</span><button class="cb-btn">Button</button></div>
-<div class="ref-labelled"><span>lg · 48</span><button class="cb-btn cb-btn--lg">Button</button></div>
+<div class="ref-labelled"><span>sm · 32</span><button class="sh-btn sh-btn--sm">Button</button></div>
+<div class="ref-labelled"><span>md · 40</span><button class="sh-btn">Button</button></div>
+<div class="ref-labelled"><span>lg · 48</span><button class="sh-btn sh-btn--lg">Button</button></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;sm · 32&lt;/span&gt;&lt;button class=&quot;cb-btn cb-btn--sm&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;
-&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;md · 40&lt;/span&gt;&lt;button class=&quot;cb-btn&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;
-&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;lg · 48&lt;/span&gt;&lt;button class=&quot;cb-btn cb-btn--lg&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;sm · 32&lt;/span&gt;&lt;button class=&quot;sh-btn sh-btn--sm&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;
+&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;md · 40&lt;/span&gt;&lt;button class=&quot;sh-btn&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;
+&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;lg · 48&lt;/span&gt;&lt;button class=&quot;sh-btn sh-btn--lg&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="button-variants">
       <div class="ref-item__bar"><span class="ref-item__name">button-variants</span>
         <span class="ref-item__file">components/button-variants.html</span></div>
       <p class="ref-item__note">One primary action per view — the accent must stay rare.</p>
       <div class="ref-demo">
-<div class="ref-labelled"><span>primary</span><button class="cb-btn">Button</button></div>
-<div class="ref-labelled"><span>secondary</span><button class="cb-btn cb-btn--secondary">Button</button></div>
-<div class="ref-labelled"><span>ghost</span><button class="cb-btn cb-btn--ghost">Button</button></div>
-<div class="ref-labelled"><span>danger</span><button class="cb-btn cb-btn--danger">Button</button></div>
+<div class="ref-labelled"><span>primary</span><button class="sh-btn">Button</button></div>
+<div class="ref-labelled"><span>secondary</span><button class="sh-btn sh-btn--secondary">Button</button></div>
+<div class="ref-labelled"><span>ghost</span><button class="sh-btn sh-btn--ghost">Button</button></div>
+<div class="ref-labelled"><span>danger</span><button class="sh-btn sh-btn--danger">Button</button></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;primary&lt;/span&gt;&lt;button class=&quot;cb-btn&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;
-&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;secondary&lt;/span&gt;&lt;button class=&quot;cb-btn cb-btn--secondary&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;
-&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;ghost&lt;/span&gt;&lt;button class=&quot;cb-btn cb-btn--ghost&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;
-&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;danger&lt;/span&gt;&lt;button class=&quot;cb-btn cb-btn--danger&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;primary&lt;/span&gt;&lt;button class=&quot;sh-btn&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;
+&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;secondary&lt;/span&gt;&lt;button class=&quot;sh-btn sh-btn--secondary&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;
+&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;ghost&lt;/span&gt;&lt;button class=&quot;sh-btn sh-btn--ghost&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;
+&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;danger&lt;/span&gt;&lt;button class=&quot;sh-btn sh-btn--danger&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="button-states-primary">
       <div class="ref-item__bar"><span class="ref-item__name">button-states-primary</span>
         <span class="ref-item__file">components/button-states-primary.html</span></div>
       <p class="ref-item__note">Real states are CSS pseudo-classes; <code>.is-*</code> classes force them for reference.</p>
       <div class="ref-demo">
-<div class="ref-labelled"><span>default</span><button class="cb-btn">Button</button></div>
-<div class="ref-labelled"><span>hover</span><button class="cb-btn is-hover">Button</button></div>
-<div class="ref-labelled"><span>active</span><button class="cb-btn is-active">Button</button></div>
-<div class="ref-labelled"><span>focus</span><button class="cb-btn is-focus">Button</button></div>
-<div class="ref-labelled"><span>disabled</span><button class="cb-btn" disabled>Button</button></div>
+<div class="ref-labelled"><span>default</span><button class="sh-btn">Button</button></div>
+<div class="ref-labelled"><span>hover</span><button class="sh-btn is-hover">Button</button></div>
+<div class="ref-labelled"><span>active</span><button class="sh-btn is-active">Button</button></div>
+<div class="ref-labelled"><span>focus</span><button class="sh-btn is-focus">Button</button></div>
+<div class="ref-labelled"><span>disabled</span><button class="sh-btn" disabled>Button</button></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;default&lt;/span&gt;&lt;button class=&quot;cb-btn&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;
-&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;hover&lt;/span&gt;&lt;button class=&quot;cb-btn is-hover&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;
-&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;active&lt;/span&gt;&lt;button class=&quot;cb-btn is-active&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;
-&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;focus&lt;/span&gt;&lt;button class=&quot;cb-btn is-focus&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;
-&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;disabled&lt;/span&gt;&lt;button class=&quot;cb-btn&quot; disabled&gt;Button&lt;/button&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;default&lt;/span&gt;&lt;button class=&quot;sh-btn&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;
+&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;hover&lt;/span&gt;&lt;button class=&quot;sh-btn is-hover&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;
+&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;active&lt;/span&gt;&lt;button class=&quot;sh-btn is-active&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;
+&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;focus&lt;/span&gt;&lt;button class=&quot;sh-btn is-focus&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;
+&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;disabled&lt;/span&gt;&lt;button class=&quot;sh-btn&quot; disabled&gt;Button&lt;/button&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="button-states-secondary">
       <div class="ref-item__bar"><span class="ref-item__name">button-states-secondary</span>
         <span class="ref-item__file">components/button-states-secondary.html</span></div>
       
       <div class="ref-demo">
-<div class="ref-labelled"><span>default</span><button class="cb-btn cb-btn--secondary">Button</button></div>
-<div class="ref-labelled"><span>hover</span><button class="cb-btn cb-btn--secondary is-hover">Button</button></div>
-<div class="ref-labelled"><span>active</span><button class="cb-btn cb-btn--secondary is-active">Button</button></div>
-<div class="ref-labelled"><span>disabled</span><button class="cb-btn cb-btn--secondary" disabled>Button</button></div>
+<div class="ref-labelled"><span>default</span><button class="sh-btn sh-btn--secondary">Button</button></div>
+<div class="ref-labelled"><span>hover</span><button class="sh-btn sh-btn--secondary is-hover">Button</button></div>
+<div class="ref-labelled"><span>active</span><button class="sh-btn sh-btn--secondary is-active">Button</button></div>
+<div class="ref-labelled"><span>disabled</span><button class="sh-btn sh-btn--secondary" disabled>Button</button></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;default&lt;/span&gt;&lt;button class=&quot;cb-btn cb-btn--secondary&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;
-&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;hover&lt;/span&gt;&lt;button class=&quot;cb-btn cb-btn--secondary is-hover&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;
-&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;active&lt;/span&gt;&lt;button class=&quot;cb-btn cb-btn--secondary is-active&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;
-&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;disabled&lt;/span&gt;&lt;button class=&quot;cb-btn cb-btn--secondary&quot; disabled&gt;Button&lt;/button&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;default&lt;/span&gt;&lt;button class=&quot;sh-btn sh-btn--secondary&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;
+&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;hover&lt;/span&gt;&lt;button class=&quot;sh-btn sh-btn--secondary is-hover&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;
+&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;active&lt;/span&gt;&lt;button class=&quot;sh-btn sh-btn--secondary is-active&quot;&gt;Button&lt;/button&gt;&lt;/div&gt;
+&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;disabled&lt;/span&gt;&lt;button class=&quot;sh-btn sh-btn--secondary&quot; disabled&gt;Button&lt;/button&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="button-in-context">
       <div class="ref-item__bar"><span class="ref-item__name">button-in-context</span>
         <span class="ref-item__file">components/button-in-context.html</span></div>
       <p class="ref-item__note">Primary + ghost pairing. Never two primaries.</p>
       <div class="ref-demo">
-<div class="cb-row cb-row--tight"><button class="cb-btn">Create project</button><button class="cb-btn cb-btn--ghost">Cancel</button></div>
+<div class="sh-row sh-row--tight"><button class="sh-btn">Create project</button><button class="sh-btn sh-btn--ghost">Cancel</button></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-row cb-row--tight&quot;&gt;&lt;button class=&quot;cb-btn&quot;&gt;Create project&lt;/button&gt;&lt;button class=&quot;cb-btn cb-btn--ghost&quot;&gt;Cancel&lt;/button&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-row sh-row--tight&quot;&gt;&lt;button class=&quot;sh-btn&quot;&gt;Create project&lt;/button&gt;&lt;button class=&quot;sh-btn sh-btn--ghost&quot;&gt;Cancel&lt;/button&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="button-icon-only">
       <div class="ref-item__bar"><span class="ref-item__name">button-icon-only</span>
         <span class="ref-item__file">components/button-icon-only.html</span></div>
       <p class="ref-item__note">Square at each size. Always give an accessible name.</p>
       <div class="ref-demo">
-<div class="ref-labelled"><span>32</span><button class="cb-btn cb-btn--secondary cb-btn--icon cb-btn--sm" aria-label="Add">+</button></div>
-<div class="ref-labelled"><span>40</span><button class="cb-btn cb-btn--secondary cb-btn--icon" aria-label="Add">+</button></div>
-<div class="ref-labelled"><span>48</span><button class="cb-btn cb-btn--secondary cb-btn--icon cb-btn--lg" aria-label="Add">+</button></div>
+<div class="ref-labelled"><span>32</span><button class="sh-btn sh-btn--secondary sh-btn--icon sh-btn--sm" aria-label="Add">+</button></div>
+<div class="ref-labelled"><span>40</span><button class="sh-btn sh-btn--secondary sh-btn--icon" aria-label="Add">+</button></div>
+<div class="ref-labelled"><span>48</span><button class="sh-btn sh-btn--secondary sh-btn--icon sh-btn--lg" aria-label="Add">+</button></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;32&lt;/span&gt;&lt;button class=&quot;cb-btn cb-btn--secondary cb-btn--icon cb-btn--sm&quot; aria-label=&quot;Add&quot;&gt;+&lt;/button&gt;&lt;/div&gt;
-&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;40&lt;/span&gt;&lt;button class=&quot;cb-btn cb-btn--secondary cb-btn--icon&quot; aria-label=&quot;Add&quot;&gt;+&lt;/button&gt;&lt;/div&gt;
-&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;48&lt;/span&gt;&lt;button class=&quot;cb-btn cb-btn--secondary cb-btn--icon cb-btn--lg&quot; aria-label=&quot;Add&quot;&gt;+&lt;/button&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;32&lt;/span&gt;&lt;button class=&quot;sh-btn sh-btn--secondary sh-btn--icon sh-btn--sm&quot; aria-label=&quot;Add&quot;&gt;+&lt;/button&gt;&lt;/div&gt;
+&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;40&lt;/span&gt;&lt;button class=&quot;sh-btn sh-btn--secondary sh-btn--icon&quot; aria-label=&quot;Add&quot;&gt;+&lt;/button&gt;&lt;/div&gt;
+&lt;div class=&quot;ref-labelled&quot;&gt;&lt;span&gt;48&lt;/span&gt;&lt;button class=&quot;sh-btn sh-btn--secondary sh-btn--icon sh-btn--lg&quot; aria-label=&quot;Add&quot;&gt;+&lt;/button&gt;&lt;/div&gt;</pre>
     </section>
   </section>
   <section class="ref-group"><h2 class="ref-group__title">Forms</h2>
@@ -109,90 +109,90 @@
         <span class="ref-item__file">components/field-default.html</span></div>
       <p class="ref-item__note">Label above, help below.</p>
       <div class="ref-demo">
-<div class="cb-field"><label class="cb-label" for="pn-d">Project name</label><input class="cb-input" id="pn-d" value="my-app"><span class="cb-help">Lowercase letters, numbers and dashes.</span></div>
+<div class="sh-field"><label class="sh-label" for="pn-d">Project name</label><input class="sh-input" id="pn-d" value="my-app"><span class="sh-help">Lowercase letters, numbers and dashes.</span></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-field&quot;&gt;&lt;label class=&quot;cb-label&quot; for=&quot;pn-d&quot;&gt;Project name&lt;/label&gt;&lt;input class=&quot;cb-input&quot; id=&quot;pn-d&quot; value=&quot;my-app&quot;&gt;&lt;span class=&quot;cb-help&quot;&gt;Lowercase letters, numbers and dashes.&lt;/span&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-field&quot;&gt;&lt;label class=&quot;sh-label&quot; for=&quot;pn-d&quot;&gt;Project name&lt;/label&gt;&lt;input class=&quot;sh-input&quot; id=&quot;pn-d&quot; value=&quot;my-app&quot;&gt;&lt;span class=&quot;sh-help&quot;&gt;Lowercase letters, numbers and dashes.&lt;/span&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="field-focus">
       <div class="ref-item__bar"><span class="ref-item__name">field-focus</span>
         <span class="ref-item__file">components/field-focus.html</span></div>
       <p class="ref-item__note">2px accent ring plus a halo — never outline:none.</p>
       <div class="ref-demo">
-<div class="cb-field"><label class="cb-label" for="pn-focus">Project name</label><input class="cb-input is-focus" id="pn-focus" value="my-app"><span class="cb-help">Lowercase letters, numbers and dashes.</span></div>
+<div class="sh-field"><label class="sh-label" for="pn-focus">Project name</label><input class="sh-input is-focus" id="pn-focus" value="my-app"><span class="sh-help">Lowercase letters, numbers and dashes.</span></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-field&quot;&gt;&lt;label class=&quot;cb-label&quot; for=&quot;pn-focus&quot;&gt;Project name&lt;/label&gt;&lt;input class=&quot;cb-input is-focus&quot; id=&quot;pn-focus&quot; value=&quot;my-app&quot;&gt;&lt;span class=&quot;cb-help&quot;&gt;Lowercase letters, numbers and dashes.&lt;/span&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-field&quot;&gt;&lt;label class=&quot;sh-label&quot; for=&quot;pn-focus&quot;&gt;Project name&lt;/label&gt;&lt;input class=&quot;sh-input is-focus&quot; id=&quot;pn-focus&quot; value=&quot;my-app&quot;&gt;&lt;span class=&quot;sh-help&quot;&gt;Lowercase letters, numbers and dashes.&lt;/span&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="field-error">
       <div class="ref-item__bar"><span class="ref-item__name">field-error</span>
         <span class="ref-item__file">components/field-error.html</span></div>
       <p class="ref-item__note">Error replaces help text, never stacks with it.</p>
       <div class="ref-demo">
-<div class="cb-field"><label class="cb-label" for="pn-error">Project name</label><input class="cb-input cb-input--error" id="pn-error" value="my-app"><span class="cb-help cb-help--error">That name is already taken.</span></div>
+<div class="sh-field"><label class="sh-label" for="pn-error">Project name</label><input class="sh-input sh-input--error" id="pn-error" value="my-app"><span class="sh-help sh-help--error">That name is already taken.</span></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-field&quot;&gt;&lt;label class=&quot;cb-label&quot; for=&quot;pn-error&quot;&gt;Project name&lt;/label&gt;&lt;input class=&quot;cb-input cb-input--error&quot; id=&quot;pn-error&quot; value=&quot;my-app&quot;&gt;&lt;span class=&quot;cb-help cb-help--error&quot;&gt;That name is already taken.&lt;/span&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-field&quot;&gt;&lt;label class=&quot;sh-label&quot; for=&quot;pn-error&quot;&gt;Project name&lt;/label&gt;&lt;input class=&quot;sh-input sh-input--error&quot; id=&quot;pn-error&quot; value=&quot;my-app&quot;&gt;&lt;span class=&quot;sh-help sh-help--error&quot;&gt;That name is already taken.&lt;/span&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="field-disabled">
       <div class="ref-item__bar"><span class="ref-item__name">field-disabled</span>
         <span class="ref-item__file">components/field-disabled.html</span></div>
       
       <div class="ref-demo">
-<div class="cb-field"><label class="cb-label" for="pn-disabled">Project name</label><input class="cb-input" id="pn-disabled" value="my-app" disabled><span class="cb-help">Renaming is disabled after creation.</span></div>
+<div class="sh-field"><label class="sh-label" for="pn-disabled">Project name</label><input class="sh-input" id="pn-disabled" value="my-app" disabled><span class="sh-help">Renaming is disabled after creation.</span></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-field&quot;&gt;&lt;label class=&quot;cb-label&quot; for=&quot;pn-disabled&quot;&gt;Project name&lt;/label&gt;&lt;input class=&quot;cb-input&quot; id=&quot;pn-disabled&quot; value=&quot;my-app&quot; disabled&gt;&lt;span class=&quot;cb-help&quot;&gt;Renaming is disabled after creation.&lt;/span&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-field&quot;&gt;&lt;label class=&quot;sh-label&quot; for=&quot;pn-disabled&quot;&gt;Project name&lt;/label&gt;&lt;input class=&quot;sh-input&quot; id=&quot;pn-disabled&quot; value=&quot;my-app&quot; disabled&gt;&lt;span class=&quot;sh-help&quot;&gt;Renaming is disabled after creation.&lt;/span&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="select">
       <div class="ref-item__bar"><span class="ref-item__name">select</span>
         <span class="ref-item__file">components/select.html</span></div>
       
       <div class="ref-demo">
-<div class="cb-field"><label class="cb-label" for="rg">Region</label><select class="cb-select" id="rg"><option>eu-central · Falkenstein</option></select></div>
+<div class="sh-field"><label class="sh-label" for="rg">Region</label><select class="sh-select" id="rg"><option>eu-central · Falkenstein</option></select></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-field&quot;&gt;&lt;label class=&quot;cb-label&quot; for=&quot;rg&quot;&gt;Region&lt;/label&gt;&lt;select class=&quot;cb-select&quot; id=&quot;rg&quot;&gt;&lt;option&gt;eu-central · Falkenstein&lt;/option&gt;&lt;/select&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-field&quot;&gt;&lt;label class=&quot;sh-label&quot; for=&quot;rg&quot;&gt;Region&lt;/label&gt;&lt;select class=&quot;sh-select&quot; id=&quot;rg&quot;&gt;&lt;option&gt;eu-central · Falkenstein&lt;/option&gt;&lt;/select&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="textarea">
       <div class="ref-item__bar"><span class="ref-item__name">textarea</span>
         <span class="ref-item__file">components/textarea.html</span></div>
       
       <div class="ref-demo">
-<div class="cb-field"><label class="cb-label" for="ds">Description</label><textarea class="cb-textarea" id="ds">Internal tools backend for the ops team.</textarea></div>
+<div class="sh-field"><label class="sh-label" for="ds">Description</label><textarea class="sh-textarea" id="ds">Internal tools backend for the ops team.</textarea></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-field&quot;&gt;&lt;label class=&quot;cb-label&quot; for=&quot;ds&quot;&gt;Description&lt;/label&gt;&lt;textarea class=&quot;cb-textarea&quot; id=&quot;ds&quot;&gt;Internal tools backend for the ops team.&lt;/textarea&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-field&quot;&gt;&lt;label class=&quot;sh-label&quot; for=&quot;ds&quot;&gt;Description&lt;/label&gt;&lt;textarea class=&quot;sh-textarea&quot; id=&quot;ds&quot;&gt;Internal tools backend for the ops team.&lt;/textarea&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="field-copy-readonly">
       <div class="ref-item__bar"><span class="ref-item__name">field-copy-readonly</span>
         <span class="ref-item__file">components/field-copy-readonly.html</span></div>
       <p class="ref-item__note">Secrets and connection strings are read-only with a copy affordance.</p>
       <div class="ref-demo">
-<div class="cb-field"><label class="cb-label">Connection string</label><div class="cb-copyfield"><code>postgresql://…@db.corebase.co</code><button type="button">Copy</button></div></div>
+<div class="sh-field"><label class="sh-label">Connection string</label><div class="sh-copyfield"><code>postgresql://…@db.steadhold.app</code><button type="button">Copy</button></div></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-field&quot;&gt;&lt;label class=&quot;cb-label&quot;&gt;Connection string&lt;/label&gt;&lt;div class=&quot;cb-copyfield&quot;&gt;&lt;code&gt;postgresql://…@db.corebase.co&lt;/code&gt;&lt;button type=&quot;button&quot;&gt;Copy&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-field&quot;&gt;&lt;label class=&quot;sh-label&quot;&gt;Connection string&lt;/label&gt;&lt;div class=&quot;sh-copyfield&quot;&gt;&lt;code&gt;postgresql://…@db.steadhold.app&lt;/code&gt;&lt;button type=&quot;button&quot;&gt;Copy&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="checkbox-all-states">
       <div class="ref-item__bar"><span class="ref-item__name">checkbox-all-states</span>
         <span class="ref-item__file">components/checkbox-all-states.html</span></div>
       <p class="ref-item__note">Indeterminate is set in JS: <code>el.indeterminate = true</code>.</p>
       <div class="ref-demo">
-<div class="cb-stack"><label class="cb-check"><input type="checkbox"> Enable Row Level Security</label><label class="cb-check"><input type="checkbox" checked> Pause project when idle</label><label class="cb-check"><input type="checkbox" class="js-indeterminate"> Some tables selected</label><label class="cb-check"><input type="checkbox" disabled> Locked by organisation policy</label></div>
+<div class="sh-stack"><label class="sh-check"><input type="checkbox"> Enable Row Level Security</label><label class="sh-check"><input type="checkbox" checked> Pause project when idle</label><label class="sh-check"><input type="checkbox" class="js-indeterminate"> Some tables selected</label><label class="sh-check"><input type="checkbox" disabled> Locked by organisation policy</label></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-stack&quot;&gt;&lt;label class=&quot;cb-check&quot;&gt;&lt;input type=&quot;checkbox&quot;&gt; Enable Row Level Security&lt;/label&gt;&lt;label class=&quot;cb-check&quot;&gt;&lt;input type=&quot;checkbox&quot; checked&gt; Pause project when idle&lt;/label&gt;&lt;label class=&quot;cb-check&quot;&gt;&lt;input type=&quot;checkbox&quot; class=&quot;js-indeterminate&quot;&gt; Some tables selected&lt;/label&gt;&lt;label class=&quot;cb-check&quot;&gt;&lt;input type=&quot;checkbox&quot; disabled&gt; Locked by organisation policy&lt;/label&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-stack&quot;&gt;&lt;label class=&quot;sh-check&quot;&gt;&lt;input type=&quot;checkbox&quot;&gt; Enable Row Level Security&lt;/label&gt;&lt;label class=&quot;sh-check&quot;&gt;&lt;input type=&quot;checkbox&quot; checked&gt; Pause project when idle&lt;/label&gt;&lt;label class=&quot;sh-check&quot;&gt;&lt;input type=&quot;checkbox&quot; class=&quot;js-indeterminate&quot;&gt; Some tables selected&lt;/label&gt;&lt;label class=&quot;sh-check&quot;&gt;&lt;input type=&quot;checkbox&quot; disabled&gt; Locked by organisation policy&lt;/label&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="radio">
       <div class="ref-item__bar"><span class="ref-item__name">radio</span>
         <span class="ref-item__file">components/radio.html</span></div>
       
       <div class="ref-demo">
-<div class="cb-stack"><label class="cb-radio"><input type="radio" name="plan" checked> Free — 500 MB, pauses when idle</label><label class="cb-radio"><input type="radio" name="plan"> Pro — 8 GB, always on</label></div>
+<div class="sh-stack"><label class="sh-radio"><input type="radio" name="plan" checked> Free — 500 MB, pauses when idle</label><label class="sh-radio"><input type="radio" name="plan"> Pro — 8 GB, always on</label></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-stack&quot;&gt;&lt;label class=&quot;cb-radio&quot;&gt;&lt;input type=&quot;radio&quot; name=&quot;plan&quot; checked&gt; Free — 500 MB, pauses when idle&lt;/label&gt;&lt;label class=&quot;cb-radio&quot;&gt;&lt;input type=&quot;radio&quot; name=&quot;plan&quot;&gt; Pro — 8 GB, always on&lt;/label&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-stack&quot;&gt;&lt;label class=&quot;sh-radio&quot;&gt;&lt;input type=&quot;radio&quot; name=&quot;plan&quot; checked&gt; Free — 500 MB, pauses when idle&lt;/label&gt;&lt;label class=&quot;sh-radio&quot;&gt;&lt;input type=&quot;radio&quot; name=&quot;plan&quot;&gt; Pro — 8 GB, always on&lt;/label&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="switch">
       <div class="ref-item__bar"><span class="ref-item__name">switch</span>
         <span class="ref-item__file">components/switch.html</span></div>
       <p class="ref-item__note">38×22 track, 18px knob, 40px hit area.</p>
       <div class="ref-demo">
-<div class="cb-stack"><label class="cb-switch"><input type="checkbox" checked><span class="cb-switch__track"></span> Point-in-time recovery</label><label class="cb-switch"><input type="checkbox"><span class="cb-switch__track"></span> Email alerts</label><label class="cb-switch"><input type="checkbox" disabled><span class="cb-switch__track"></span> SSO — available on Team</label></div>
+<div class="sh-stack"><label class="sh-switch"><input type="checkbox" checked><span class="sh-switch__track"></span> Point-in-time recovery</label><label class="sh-switch"><input type="checkbox"><span class="sh-switch__track"></span> Email alerts</label><label class="sh-switch"><input type="checkbox" disabled><span class="sh-switch__track"></span> SSO — available on Team</label></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-stack&quot;&gt;&lt;label class=&quot;cb-switch&quot;&gt;&lt;input type=&quot;checkbox&quot; checked&gt;&lt;span class=&quot;cb-switch__track&quot;&gt;&lt;/span&gt; Point-in-time recovery&lt;/label&gt;&lt;label class=&quot;cb-switch&quot;&gt;&lt;input type=&quot;checkbox&quot;&gt;&lt;span class=&quot;cb-switch__track&quot;&gt;&lt;/span&gt; Email alerts&lt;/label&gt;&lt;label class=&quot;cb-switch&quot;&gt;&lt;input type=&quot;checkbox&quot; disabled&gt;&lt;span class=&quot;cb-switch__track&quot;&gt;&lt;/span&gt; SSO — available on Team&lt;/label&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-stack&quot;&gt;&lt;label class=&quot;sh-switch&quot;&gt;&lt;input type=&quot;checkbox&quot; checked&gt;&lt;span class=&quot;sh-switch__track&quot;&gt;&lt;/span&gt; Point-in-time recovery&lt;/label&gt;&lt;label class=&quot;sh-switch&quot;&gt;&lt;input type=&quot;checkbox&quot;&gt;&lt;span class=&quot;sh-switch__track&quot;&gt;&lt;/span&gt; Email alerts&lt;/label&gt;&lt;label class=&quot;sh-switch&quot;&gt;&lt;input type=&quot;checkbox&quot; disabled&gt;&lt;span class=&quot;sh-switch__track&quot;&gt;&lt;/span&gt; SSO — available on Team&lt;/label&gt;&lt;/div&gt;</pre>
     </section>
   </section>
   <section class="ref-group"><h2 class="ref-group__title">Status</h2>
@@ -201,36 +201,36 @@
         <span class="ref-item__file">components/badge-project-state.html</span></div>
       <p class="ref-item__note">Colour plus a distinct label, always both (D-180).</p>
       <div class="ref-demo">
-<div class="cb-row cb-row--tight"><span class="cb-badge cb-badge--success"><span class="cb-dot"></span>READY</span><span class="cb-badge cb-badge--info"><span class="cb-dot"></span>PROVISIONING</span><span class="cb-badge cb-badge--warning"><span class="cb-dot"></span>RESTORING</span><span class="cb-badge"><span class="cb-dot"></span>PAUSED</span><span class="cb-badge cb-badge--error"><span class="cb-dot"></span>FAILED</span></div>
+<div class="sh-row sh-row--tight"><span class="sh-badge sh-badge--success"><span class="sh-dot"></span>READY</span><span class="sh-badge sh-badge--info"><span class="sh-dot"></span>PROVISIONING</span><span class="sh-badge sh-badge--warning"><span class="sh-dot"></span>RESTORING</span><span class="sh-badge"><span class="sh-dot"></span>PAUSED</span><span class="sh-badge sh-badge--error"><span class="sh-dot"></span>FAILED</span></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-row cb-row--tight&quot;&gt;&lt;span class=&quot;cb-badge cb-badge--success&quot;&gt;&lt;span class=&quot;cb-dot&quot;&gt;&lt;/span&gt;READY&lt;/span&gt;&lt;span class=&quot;cb-badge cb-badge--info&quot;&gt;&lt;span class=&quot;cb-dot&quot;&gt;&lt;/span&gt;PROVISIONING&lt;/span&gt;&lt;span class=&quot;cb-badge cb-badge--warning&quot;&gt;&lt;span class=&quot;cb-dot&quot;&gt;&lt;/span&gt;RESTORING&lt;/span&gt;&lt;span class=&quot;cb-badge&quot;&gt;&lt;span class=&quot;cb-dot&quot;&gt;&lt;/span&gt;PAUSED&lt;/span&gt;&lt;span class=&quot;cb-badge cb-badge--error&quot;&gt;&lt;span class=&quot;cb-dot&quot;&gt;&lt;/span&gt;FAILED&lt;/span&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-row sh-row--tight&quot;&gt;&lt;span class=&quot;sh-badge sh-badge--success&quot;&gt;&lt;span class=&quot;sh-dot&quot;&gt;&lt;/span&gt;READY&lt;/span&gt;&lt;span class=&quot;sh-badge sh-badge--info&quot;&gt;&lt;span class=&quot;sh-dot&quot;&gt;&lt;/span&gt;PROVISIONING&lt;/span&gt;&lt;span class=&quot;sh-badge sh-badge--warning&quot;&gt;&lt;span class=&quot;sh-dot&quot;&gt;&lt;/span&gt;RESTORING&lt;/span&gt;&lt;span class=&quot;sh-badge&quot;&gt;&lt;span class=&quot;sh-dot&quot;&gt;&lt;/span&gt;PAUSED&lt;/span&gt;&lt;span class=&quot;sh-badge sh-badge--error&quot;&gt;&lt;span class=&quot;sh-dot&quot;&gt;&lt;/span&gt;FAILED&lt;/span&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="badge-plan">
       <div class="ref-item__bar"><span class="ref-item__name">badge-plan</span>
         <span class="ref-item__file">components/badge-plan.html</span></div>
       
       <div class="ref-demo">
-<div class="cb-row cb-row--tight"><span class="cb-badge">Free</span><span class="cb-badge cb-badge--accent">Pro</span><span class="cb-badge cb-badge--info">Team</span></div>
+<div class="sh-row sh-row--tight"><span class="sh-badge">Free</span><span class="sh-badge sh-badge--accent">Pro</span><span class="sh-badge sh-badge--info">Team</span></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-row cb-row--tight&quot;&gt;&lt;span class=&quot;cb-badge&quot;&gt;Free&lt;/span&gt;&lt;span class=&quot;cb-badge cb-badge--accent&quot;&gt;Pro&lt;/span&gt;&lt;span class=&quot;cb-badge cb-badge--info&quot;&gt;Team&lt;/span&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-row sh-row--tight&quot;&gt;&lt;span class=&quot;sh-badge&quot;&gt;Free&lt;/span&gt;&lt;span class=&quot;sh-badge sh-badge--accent&quot;&gt;Pro&lt;/span&gt;&lt;span class=&quot;sh-badge sh-badge--info&quot;&gt;Team&lt;/span&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="status-inline-dot">
       <div class="ref-item__bar"><span class="ref-item__name">status-inline-dot</span>
         <span class="ref-item__file">components/status-inline-dot.html</span></div>
       <p class="ref-item__note">For lists where a pill would be too heavy.</p>
       <div class="ref-demo">
-<div class="cb-stack"><span class="cb-status"><span class="cb-status__dot cb-status__dot--success"></span>production</span><span class="cb-status"><span class="cb-status__dot cb-status__dot--muted"></span>staging</span><span class="cb-status"><span class="cb-status__dot cb-status__dot--error"></span>analytics</span></div>
+<div class="sh-stack"><span class="sh-status"><span class="sh-status__dot sh-status__dot--success"></span>production</span><span class="sh-status"><span class="sh-status__dot sh-status__dot--muted"></span>staging</span><span class="sh-status"><span class="sh-status__dot sh-status__dot--error"></span>analytics</span></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-stack&quot;&gt;&lt;span class=&quot;cb-status&quot;&gt;&lt;span class=&quot;cb-status__dot cb-status__dot--success&quot;&gt;&lt;/span&gt;production&lt;/span&gt;&lt;span class=&quot;cb-status&quot;&gt;&lt;span class=&quot;cb-status__dot cb-status__dot--muted&quot;&gt;&lt;/span&gt;staging&lt;/span&gt;&lt;span class=&quot;cb-status&quot;&gt;&lt;span class=&quot;cb-status__dot cb-status__dot--error&quot;&gt;&lt;/span&gt;analytics&lt;/span&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-stack&quot;&gt;&lt;span class=&quot;sh-status&quot;&gt;&lt;span class=&quot;sh-status__dot sh-status__dot--success&quot;&gt;&lt;/span&gt;production&lt;/span&gt;&lt;span class=&quot;sh-status&quot;&gt;&lt;span class=&quot;sh-status__dot sh-status__dot--muted&quot;&gt;&lt;/span&gt;staging&lt;/span&gt;&lt;span class=&quot;sh-status&quot;&gt;&lt;span class=&quot;sh-status__dot sh-status__dot--error&quot;&gt;&lt;/span&gt;analytics&lt;/span&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="badge-count">
       <div class="ref-item__bar"><span class="ref-item__name">badge-count</span>
         <span class="ref-item__file">components/badge-count.html</span></div>
       <p class="ref-item__note">Accent = needs attention. Neutral = plain total.</p>
       <div class="ref-demo">
-<div class="cb-row cb-row--tight"><span class="cb-badge cb-badge--count">12</span><span class="cb-badge cb-badge--count-neutral">3</span></div>
+<div class="sh-row sh-row--tight"><span class="sh-badge sh-badge--count">12</span><span class="sh-badge sh-badge--count-neutral">3</span></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-row cb-row--tight&quot;&gt;&lt;span class=&quot;cb-badge cb-badge--count&quot;&gt;12&lt;/span&gt;&lt;span class=&quot;cb-badge cb-badge--count-neutral&quot;&gt;3&lt;/span&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-row sh-row--tight&quot;&gt;&lt;span class=&quot;sh-badge sh-badge--count&quot;&gt;12&lt;/span&gt;&lt;span class=&quot;sh-badge sh-badge--count-neutral&quot;&gt;3&lt;/span&gt;&lt;/div&gt;</pre>
     </section>
   </section>
   <section class="ref-group"><h2 class="ref-group__title">Feedback</h2>
@@ -239,72 +239,72 @@
         <span class="ref-item__file">components/banner-success.html</span></div>
       
       <div class="ref-demo">
-<div class="cb-banner cb-banner--success"><span class="cb-banner__icon"><svg viewBox="0 0 12 12"><path d="M1.5 6.5 4.5 9.5 10.5 2.5"/></svg></span><div class="cb-banner__body"><div class="cb-banner__title">Backup completed</div><div class="cb-banner__text">Restore point created at 03:12 UTC. Verified against a scratch instance.</div></div></div>
+<div class="sh-banner sh-banner--success"><span class="sh-banner__icon"><svg viewBox="0 0 12 12"><path d="M1.5 6.5 4.5 9.5 10.5 2.5"/></svg></span><div class="sh-banner__body"><div class="sh-banner__title">Backup completed</div><div class="sh-banner__text">Restore point created at 03:12 UTC. Verified against a scratch instance.</div></div></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-banner cb-banner--success&quot;&gt;&lt;span class=&quot;cb-banner__icon&quot;&gt;&lt;svg viewBox=&quot;0 0 12 12&quot;&gt;&lt;path d=&quot;M1.5 6.5 4.5 9.5 10.5 2.5&quot;/&gt;&lt;/svg&gt;&lt;/span&gt;&lt;div class=&quot;cb-banner__body&quot;&gt;&lt;div class=&quot;cb-banner__title&quot;&gt;Backup completed&lt;/div&gt;&lt;div class=&quot;cb-banner__text&quot;&gt;Restore point created at 03:12 UTC. Verified against a scratch instance.&lt;/div&gt;&lt;/div&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-banner sh-banner--success&quot;&gt;&lt;span class=&quot;sh-banner__icon&quot;&gt;&lt;svg viewBox=&quot;0 0 12 12&quot;&gt;&lt;path d=&quot;M1.5 6.5 4.5 9.5 10.5 2.5&quot;/&gt;&lt;/svg&gt;&lt;/span&gt;&lt;div class=&quot;sh-banner__body&quot;&gt;&lt;div class=&quot;sh-banner__title&quot;&gt;Backup completed&lt;/div&gt;&lt;div class=&quot;sh-banner__text&quot;&gt;Restore point created at 03:12 UTC. Verified against a scratch instance.&lt;/div&gt;&lt;/div&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="banner-info">
       <div class="ref-item__bar"><span class="ref-item__name">banner-info</span>
         <span class="ref-item__file">components/banner-info.html</span></div>
       
       <div class="ref-demo">
-<div class="cb-banner cb-banner--info"><span class="cb-banner__icon"><svg viewBox="0 0 12 12"><path d="M6 5v5M6 2.5v.5"/></svg></span><div class="cb-banner__body"><div class="cb-banner__title">Project is resuming</div><div class="cb-banner__text">This project was paused after 7 days idle. It will be ready in a few seconds.</div></div></div>
+<div class="sh-banner sh-banner--info"><span class="sh-banner__icon"><svg viewBox="0 0 12 12"><path d="M6 5v5M6 2.5v.5"/></svg></span><div class="sh-banner__body"><div class="sh-banner__title">Project is resuming</div><div class="sh-banner__text">This project was paused after 7 days idle. It will be ready in a few seconds.</div></div></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-banner cb-banner--info&quot;&gt;&lt;span class=&quot;cb-banner__icon&quot;&gt;&lt;svg viewBox=&quot;0 0 12 12&quot;&gt;&lt;path d=&quot;M6 5v5M6 2.5v.5&quot;/&gt;&lt;/svg&gt;&lt;/span&gt;&lt;div class=&quot;cb-banner__body&quot;&gt;&lt;div class=&quot;cb-banner__title&quot;&gt;Project is resuming&lt;/div&gt;&lt;div class=&quot;cb-banner__text&quot;&gt;This project was paused after 7 days idle. It will be ready in a few seconds.&lt;/div&gt;&lt;/div&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-banner sh-banner--info&quot;&gt;&lt;span class=&quot;sh-banner__icon&quot;&gt;&lt;svg viewBox=&quot;0 0 12 12&quot;&gt;&lt;path d=&quot;M6 5v5M6 2.5v.5&quot;/&gt;&lt;/svg&gt;&lt;/span&gt;&lt;div class=&quot;sh-banner__body&quot;&gt;&lt;div class=&quot;sh-banner__title&quot;&gt;Project is resuming&lt;/div&gt;&lt;div class=&quot;sh-banner__text&quot;&gt;This project was paused after 7 days idle. It will be ready in a few seconds.&lt;/div&gt;&lt;/div&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="banner-warning">
       <div class="ref-item__bar"><span class="ref-item__name">banner-warning</span>
         <span class="ref-item__file">components/banner-warning.html</span></div>
       <p class="ref-item__note">Optional single action, right-aligned.</p>
       <div class="ref-demo">
-<div class="cb-banner cb-banner--warning"><span class="cb-banner__icon"><svg viewBox="0 0 12 12"><path d="M6 2v5M6 9.5v.5"/></svg></span><div class="cb-banner__body"><div class="cb-banner__title">Database is 91% full</div><div class="cb-banner__text">Free up space or upgrade — writes are blocked at 95%.</div></div><button class="cb-banner__action">Upgrade</button></div>
+<div class="sh-banner sh-banner--warning"><span class="sh-banner__icon"><svg viewBox="0 0 12 12"><path d="M6 2v5M6 9.5v.5"/></svg></span><div class="sh-banner__body"><div class="sh-banner__title">Database is 91% full</div><div class="sh-banner__text">Free up space or upgrade — writes are blocked at 95%.</div></div><button class="sh-banner__action">Upgrade</button></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-banner cb-banner--warning&quot;&gt;&lt;span class=&quot;cb-banner__icon&quot;&gt;&lt;svg viewBox=&quot;0 0 12 12&quot;&gt;&lt;path d=&quot;M6 2v5M6 9.5v.5&quot;/&gt;&lt;/svg&gt;&lt;/span&gt;&lt;div class=&quot;cb-banner__body&quot;&gt;&lt;div class=&quot;cb-banner__title&quot;&gt;Database is 91% full&lt;/div&gt;&lt;div class=&quot;cb-banner__text&quot;&gt;Free up space or upgrade — writes are blocked at 95%.&lt;/div&gt;&lt;/div&gt;&lt;button class=&quot;cb-banner__action&quot;&gt;Upgrade&lt;/button&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-banner sh-banner--warning&quot;&gt;&lt;span class=&quot;sh-banner__icon&quot;&gt;&lt;svg viewBox=&quot;0 0 12 12&quot;&gt;&lt;path d=&quot;M6 2v5M6 9.5v.5&quot;/&gt;&lt;/svg&gt;&lt;/span&gt;&lt;div class=&quot;sh-banner__body&quot;&gt;&lt;div class=&quot;sh-banner__title&quot;&gt;Database is 91% full&lt;/div&gt;&lt;div class=&quot;sh-banner__text&quot;&gt;Free up space or upgrade — writes are blocked at 95%.&lt;/div&gt;&lt;/div&gt;&lt;button class=&quot;sh-banner__action&quot;&gt;Upgrade&lt;/button&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="banner-error">
       <div class="ref-item__bar"><span class="ref-item__name">banner-error</span>
         <span class="ref-item__file">components/banner-error.html</span></div>
       <p class="ref-item__note">Optional single action, right-aligned.</p>
       <div class="ref-demo">
-<div class="cb-banner cb-banner--error"><span class="cb-banner__icon"><svg viewBox="0 0 12 12"><path d="M2 2 10 10M10 2 2 10"/></svg></span><div class="cb-banner__body"><div class="cb-banner__title">Provisioning failed</div><div class="cb-banner__text">Node capacity was exhausted in eu-central. No charge was made.</div></div><button class="cb-banner__action">Retry</button></div>
+<div class="sh-banner sh-banner--error"><span class="sh-banner__icon"><svg viewBox="0 0 12 12"><path d="M2 2 10 10M10 2 2 10"/></svg></span><div class="sh-banner__body"><div class="sh-banner__title">Provisioning failed</div><div class="sh-banner__text">Node capacity was exhausted in eu-central. No charge was made.</div></div><button class="sh-banner__action">Retry</button></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-banner cb-banner--error&quot;&gt;&lt;span class=&quot;cb-banner__icon&quot;&gt;&lt;svg viewBox=&quot;0 0 12 12&quot;&gt;&lt;path d=&quot;M2 2 10 10M10 2 2 10&quot;/&gt;&lt;/svg&gt;&lt;/span&gt;&lt;div class=&quot;cb-banner__body&quot;&gt;&lt;div class=&quot;cb-banner__title&quot;&gt;Provisioning failed&lt;/div&gt;&lt;div class=&quot;cb-banner__text&quot;&gt;Node capacity was exhausted in eu-central. No charge was made.&lt;/div&gt;&lt;/div&gt;&lt;button class=&quot;cb-banner__action&quot;&gt;Retry&lt;/button&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-banner sh-banner--error&quot;&gt;&lt;span class=&quot;sh-banner__icon&quot;&gt;&lt;svg viewBox=&quot;0 0 12 12&quot;&gt;&lt;path d=&quot;M2 2 10 10M10 2 2 10&quot;/&gt;&lt;/svg&gt;&lt;/span&gt;&lt;div class=&quot;sh-banner__body&quot;&gt;&lt;div class=&quot;sh-banner__title&quot;&gt;Provisioning failed&lt;/div&gt;&lt;div class=&quot;sh-banner__text&quot;&gt;Node capacity was exhausted in eu-central. No charge was made.&lt;/div&gt;&lt;/div&gt;&lt;button class=&quot;sh-banner__action&quot;&gt;Retry&lt;/button&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="toast-success">
       <div class="ref-item__bar"><span class="ref-item__name">toast-success</span>
         <span class="ref-item__file">components/toast-success.html</span></div>
       <p class="ref-item__note">Confirms an action just taken, then disappears.</p>
       <div class="ref-demo">
-<div class="cb-toast"><span class="cb-toast__icon cb-toast__icon--success"><svg viewBox="0 0 12 12"><path d="M1.5 6.5 4.5 9.5 10.5 2.5"/></svg></span><div class="cb-toast__body"><div class="cb-toast__title">Project created</div><div class="cb-toast__text">my-app is provisioning</div></div><button class="cb-toast__action">Undo</button></div>
+<div class="sh-toast"><span class="sh-toast__icon sh-toast__icon--success"><svg viewBox="0 0 12 12"><path d="M1.5 6.5 4.5 9.5 10.5 2.5"/></svg></span><div class="sh-toast__body"><div class="sh-toast__title">Project created</div><div class="sh-toast__text">my-app is provisioning</div></div><button class="sh-toast__action">Undo</button></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-toast&quot;&gt;&lt;span class=&quot;cb-toast__icon cb-toast__icon--success&quot;&gt;&lt;svg viewBox=&quot;0 0 12 12&quot;&gt;&lt;path d=&quot;M1.5 6.5 4.5 9.5 10.5 2.5&quot;/&gt;&lt;/svg&gt;&lt;/span&gt;&lt;div class=&quot;cb-toast__body&quot;&gt;&lt;div class=&quot;cb-toast__title&quot;&gt;Project created&lt;/div&gt;&lt;div class=&quot;cb-toast__text&quot;&gt;my-app is provisioning&lt;/div&gt;&lt;/div&gt;&lt;button class=&quot;cb-toast__action&quot;&gt;Undo&lt;/button&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-toast&quot;&gt;&lt;span class=&quot;sh-toast__icon sh-toast__icon--success&quot;&gt;&lt;svg viewBox=&quot;0 0 12 12&quot;&gt;&lt;path d=&quot;M1.5 6.5 4.5 9.5 10.5 2.5&quot;/&gt;&lt;/svg&gt;&lt;/span&gt;&lt;div class=&quot;sh-toast__body&quot;&gt;&lt;div class=&quot;sh-toast__title&quot;&gt;Project created&lt;/div&gt;&lt;div class=&quot;sh-toast__text&quot;&gt;my-app is provisioning&lt;/div&gt;&lt;/div&gt;&lt;button class=&quot;sh-toast__action&quot;&gt;Undo&lt;/button&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="toast-error">
       <div class="ref-item__bar"><span class="ref-item__name">toast-error</span>
         <span class="ref-item__file">components/toast-error.html</span></div>
       
       <div class="ref-demo">
-<div class="cb-toast"><span class="cb-toast__icon cb-toast__icon--error"><svg viewBox="0 0 12 12"><path d="M2 2 10 10M10 2 2 10"/></svg></span><div class="cb-toast__body"><div class="cb-toast__title">Could not save changes</div><div class="cb-toast__text">Check your connection and try again</div></div></div>
+<div class="sh-toast"><span class="sh-toast__icon sh-toast__icon--error"><svg viewBox="0 0 12 12"><path d="M2 2 10 10M10 2 2 10"/></svg></span><div class="sh-toast__body"><div class="sh-toast__title">Could not save changes</div><div class="sh-toast__text">Check your connection and try again</div></div></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-toast&quot;&gt;&lt;span class=&quot;cb-toast__icon cb-toast__icon--error&quot;&gt;&lt;svg viewBox=&quot;0 0 12 12&quot;&gt;&lt;path d=&quot;M2 2 10 10M10 2 2 10&quot;/&gt;&lt;/svg&gt;&lt;/span&gt;&lt;div class=&quot;cb-toast__body&quot;&gt;&lt;div class=&quot;cb-toast__title&quot;&gt;Could not save changes&lt;/div&gt;&lt;div class=&quot;cb-toast__text&quot;&gt;Check your connection and try again&lt;/div&gt;&lt;/div&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-toast&quot;&gt;&lt;span class=&quot;sh-toast__icon sh-toast__icon--error&quot;&gt;&lt;svg viewBox=&quot;0 0 12 12&quot;&gt;&lt;path d=&quot;M2 2 10 10M10 2 2 10&quot;/&gt;&lt;/svg&gt;&lt;/span&gt;&lt;div class=&quot;sh-toast__body&quot;&gt;&lt;div class=&quot;sh-toast__title&quot;&gt;Could not save changes&lt;/div&gt;&lt;div class=&quot;sh-toast__text&quot;&gt;Check your connection and try again&lt;/div&gt;&lt;/div&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="tooltip">
       <div class="ref-item__bar"><span class="ref-item__name">tooltip</span>
         <span class="ref-item__file">components/tooltip.html</span></div>
       
       <div class="ref-demo">
-<span class="cb-tooltip">Copy to clipboard</span>
+<span class="sh-tooltip">Copy to clipboard</span>
       </div>
-      <pre class="ref-code">&lt;span class=&quot;cb-tooltip&quot;&gt;Copy to clipboard&lt;/span&gt;</pre>
+      <pre class="ref-code">&lt;span class=&quot;sh-tooltip&quot;&gt;Copy to clipboard&lt;/span&gt;</pre>
     </section>
     <section class="ref-item" id="validation-inline">
       <div class="ref-item__bar"><span class="ref-item__name">validation-inline</span>
         <span class="ref-item__file">components/validation-inline.html</span></div>
       <p class="ref-item__note">Errors are sentences with a fix in them.</p>
       <div class="ref-demo">
-<div class="cb-stack"><span class="cb-help cb-help--error">That name is already taken.</span><span class="cb-help" style="color:var(--cb-success)">Saved</span></div>
+<div class="sh-stack"><span class="sh-help sh-help--error">That name is already taken.</span><span class="sh-help" style="color:var(--sh-success)">Saved</span></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-stack&quot;&gt;&lt;span class=&quot;cb-help cb-help--error&quot;&gt;That name is already taken.&lt;/span&gt;&lt;span class=&quot;cb-help&quot; style=&quot;color:var(--cb-success)&quot;&gt;Saved&lt;/span&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-stack&quot;&gt;&lt;span class=&quot;sh-help sh-help--error&quot;&gt;That name is already taken.&lt;/span&gt;&lt;span class=&quot;sh-help&quot; style=&quot;color:var(--sh-success)&quot;&gt;Saved&lt;/span&gt;&lt;/div&gt;</pre>
     </section>
   </section>
   <section class="ref-group"><h2 class="ref-group__title">Cards</h2>
@@ -313,36 +313,36 @@
         <span class="ref-item__file">components/card-project-ready.html</span></div>
       <p class="ref-item__note">The spine of the dashboard.</p>
       <div class="ref-demo">
-<div class="cb-card "><div class="cb-card__title">production</div><div class="cb-card__ref">proj_7f3a9c</div><span class="cb-badge cb-badge--success"><span class="cb-dot"></span>READY</span><div class="cb-card__meta">eu-central</div><div class="cb-card__footer"><span>DB 412 MB</span><span>18.2k req / 24h</span><a class="cb-card__link" href="#">Open</a></div></div>
+<div class="sh-card "><div class="sh-card__title">production</div><div class="sh-card__ref">proj_7f3a9c</div><span class="sh-badge sh-badge--success"><span class="sh-dot"></span>READY</span><div class="sh-card__meta">eu-central</div><div class="sh-card__footer"><span>DB 412 MB</span><span>18.2k req / 24h</span><a class="sh-card__link" href="#">Open</a></div></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-card &quot;&gt;&lt;div class=&quot;cb-card__title&quot;&gt;production&lt;/div&gt;&lt;div class=&quot;cb-card__ref&quot;&gt;proj_7f3a9c&lt;/div&gt;&lt;span class=&quot;cb-badge cb-badge--success&quot;&gt;&lt;span class=&quot;cb-dot&quot;&gt;&lt;/span&gt;READY&lt;/span&gt;&lt;div class=&quot;cb-card__meta&quot;&gt;eu-central&lt;/div&gt;&lt;div class=&quot;cb-card__footer&quot;&gt;&lt;span&gt;DB 412 MB&lt;/span&gt;&lt;span&gt;18.2k req / 24h&lt;/span&gt;&lt;a class=&quot;cb-card__link&quot; href=&quot;#&quot;&gt;Open&lt;/a&gt;&lt;/div&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-card &quot;&gt;&lt;div class=&quot;sh-card__title&quot;&gt;production&lt;/div&gt;&lt;div class=&quot;sh-card__ref&quot;&gt;proj_7f3a9c&lt;/div&gt;&lt;span class=&quot;sh-badge sh-badge--success&quot;&gt;&lt;span class=&quot;sh-dot&quot;&gt;&lt;/span&gt;READY&lt;/span&gt;&lt;div class=&quot;sh-card__meta&quot;&gt;eu-central&lt;/div&gt;&lt;div class=&quot;sh-card__footer&quot;&gt;&lt;span&gt;DB 412 MB&lt;/span&gt;&lt;span&gt;18.2k req / 24h&lt;/span&gt;&lt;a class=&quot;sh-card__link&quot; href=&quot;#&quot;&gt;Open&lt;/a&gt;&lt;/div&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="card-project-paused">
       <div class="ref-item__bar"><span class="ref-item__name">card-project-paused</span>
         <span class="ref-item__file">components/card-project-paused.html</span></div>
       <p class="ref-item__note">Paused projects dim the title.</p>
       <div class="ref-demo">
-<div class="cb-card cb-card--muted"><div class="cb-card__title">staging</div><div class="cb-card__ref">proj_2b81de</div><span class="cb-badge"><span class="cb-dot"></span>PAUSED</span><div class="cb-card__meta">eu-central</div><div class="cb-card__footer"><span>DB 412 MB</span><span>18.2k req / 24h</span><a class="cb-card__link" href="#">Open</a></div></div>
+<div class="sh-card sh-card--muted"><div class="sh-card__title">staging</div><div class="sh-card__ref">proj_2b81de</div><span class="sh-badge"><span class="sh-dot"></span>PAUSED</span><div class="sh-card__meta">eu-central</div><div class="sh-card__footer"><span>DB 412 MB</span><span>18.2k req / 24h</span><a class="sh-card__link" href="#">Open</a></div></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-card cb-card--muted&quot;&gt;&lt;div class=&quot;cb-card__title&quot;&gt;staging&lt;/div&gt;&lt;div class=&quot;cb-card__ref&quot;&gt;proj_2b81de&lt;/div&gt;&lt;span class=&quot;cb-badge&quot;&gt;&lt;span class=&quot;cb-dot&quot;&gt;&lt;/span&gt;PAUSED&lt;/span&gt;&lt;div class=&quot;cb-card__meta&quot;&gt;eu-central&lt;/div&gt;&lt;div class=&quot;cb-card__footer&quot;&gt;&lt;span&gt;DB 412 MB&lt;/span&gt;&lt;span&gt;18.2k req / 24h&lt;/span&gt;&lt;a class=&quot;cb-card__link&quot; href=&quot;#&quot;&gt;Open&lt;/a&gt;&lt;/div&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-card sh-card--muted&quot;&gt;&lt;div class=&quot;sh-card__title&quot;&gt;staging&lt;/div&gt;&lt;div class=&quot;sh-card__ref&quot;&gt;proj_2b81de&lt;/div&gt;&lt;span class=&quot;sh-badge&quot;&gt;&lt;span class=&quot;sh-dot&quot;&gt;&lt;/span&gt;PAUSED&lt;/span&gt;&lt;div class=&quot;sh-card__meta&quot;&gt;eu-central&lt;/div&gt;&lt;div class=&quot;sh-card__footer&quot;&gt;&lt;span&gt;DB 412 MB&lt;/span&gt;&lt;span&gt;18.2k req / 24h&lt;/span&gt;&lt;a class=&quot;sh-card__link&quot; href=&quot;#&quot;&gt;Open&lt;/a&gt;&lt;/div&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="card-project-failed">
       <div class="ref-item__bar"><span class="ref-item__name">card-project-failed</span>
         <span class="ref-item__file">components/card-project-failed.html</span></div>
       <p class="ref-item__note">Failure gets a border, not just a badge.</p>
       <div class="ref-demo">
-<div class="cb-card cb-card--error"><div class="cb-card__title">analytics</div><div class="cb-card__ref">proj_9d02fa</div><span class="cb-badge cb-badge--error"><span class="cb-dot"></span>FAILED</span><div class="cb-card__meta">eu-central</div><div class="cb-card__footer"><span>DB 412 MB</span><span>18.2k req / 24h</span><a class="cb-card__link" href="#">Open</a></div></div>
+<div class="sh-card sh-card--error"><div class="sh-card__title">analytics</div><div class="sh-card__ref">proj_9d02fa</div><span class="sh-badge sh-badge--error"><span class="sh-dot"></span>FAILED</span><div class="sh-card__meta">eu-central</div><div class="sh-card__footer"><span>DB 412 MB</span><span>18.2k req / 24h</span><a class="sh-card__link" href="#">Open</a></div></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-card cb-card--error&quot;&gt;&lt;div class=&quot;cb-card__title&quot;&gt;analytics&lt;/div&gt;&lt;div class=&quot;cb-card__ref&quot;&gt;proj_9d02fa&lt;/div&gt;&lt;span class=&quot;cb-badge cb-badge--error&quot;&gt;&lt;span class=&quot;cb-dot&quot;&gt;&lt;/span&gt;FAILED&lt;/span&gt;&lt;div class=&quot;cb-card__meta&quot;&gt;eu-central&lt;/div&gt;&lt;div class=&quot;cb-card__footer&quot;&gt;&lt;span&gt;DB 412 MB&lt;/span&gt;&lt;span&gt;18.2k req / 24h&lt;/span&gt;&lt;a class=&quot;cb-card__link&quot; href=&quot;#&quot;&gt;Open&lt;/a&gt;&lt;/div&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-card sh-card--error&quot;&gt;&lt;div class=&quot;sh-card__title&quot;&gt;analytics&lt;/div&gt;&lt;div class=&quot;sh-card__ref&quot;&gt;proj_9d02fa&lt;/div&gt;&lt;span class=&quot;sh-badge sh-badge--error&quot;&gt;&lt;span class=&quot;sh-dot&quot;&gt;&lt;/span&gt;FAILED&lt;/span&gt;&lt;div class=&quot;sh-card__meta&quot;&gt;eu-central&lt;/div&gt;&lt;div class=&quot;sh-card__footer&quot;&gt;&lt;span&gt;DB 412 MB&lt;/span&gt;&lt;span&gt;18.2k req / 24h&lt;/span&gt;&lt;a class=&quot;sh-card__link&quot; href=&quot;#&quot;&gt;Open&lt;/a&gt;&lt;/div&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="card-stat">
       <div class="ref-item__bar"><span class="ref-item__name">card-stat</span>
         <span class="ref-item__file">components/card-stat.html</span></div>
       
       <div class="ref-demo">
-<div class="cb-row"><div class="cb-stat"><div class="cb-stat__label">DATABASE SIZE</div><div class="cb-stat__value">412 MB</div><span class="cb-stat__delta">+18 MB this week</span></div><div class="cb-stat"><div class="cb-stat__label">REQUESTS · 24H</div><div class="cb-stat__value">18,204</div><span class="cb-stat__delta cb-stat__delta--up">+12%</span></div><div class="cb-stat"><div class="cb-stat__label">ACTIVE USERS</div><div class="cb-stat__value">1,043</div><span class="cb-stat__delta cb-stat__delta--down">−3%</span></div></div>
+<div class="sh-row"><div class="sh-stat"><div class="sh-stat__label">DATABASE SIZE</div><div class="sh-stat__value">412 MB</div><span class="sh-stat__delta">+18 MB this week</span></div><div class="sh-stat"><div class="sh-stat__label">REQUESTS · 24H</div><div class="sh-stat__value">18,204</div><span class="sh-stat__delta sh-stat__delta--up">+12%</span></div><div class="sh-stat"><div class="sh-stat__label">ACTIVE USERS</div><div class="sh-stat__value">1,043</div><span class="sh-stat__delta sh-stat__delta--down">−3%</span></div></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-row&quot;&gt;&lt;div class=&quot;cb-stat&quot;&gt;&lt;div class=&quot;cb-stat__label&quot;&gt;DATABASE SIZE&lt;/div&gt;&lt;div class=&quot;cb-stat__value&quot;&gt;412 MB&lt;/div&gt;&lt;span class=&quot;cb-stat__delta&quot;&gt;+18 MB this week&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;cb-stat&quot;&gt;&lt;div class=&quot;cb-stat__label&quot;&gt;REQUESTS · 24H&lt;/div&gt;&lt;div class=&quot;cb-stat__value&quot;&gt;18,204&lt;/div&gt;&lt;span class=&quot;cb-stat__delta cb-stat__delta--up&quot;&gt;+12%&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;cb-stat&quot;&gt;&lt;div class=&quot;cb-stat__label&quot;&gt;ACTIVE USERS&lt;/div&gt;&lt;div class=&quot;cb-stat__value&quot;&gt;1,043&lt;/div&gt;&lt;span class=&quot;cb-stat__delta cb-stat__delta--down&quot;&gt;−3%&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-row&quot;&gt;&lt;div class=&quot;sh-stat&quot;&gt;&lt;div class=&quot;sh-stat__label&quot;&gt;DATABASE SIZE&lt;/div&gt;&lt;div class=&quot;sh-stat__value&quot;&gt;412 MB&lt;/div&gt;&lt;span class=&quot;sh-stat__delta&quot;&gt;+18 MB this week&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;sh-stat&quot;&gt;&lt;div class=&quot;sh-stat__label&quot;&gt;REQUESTS · 24H&lt;/div&gt;&lt;div class=&quot;sh-stat__value&quot;&gt;18,204&lt;/div&gt;&lt;span class=&quot;sh-stat__delta sh-stat__delta--up&quot;&gt;+12%&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;sh-stat&quot;&gt;&lt;div class=&quot;sh-stat__label&quot;&gt;ACTIVE USERS&lt;/div&gt;&lt;div class=&quot;sh-stat__value&quot;&gt;1,043&lt;/div&gt;&lt;span class=&quot;sh-stat__delta sh-stat__delta--down&quot;&gt;−3%&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;</pre>
     </section>
   </section>
   <section class="ref-group"><h2 class="ref-group__title">Table</h2>
@@ -351,18 +351,18 @@
         <span class="ref-item__file">components/table-full.html</span></div>
       <p class="ref-item__note">52px rows. Selection is a left accent bar so it survives greyscale.</p>
       <div class="ref-demo">
-<div style="width:100%"><table class="cb-table"><thead><tr><th>PROJECT</th><th>REF</th><th>STATUS</th><th>DB SIZE</th><th>REGION</th></tr></thead><tbody><tr><td class="cb-table__name">production</td><td class="cb-mono">proj_7f3a9c</td><td><span class="cb-badge cb-badge--success"><span class="cb-dot"></span>READY</span></td><td class="cb-mono">412 MB</td><td>eu-central</td></tr><tr><td class="cb-table__name">staging</td><td class="cb-mono">proj_2b81de</td><td><span class="cb-badge"><span class="cb-dot"></span>PAUSED</span></td><td class="cb-mono">88 MB</td><td>eu-central</td></tr><tr class="is-selected"><td class="cb-table__name">analytics</td><td class="cb-mono">proj_9d02fa</td><td><span class="cb-badge cb-badge--error"><span class="cb-dot"></span>FAILED</span></td><td class="cb-mono">—</td><td>eu-central</td></tr><tr><td class="cb-table__name">edge-cache</td><td class="cb-mono">proj_44c1a0</td><td><span class="cb-badge cb-badge--info"><span class="cb-dot"></span>PROVISIONING</span></td><td class="cb-mono">—</td><td>eu-central</td></tr><tr><td class="cb-table__name">archive</td><td class="cb-mono">proj_0ba7e2</td><td><span class="cb-badge cb-badge--warning"><span class="cb-dot"></span>RESTORING</span></td><td class="cb-mono">2.1 GB</td><td>eu-central</td></tr></tbody></table></div>
+<div style="width:100%"><table class="sh-table"><thead><tr><th>PROJECT</th><th>REF</th><th>STATUS</th><th>DB SIZE</th><th>REGION</th></tr></thead><tbody><tr><td class="sh-table__name">production</td><td class="sh-mono">proj_7f3a9c</td><td><span class="sh-badge sh-badge--success"><span class="sh-dot"></span>READY</span></td><td class="sh-mono">412 MB</td><td>eu-central</td></tr><tr><td class="sh-table__name">staging</td><td class="sh-mono">proj_2b81de</td><td><span class="sh-badge"><span class="sh-dot"></span>PAUSED</span></td><td class="sh-mono">88 MB</td><td>eu-central</td></tr><tr class="is-selected"><td class="sh-table__name">analytics</td><td class="sh-mono">proj_9d02fa</td><td><span class="sh-badge sh-badge--error"><span class="sh-dot"></span>FAILED</span></td><td class="sh-mono">—</td><td>eu-central</td></tr><tr><td class="sh-table__name">edge-cache</td><td class="sh-mono">proj_44c1a0</td><td><span class="sh-badge sh-badge--info"><span class="sh-dot"></span>PROVISIONING</span></td><td class="sh-mono">—</td><td>eu-central</td></tr><tr><td class="sh-table__name">archive</td><td class="sh-mono">proj_0ba7e2</td><td><span class="sh-badge sh-badge--warning"><span class="sh-dot"></span>RESTORING</span></td><td class="sh-mono">2.1 GB</td><td>eu-central</td></tr></tbody></table></div>
       </div>
-      <pre class="ref-code">&lt;div style=&quot;width:100%&quot;&gt;&lt;table class=&quot;cb-table&quot;&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;PROJECT&lt;/th&gt;&lt;th&gt;REF&lt;/th&gt;&lt;th&gt;STATUS&lt;/th&gt;&lt;th&gt;DB SIZE&lt;/th&gt;&lt;th&gt;REGION&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td class=&quot;cb-table__name&quot;&gt;production&lt;/td&gt;&lt;td class=&quot;cb-mono&quot;&gt;proj_7f3a9c&lt;/td&gt;&lt;td&gt;&lt;span class=&quot;cb-badge cb-badge--success&quot;&gt;&lt;span class=&quot;cb-dot&quot;&gt;&lt;/span&gt;READY&lt;/span&gt;&lt;/td&gt;&lt;td class=&quot;cb-mono&quot;&gt;412 MB&lt;/td&gt;&lt;td&gt;eu-central&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td class=&quot;cb-table__name&quot;&gt;staging&lt;/td&gt;&lt;td class=&quot;cb-mono&quot;&gt;proj_2b81de&lt;/td&gt;&lt;td&gt;&lt;span class=&quot;cb-badge&quot;&gt;&lt;span class=&quot;cb-dot&quot;&gt;&lt;/span&gt;PAUSED&lt;/span&gt;&lt;/td&gt;&lt;td class=&quot;cb-mono&quot;&gt;88 MB&lt;/td&gt;&lt;td&gt;eu-central&lt;/td&gt;&lt;/tr&gt;&lt;tr class=&quot;is-selected&quot;&gt;&lt;td class=&quot;cb-table__name&quot;&gt;analytics&lt;/td&gt;&lt;td class=&quot;cb-mono&quot;&gt;proj_9d02fa&lt;/td&gt;&lt;td&gt;&lt;span class=&quot;cb-badge cb-badge--error&quot;&gt;&lt;span class=&quot;cb-dot&quot;&gt;&lt;/span&gt;FAILED&lt;/span&gt;&lt;/td&gt;&lt;td class=&quot;cb-mono&quot;&gt;—&lt;/td&gt;&lt;td&gt;eu-central&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td class=&quot;cb-table__name&quot;&gt;edge-cache&lt;/td&gt;&lt;td class=&quot;cb-mono&quot;&gt;proj_44c1a0&lt;/td&gt;&lt;td&gt;&lt;span class=&quot;cb-badge cb-badge--info&quot;&gt;&lt;span class=&quot;cb-dot&quot;&gt;&lt;/span&gt;PROVISIONING&lt;/span&gt;&lt;/td&gt;&lt;td class=&quot;cb-mono&quot;&gt;—&lt;/td&gt;&lt;td&gt;eu-central&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td class=&quot;cb-table__name&quot;&gt;archive&lt;/td&gt;&lt;td class=&quot;cb-mono&quot;&gt;proj_0ba7e2&lt;/td&gt;&lt;td&gt;&lt;span class=&quot;cb-badge cb-badge--warning&quot;&gt;&lt;span class=&quot;cb-dot&quot;&gt;&lt;/span&gt;RESTORING&lt;/span&gt;&lt;/td&gt;&lt;td class=&quot;cb-mono&quot;&gt;2.1 GB&lt;/td&gt;&lt;td&gt;eu-central&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div style=&quot;width:100%&quot;&gt;&lt;table class=&quot;sh-table&quot;&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;PROJECT&lt;/th&gt;&lt;th&gt;REF&lt;/th&gt;&lt;th&gt;STATUS&lt;/th&gt;&lt;th&gt;DB SIZE&lt;/th&gt;&lt;th&gt;REGION&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td class=&quot;sh-table__name&quot;&gt;production&lt;/td&gt;&lt;td class=&quot;sh-mono&quot;&gt;proj_7f3a9c&lt;/td&gt;&lt;td&gt;&lt;span class=&quot;sh-badge sh-badge--success&quot;&gt;&lt;span class=&quot;sh-dot&quot;&gt;&lt;/span&gt;READY&lt;/span&gt;&lt;/td&gt;&lt;td class=&quot;sh-mono&quot;&gt;412 MB&lt;/td&gt;&lt;td&gt;eu-central&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td class=&quot;sh-table__name&quot;&gt;staging&lt;/td&gt;&lt;td class=&quot;sh-mono&quot;&gt;proj_2b81de&lt;/td&gt;&lt;td&gt;&lt;span class=&quot;sh-badge&quot;&gt;&lt;span class=&quot;sh-dot&quot;&gt;&lt;/span&gt;PAUSED&lt;/span&gt;&lt;/td&gt;&lt;td class=&quot;sh-mono&quot;&gt;88 MB&lt;/td&gt;&lt;td&gt;eu-central&lt;/td&gt;&lt;/tr&gt;&lt;tr class=&quot;is-selected&quot;&gt;&lt;td class=&quot;sh-table__name&quot;&gt;analytics&lt;/td&gt;&lt;td class=&quot;sh-mono&quot;&gt;proj_9d02fa&lt;/td&gt;&lt;td&gt;&lt;span class=&quot;sh-badge sh-badge--error&quot;&gt;&lt;span class=&quot;sh-dot&quot;&gt;&lt;/span&gt;FAILED&lt;/span&gt;&lt;/td&gt;&lt;td class=&quot;sh-mono&quot;&gt;—&lt;/td&gt;&lt;td&gt;eu-central&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td class=&quot;sh-table__name&quot;&gt;edge-cache&lt;/td&gt;&lt;td class=&quot;sh-mono&quot;&gt;proj_44c1a0&lt;/td&gt;&lt;td&gt;&lt;span class=&quot;sh-badge sh-badge--info&quot;&gt;&lt;span class=&quot;sh-dot&quot;&gt;&lt;/span&gt;PROVISIONING&lt;/span&gt;&lt;/td&gt;&lt;td class=&quot;sh-mono&quot;&gt;—&lt;/td&gt;&lt;td&gt;eu-central&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td class=&quot;sh-table__name&quot;&gt;archive&lt;/td&gt;&lt;td class=&quot;sh-mono&quot;&gt;proj_0ba7e2&lt;/td&gt;&lt;td&gt;&lt;span class=&quot;sh-badge sh-badge--warning&quot;&gt;&lt;span class=&quot;sh-dot&quot;&gt;&lt;/span&gt;RESTORING&lt;/span&gt;&lt;/td&gt;&lt;td class=&quot;sh-mono&quot;&gt;2.1 GB&lt;/td&gt;&lt;td&gt;eu-central&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="pagination">
       <div class="ref-item__bar"><span class="ref-item__name">pagination</span>
         <span class="ref-item__file">components/pagination.html</span></div>
       
       <div class="ref-demo">
-<nav class="cb-pagination" aria-label="Pagination"><button aria-label="Previous">‹</button><button aria-current="page">1</button><button>2</button><button>3</button><button aria-label="Next">›</button></nav>
+<nav class="sh-pagination" aria-label="Pagination"><button aria-label="Previous">‹</button><button aria-current="page">1</button><button>2</button><button>3</button><button aria-label="Next">›</button></nav>
       </div>
-      <pre class="ref-code">&lt;nav class=&quot;cb-pagination&quot; aria-label=&quot;Pagination&quot;&gt;&lt;button aria-label=&quot;Previous&quot;&gt;‹&lt;/button&gt;&lt;button aria-current=&quot;page&quot;&gt;1&lt;/button&gt;&lt;button&gt;2&lt;/button&gt;&lt;button&gt;3&lt;/button&gt;&lt;button aria-label=&quot;Next&quot;&gt;›&lt;/button&gt;&lt;/nav&gt;</pre>
+      <pre class="ref-code">&lt;nav class=&quot;sh-pagination&quot; aria-label=&quot;Pagination&quot;&gt;&lt;button aria-label=&quot;Previous&quot;&gt;‹&lt;/button&gt;&lt;button aria-current=&quot;page&quot;&gt;1&lt;/button&gt;&lt;button&gt;2&lt;/button&gt;&lt;button&gt;3&lt;/button&gt;&lt;button aria-label=&quot;Next&quot;&gt;›&lt;/button&gt;&lt;/nav&gt;</pre>
     </section>
   </section>
   <section class="ref-group"><h2 class="ref-group__title">Navigation</h2>
@@ -371,45 +371,45 @@
         <span class="ref-item__file">components/tabs.html</span></div>
       <p class="ref-item__note">Switching view inside a project.</p>
       <div class="ref-demo">
-<div style="width:100%"><div class="cb-tabs" role="tablist"><button class="cb-tab" role="tab" aria-selected="true">Overview</button><button class="cb-tab" role="tab" aria-selected="false">Database</button><button class="cb-tab" role="tab" aria-selected="false">Auth</button><button class="cb-tab" role="tab" aria-selected="false">Storage</button><button class="cb-tab" role="tab" aria-selected="false">Logs</button></div></div>
+<div style="width:100%"><div class="sh-tabs" role="tablist"><button class="sh-tab" role="tab" aria-selected="true">Overview</button><button class="sh-tab" role="tab" aria-selected="false">Database</button><button class="sh-tab" role="tab" aria-selected="false">Auth</button><button class="sh-tab" role="tab" aria-selected="false">Storage</button><button class="sh-tab" role="tab" aria-selected="false">Logs</button></div></div>
       </div>
-      <pre class="ref-code">&lt;div style=&quot;width:100%&quot;&gt;&lt;div class=&quot;cb-tabs&quot; role=&quot;tablist&quot;&gt;&lt;button class=&quot;cb-tab&quot; role=&quot;tab&quot; aria-selected=&quot;true&quot;&gt;Overview&lt;/button&gt;&lt;button class=&quot;cb-tab&quot; role=&quot;tab&quot; aria-selected=&quot;false&quot;&gt;Database&lt;/button&gt;&lt;button class=&quot;cb-tab&quot; role=&quot;tab&quot; aria-selected=&quot;false&quot;&gt;Auth&lt;/button&gt;&lt;button class=&quot;cb-tab&quot; role=&quot;tab&quot; aria-selected=&quot;false&quot;&gt;Storage&lt;/button&gt;&lt;button class=&quot;cb-tab&quot; role=&quot;tab&quot; aria-selected=&quot;false&quot;&gt;Logs&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div style=&quot;width:100%&quot;&gt;&lt;div class=&quot;sh-tabs&quot; role=&quot;tablist&quot;&gt;&lt;button class=&quot;sh-tab&quot; role=&quot;tab&quot; aria-selected=&quot;true&quot;&gt;Overview&lt;/button&gt;&lt;button class=&quot;sh-tab&quot; role=&quot;tab&quot; aria-selected=&quot;false&quot;&gt;Database&lt;/button&gt;&lt;button class=&quot;sh-tab&quot; role=&quot;tab&quot; aria-selected=&quot;false&quot;&gt;Auth&lt;/button&gt;&lt;button class=&quot;sh-tab&quot; role=&quot;tab&quot; aria-selected=&quot;false&quot;&gt;Storage&lt;/button&gt;&lt;button class=&quot;sh-tab&quot; role=&quot;tab&quot; aria-selected=&quot;false&quot;&gt;Logs&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="breadcrumb">
       <div class="ref-item__bar"><span class="ref-item__name">breadcrumb</span>
         <span class="ref-item__file">components/breadcrumb.html</span></div>
       
       <div class="ref-demo">
-<nav class="cb-breadcrumb" aria-label="Breadcrumb"><a href="#">Greenbull</a><svg viewBox="0 0 6 8"><path d="M1 1 4 4 1 7"/></svg><a href="#">production</a><svg viewBox="0 0 6 8"><path d="M1 1 4 4 1 7"/></svg><span aria-current="page">Database</span></nav>
+<nav class="sh-breadcrumb" aria-label="Breadcrumb"><a href="#">Greenbull</a><svg viewBox="0 0 6 8"><path d="M1 1 4 4 1 7"/></svg><a href="#">production</a><svg viewBox="0 0 6 8"><path d="M1 1 4 4 1 7"/></svg><span aria-current="page">Database</span></nav>
       </div>
-      <pre class="ref-code">&lt;nav class=&quot;cb-breadcrumb&quot; aria-label=&quot;Breadcrumb&quot;&gt;&lt;a href=&quot;#&quot;&gt;Greenbull&lt;/a&gt;&lt;svg viewBox=&quot;0 0 6 8&quot;&gt;&lt;path d=&quot;M1 1 4 4 1 7&quot;/&gt;&lt;/svg&gt;&lt;a href=&quot;#&quot;&gt;production&lt;/a&gt;&lt;svg viewBox=&quot;0 0 6 8&quot;&gt;&lt;path d=&quot;M1 1 4 4 1 7&quot;/&gt;&lt;/svg&gt;&lt;span aria-current=&quot;page&quot;&gt;Database&lt;/span&gt;&lt;/nav&gt;</pre>
+      <pre class="ref-code">&lt;nav class=&quot;sh-breadcrumb&quot; aria-label=&quot;Breadcrumb&quot;&gt;&lt;a href=&quot;#&quot;&gt;Greenbull&lt;/a&gt;&lt;svg viewBox=&quot;0 0 6 8&quot;&gt;&lt;path d=&quot;M1 1 4 4 1 7&quot;/&gt;&lt;/svg&gt;&lt;a href=&quot;#&quot;&gt;production&lt;/a&gt;&lt;svg viewBox=&quot;0 0 6 8&quot;&gt;&lt;path d=&quot;M1 1 4 4 1 7&quot;/&gt;&lt;/svg&gt;&lt;span aria-current=&quot;page&quot;&gt;Database&lt;/span&gt;&lt;/nav&gt;</pre>
     </section>
     <section class="ref-item" id="segmented-control">
       <div class="ref-item__bar"><span class="ref-item__name">segmented-control</span>
         <span class="ref-item__file">components/segmented-control.html</span></div>
       
       <div class="ref-demo">
-<div class="cb-segmented"><button aria-pressed="true">Table</button><button aria-pressed="false">SQL</button><button aria-pressed="false">Graph</button></div>
+<div class="sh-segmented"><button aria-pressed="true">Table</button><button aria-pressed="false">SQL</button><button aria-pressed="false">Graph</button></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-segmented&quot;&gt;&lt;button aria-pressed=&quot;true&quot;&gt;Table&lt;/button&gt;&lt;button aria-pressed=&quot;false&quot;&gt;SQL&lt;/button&gt;&lt;button aria-pressed=&quot;false&quot;&gt;Graph&lt;/button&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-segmented&quot;&gt;&lt;button aria-pressed=&quot;true&quot;&gt;Table&lt;/button&gt;&lt;button aria-pressed=&quot;false&quot;&gt;SQL&lt;/button&gt;&lt;button aria-pressed=&quot;false&quot;&gt;Graph&lt;/button&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="sidebar">
       <div class="ref-item__bar"><span class="ref-item__name">sidebar</span>
         <span class="ref-item__file">components/sidebar.html</span></div>
       <p class="ref-item__note">Active item: accent-subtle fill plus a 3px bar.</p>
       <div class="ref-demo">
-<nav class="cb-sidebar"><a class="cb-nav-item" href="#" aria-current="page"><span class="cb-nav-item__icon"></span>Overview</a><a class="cb-nav-item" href="#"><span class="cb-nav-item__icon"></span>Table editor</a><a class="cb-nav-item" href="#"><span class="cb-nav-item__icon"></span>SQL editor</a><a class="cb-nav-item" href="#"><span class="cb-nav-item__icon"></span>Authentication</a><a class="cb-nav-item" href="#"><span class="cb-nav-item__icon"></span>Storage</a><a class="cb-nav-item" href="#"><span class="cb-nav-item__icon"></span>Backups</a><a class="cb-nav-item" href="#"><span class="cb-nav-item__icon"></span>Settings</a></nav>
+<nav class="sh-sidebar"><a class="sh-nav-item" href="#" aria-current="page"><span class="sh-nav-item__icon"></span>Overview</a><a class="sh-nav-item" href="#"><span class="sh-nav-item__icon"></span>Table editor</a><a class="sh-nav-item" href="#"><span class="sh-nav-item__icon"></span>SQL editor</a><a class="sh-nav-item" href="#"><span class="sh-nav-item__icon"></span>Authentication</a><a class="sh-nav-item" href="#"><span class="sh-nav-item__icon"></span>Storage</a><a class="sh-nav-item" href="#"><span class="sh-nav-item__icon"></span>Backups</a><a class="sh-nav-item" href="#"><span class="sh-nav-item__icon"></span>Settings</a></nav>
       </div>
-      <pre class="ref-code">&lt;nav class=&quot;cb-sidebar&quot;&gt;&lt;a class=&quot;cb-nav-item&quot; href=&quot;#&quot; aria-current=&quot;page&quot;&gt;&lt;span class=&quot;cb-nav-item__icon&quot;&gt;&lt;/span&gt;Overview&lt;/a&gt;&lt;a class=&quot;cb-nav-item&quot; href=&quot;#&quot;&gt;&lt;span class=&quot;cb-nav-item__icon&quot;&gt;&lt;/span&gt;Table editor&lt;/a&gt;&lt;a class=&quot;cb-nav-item&quot; href=&quot;#&quot;&gt;&lt;span class=&quot;cb-nav-item__icon&quot;&gt;&lt;/span&gt;SQL editor&lt;/a&gt;&lt;a class=&quot;cb-nav-item&quot; href=&quot;#&quot;&gt;&lt;span class=&quot;cb-nav-item__icon&quot;&gt;&lt;/span&gt;Authentication&lt;/a&gt;&lt;a class=&quot;cb-nav-item&quot; href=&quot;#&quot;&gt;&lt;span class=&quot;cb-nav-item__icon&quot;&gt;&lt;/span&gt;Storage&lt;/a&gt;&lt;a class=&quot;cb-nav-item&quot; href=&quot;#&quot;&gt;&lt;span class=&quot;cb-nav-item__icon&quot;&gt;&lt;/span&gt;Backups&lt;/a&gt;&lt;a class=&quot;cb-nav-item&quot; href=&quot;#&quot;&gt;&lt;span class=&quot;cb-nav-item__icon&quot;&gt;&lt;/span&gt;Settings&lt;/a&gt;&lt;/nav&gt;</pre>
+      <pre class="ref-code">&lt;nav class=&quot;sh-sidebar&quot;&gt;&lt;a class=&quot;sh-nav-item&quot; href=&quot;#&quot; aria-current=&quot;page&quot;&gt;&lt;span class=&quot;sh-nav-item__icon&quot;&gt;&lt;/span&gt;Overview&lt;/a&gt;&lt;a class=&quot;sh-nav-item&quot; href=&quot;#&quot;&gt;&lt;span class=&quot;sh-nav-item__icon&quot;&gt;&lt;/span&gt;Table editor&lt;/a&gt;&lt;a class=&quot;sh-nav-item&quot; href=&quot;#&quot;&gt;&lt;span class=&quot;sh-nav-item__icon&quot;&gt;&lt;/span&gt;SQL editor&lt;/a&gt;&lt;a class=&quot;sh-nav-item&quot; href=&quot;#&quot;&gt;&lt;span class=&quot;sh-nav-item__icon&quot;&gt;&lt;/span&gt;Authentication&lt;/a&gt;&lt;a class=&quot;sh-nav-item&quot; href=&quot;#&quot;&gt;&lt;span class=&quot;sh-nav-item__icon&quot;&gt;&lt;/span&gt;Storage&lt;/a&gt;&lt;a class=&quot;sh-nav-item&quot; href=&quot;#&quot;&gt;&lt;span class=&quot;sh-nav-item__icon&quot;&gt;&lt;/span&gt;Backups&lt;/a&gt;&lt;a class=&quot;sh-nav-item&quot; href=&quot;#&quot;&gt;&lt;span class=&quot;sh-nav-item__icon&quot;&gt;&lt;/span&gt;Settings&lt;/a&gt;&lt;/nav&gt;</pre>
     </section>
     <section class="ref-item" id="project-switcher">
       <div class="ref-item__bar"><span class="ref-item__name">project-switcher</span>
         <span class="ref-item__file">components/project-switcher.html</span></div>
       
       <div class="ref-demo">
-<div><div class="cb-switcher"><span class="cb-switcher__avatar"></span><div><div class="cb-switcher__name">production</div><div class="cb-switcher__org">Greenbull · Pro</div></div></div><div class="cb-menu"><a class="cb-menu__item is-active" href="#"><span class="cb-status__dot cb-status__dot--success"></span>production</a><a class="cb-menu__item" href="#"><span class="cb-status__dot cb-status__dot--muted"></span>staging</a><a class="cb-menu__item" href="#"><span class="cb-status__dot cb-status__dot--error"></span>analytics</a><a class="cb-menu__item cb-menu__item--accent" href="#">+ New project</a></div></div>
+<div><div class="sh-switcher"><span class="sh-switcher__avatar"></span><div><div class="sh-switcher__name">production</div><div class="sh-switcher__org">Greenbull · Pro</div></div></div><div class="sh-menu"><a class="sh-menu__item is-active" href="#"><span class="sh-status__dot sh-status__dot--success"></span>production</a><a class="sh-menu__item" href="#"><span class="sh-status__dot sh-status__dot--muted"></span>staging</a><a class="sh-menu__item" href="#"><span class="sh-status__dot sh-status__dot--error"></span>analytics</a><a class="sh-menu__item sh-menu__item--accent" href="#">+ New project</a></div></div>
       </div>
-      <pre class="ref-code">&lt;div&gt;&lt;div class=&quot;cb-switcher&quot;&gt;&lt;span class=&quot;cb-switcher__avatar&quot;&gt;&lt;/span&gt;&lt;div&gt;&lt;div class=&quot;cb-switcher__name&quot;&gt;production&lt;/div&gt;&lt;div class=&quot;cb-switcher__org&quot;&gt;Greenbull · Pro&lt;/div&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class=&quot;cb-menu&quot;&gt;&lt;a class=&quot;cb-menu__item is-active&quot; href=&quot;#&quot;&gt;&lt;span class=&quot;cb-status__dot cb-status__dot--success&quot;&gt;&lt;/span&gt;production&lt;/a&gt;&lt;a class=&quot;cb-menu__item&quot; href=&quot;#&quot;&gt;&lt;span class=&quot;cb-status__dot cb-status__dot--muted&quot;&gt;&lt;/span&gt;staging&lt;/a&gt;&lt;a class=&quot;cb-menu__item&quot; href=&quot;#&quot;&gt;&lt;span class=&quot;cb-status__dot cb-status__dot--error&quot;&gt;&lt;/span&gt;analytics&lt;/a&gt;&lt;a class=&quot;cb-menu__item cb-menu__item--accent&quot; href=&quot;#&quot;&gt;+ New project&lt;/a&gt;&lt;/div&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div&gt;&lt;div class=&quot;sh-switcher&quot;&gt;&lt;span class=&quot;sh-switcher__avatar&quot;&gt;&lt;/span&gt;&lt;div&gt;&lt;div class=&quot;sh-switcher__name&quot;&gt;production&lt;/div&gt;&lt;div class=&quot;sh-switcher__org&quot;&gt;Greenbull · Pro&lt;/div&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class=&quot;sh-menu&quot;&gt;&lt;a class=&quot;sh-menu__item is-active&quot; href=&quot;#&quot;&gt;&lt;span class=&quot;sh-status__dot sh-status__dot--success&quot;&gt;&lt;/span&gt;production&lt;/a&gt;&lt;a class=&quot;sh-menu__item&quot; href=&quot;#&quot;&gt;&lt;span class=&quot;sh-status__dot sh-status__dot--muted&quot;&gt;&lt;/span&gt;staging&lt;/a&gt;&lt;a class=&quot;sh-menu__item&quot; href=&quot;#&quot;&gt;&lt;span class=&quot;sh-status__dot sh-status__dot--error&quot;&gt;&lt;/span&gt;analytics&lt;/a&gt;&lt;a class=&quot;sh-menu__item sh-menu__item--accent&quot; href=&quot;#&quot;&gt;+ New project&lt;/a&gt;&lt;/div&gt;&lt;/div&gt;</pre>
     </section>
   </section>
   <section class="ref-group"><h2 class="ref-group__title">Overlays</h2>
@@ -418,23 +418,23 @@
         <span class="ref-item__file">components/dialog-destructive.html</span></div>
       <p class="ref-item__note">Deletion requires typing the project name.</p>
       <div class="ref-demo">
-<div class="cb-scrim"><div class="cb-dialog"><div class="cb-dialog__title">Delete production?</div><div class="cb-dialog__text">This deletes the database, storage objects and all backups. Recoverable for 7 days, then permanent.</div><div class="cb-field" style="max-width:none"><label class="cb-label" for="cf">Type production to confirm</label><input class="cb-input" id="cf" style="font:var(--cb-code)" value="production"></div><div class="cb-dialog__footer"><button class="cb-btn cb-btn--secondary">Cancel</button><button class="cb-btn cb-btn--danger">Delete project</button></div></div></div>
+<div class="sh-scrim"><div class="sh-dialog"><div class="sh-dialog__title">Delete production?</div><div class="sh-dialog__text">This deletes the database, storage objects and all backups. Recoverable for 7 days, then permanent.</div><div class="sh-field" style="max-width:none"><label class="sh-label" for="cf">Type production to confirm</label><input class="sh-input" id="cf" style="font:var(--sh-code)" value="production"></div><div class="sh-dialog__footer"><button class="sh-btn sh-btn--secondary">Cancel</button><button class="sh-btn sh-btn--danger">Delete project</button></div></div></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-scrim&quot;&gt;&lt;div class=&quot;cb-dialog&quot;&gt;&lt;div class=&quot;cb-dialog__title&quot;&gt;Delete production?&lt;/div&gt;&lt;div class=&quot;cb-dialog__text&quot;&gt;This deletes the database, storage objects and all backups. Recoverable for 7 days, then permanent.&lt;/div&gt;&lt;div class=&quot;cb-field&quot; style=&quot;max-width:none&quot;&gt;&lt;label class=&quot;cb-label&quot; for=&quot;cf&quot;&gt;Type production to confirm&lt;/label&gt;&lt;input class=&quot;cb-input&quot; id=&quot;cf&quot; style=&quot;font:var(--cb-code)&quot; value=&quot;production&quot;&gt;&lt;/div&gt;&lt;div class=&quot;cb-dialog__footer&quot;&gt;&lt;button class=&quot;cb-btn cb-btn--secondary&quot;&gt;Cancel&lt;/button&gt;&lt;button class=&quot;cb-btn cb-btn--danger&quot;&gt;Delete project&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-scrim&quot;&gt;&lt;div class=&quot;sh-dialog&quot;&gt;&lt;div class=&quot;sh-dialog__title&quot;&gt;Delete production?&lt;/div&gt;&lt;div class=&quot;sh-dialog__text&quot;&gt;This deletes the database, storage objects and all backups. Recoverable for 7 days, then permanent.&lt;/div&gt;&lt;div class=&quot;sh-field&quot; style=&quot;max-width:none&quot;&gt;&lt;label class=&quot;sh-label&quot; for=&quot;cf&quot;&gt;Type production to confirm&lt;/label&gt;&lt;input class=&quot;sh-input&quot; id=&quot;cf&quot; style=&quot;font:var(--sh-code)&quot; value=&quot;production&quot;&gt;&lt;/div&gt;&lt;div class=&quot;sh-dialog__footer&quot;&gt;&lt;button class=&quot;sh-btn sh-btn--secondary&quot;&gt;Cancel&lt;/button&gt;&lt;button class=&quot;sh-btn sh-btn--danger&quot;&gt;Delete project&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="code-block">
       <div class="ref-item__bar"><span class="ref-item__name">code-block</span>
         <span class="ref-item__file">components/code-block.html</span></div>
       <p class="ref-item__note">Mono on the code surface in both themes.</p>
       <div class="ref-demo">
-<div class="cb-code"><div class="cb-code__header"><span class="cb-code__lang">SQL</span><button class="cb-code__copy">copy</button></div><pre><span class="k">select</span> ref, status, created_at
+<div class="sh-code"><div class="sh-code__header"><span class="sh-code__lang">SQL</span><button class="sh-code__copy">copy</button></div><pre><span class="k">select</span> ref, status, created_at
 <span class="k">from</span> projects
 <span class="k">where</span> status = <span class="s">'READY'</span>;
 <span class="k">order by</span> created_at <span class="k">desc</span>;
 
 <span class="c">-- 23 rows · 41 ms</span></pre></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-code&quot;&gt;&lt;div class=&quot;cb-code__header&quot;&gt;&lt;span class=&quot;cb-code__lang&quot;&gt;SQL&lt;/span&gt;&lt;button class=&quot;cb-code__copy&quot;&gt;copy&lt;/button&gt;&lt;/div&gt;&lt;pre&gt;&lt;span class=&quot;k&quot;&gt;select&lt;/span&gt; ref, status, created_at
+      <pre class="ref-code">&lt;div class=&quot;sh-code&quot;&gt;&lt;div class=&quot;sh-code__header&quot;&gt;&lt;span class=&quot;sh-code__lang&quot;&gt;SQL&lt;/span&gt;&lt;button class=&quot;sh-code__copy&quot;&gt;copy&lt;/button&gt;&lt;/div&gt;&lt;pre&gt;&lt;span class=&quot;k&quot;&gt;select&lt;/span&gt; ref, status, created_at
 &lt;span class=&quot;k&quot;&gt;from&lt;/span&gt; projects
 &lt;span class=&quot;k&quot;&gt;where&lt;/span&gt; status = &lt;span class=&quot;s&quot;&gt;&#x27;READY&#x27;&lt;/span&gt;;
 &lt;span class=&quot;k&quot;&gt;order by&lt;/span&gt; created_at &lt;span class=&quot;k&quot;&gt;desc&lt;/span&gt;;
@@ -446,24 +446,24 @@
         <span class="ref-item__file">components/empty-state.html</span></div>
       
       <div class="ref-demo">
-<div class="cb-empty"><div class="cb-empty__icon">+</div><div class="cb-empty__title">No projects yet</div><div class="cb-empty__text">Create your first project to get started.</div><button class="cb-btn">New project</button></div>
+<div class="sh-empty"><div class="sh-empty__icon">+</div><div class="sh-empty__title">No projects yet</div><div class="sh-empty__text">Create your first project to get started.</div><button class="sh-btn">New project</button></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-empty&quot;&gt;&lt;div class=&quot;cb-empty__icon&quot;&gt;+&lt;/div&gt;&lt;div class=&quot;cb-empty__title&quot;&gt;No projects yet&lt;/div&gt;&lt;div class=&quot;cb-empty__text&quot;&gt;Create your first project to get started.&lt;/div&gt;&lt;button class=&quot;cb-btn&quot;&gt;New project&lt;/button&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-empty&quot;&gt;&lt;div class=&quot;sh-empty__icon&quot;&gt;+&lt;/div&gt;&lt;div class=&quot;sh-empty__title&quot;&gt;No projects yet&lt;/div&gt;&lt;div class=&quot;sh-empty__text&quot;&gt;Create your first project to get started.&lt;/div&gt;&lt;button class=&quot;sh-btn&quot;&gt;New project&lt;/button&gt;&lt;/div&gt;</pre>
     </section>
     <section class="ref-item" id="loading-progress-skeleton">
       <div class="ref-item__bar"><span class="ref-item__name">loading-progress-skeleton</span>
         <span class="ref-item__file">components/loading-progress-skeleton.html</span></div>
       <p class="ref-item__note">Skeletons match the shape of what they replace.</p>
       <div class="ref-demo">
-<div class="cb-stack" style="width:320px"><div class="cb-row"><div class="cb-progress" style="flex:1"><div class="cb-progress__fill" style="width:60%"></div></div><span class="cb-help">60%</span></div><div class="cb-skeleton" style="width:70%"></div><div class="cb-skeleton" style="width:90%"></div><div class="cb-skeleton" style="width:50%"></div><div class="cb-spinner" role="status" aria-label="Loading"></div></div>
+<div class="sh-stack" style="width:320px"><div class="sh-row"><div class="sh-progress" style="flex:1"><div class="sh-progress__fill" style="width:60%"></div></div><span class="sh-help">60%</span></div><div class="sh-skeleton" style="width:70%"></div><div class="sh-skeleton" style="width:90%"></div><div class="sh-skeleton" style="width:50%"></div><div class="sh-spinner" role="status" aria-label="Loading"></div></div>
       </div>
-      <pre class="ref-code">&lt;div class=&quot;cb-stack&quot; style=&quot;width:320px&quot;&gt;&lt;div class=&quot;cb-row&quot;&gt;&lt;div class=&quot;cb-progress&quot; style=&quot;flex:1&quot;&gt;&lt;div class=&quot;cb-progress__fill&quot; style=&quot;width:60%&quot;&gt;&lt;/div&gt;&lt;/div&gt;&lt;span class=&quot;cb-help&quot;&gt;60%&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;cb-skeleton&quot; style=&quot;width:70%&quot;&gt;&lt;/div&gt;&lt;div class=&quot;cb-skeleton&quot; style=&quot;width:90%&quot;&gt;&lt;/div&gt;&lt;div class=&quot;cb-skeleton&quot; style=&quot;width:50%&quot;&gt;&lt;/div&gt;&lt;div class=&quot;cb-spinner&quot; role=&quot;status&quot; aria-label=&quot;Loading&quot;&gt;&lt;/div&gt;&lt;/div&gt;</pre>
+      <pre class="ref-code">&lt;div class=&quot;sh-stack&quot; style=&quot;width:320px&quot;&gt;&lt;div class=&quot;sh-row&quot;&gt;&lt;div class=&quot;sh-progress&quot; style=&quot;flex:1&quot;&gt;&lt;div class=&quot;sh-progress__fill&quot; style=&quot;width:60%&quot;&gt;&lt;/div&gt;&lt;/div&gt;&lt;span class=&quot;sh-help&quot;&gt;60%&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;sh-skeleton&quot; style=&quot;width:70%&quot;&gt;&lt;/div&gt;&lt;div class=&quot;sh-skeleton&quot; style=&quot;width:90%&quot;&gt;&lt;/div&gt;&lt;div class=&quot;sh-skeleton&quot; style=&quot;width:50%&quot;&gt;&lt;/div&gt;&lt;div class=&quot;sh-spinner&quot; role=&quot;status&quot; aria-label=&quot;Loading&quot;&gt;&lt;/div&gt;&lt;/div&gt;</pre>
     </section>
   </section>
 </main>
 <script>
 (function(){
-  var r=document.documentElement, K='cb-theme';
+  var r=document.documentElement, K='sh-theme';
   try{var s=localStorage.getItem(K); if(s) r.setAttribute('data-theme',s);}catch(e){}
   window.cbToggle=function(){
     var cur=r.getAttribute('data-theme');

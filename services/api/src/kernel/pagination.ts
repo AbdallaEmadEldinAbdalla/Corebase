@@ -1,5 +1,5 @@
 import { ApiError } from './errors.ts';
-import { ERROR_CODES } from '@corebase/types';
+import { ERROR_CODES } from '@steadhold/types';
 
 /**
  * Cursor pagination (D-039): `?limit=` and `?cursor=`, an opaque cursor carrying

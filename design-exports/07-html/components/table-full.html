@@ -3,23 +3,23 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>table-full — Corebase</title>
+<title>table-full — Steadhold</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap">
 <link rel="stylesheet" href="../tokens.css">
 <link rel="stylesheet" href="../components.css">
 </head>
 <body>
-<div class="ref-toggle"><button class="cb-btn cb-btn--secondary cb-btn--sm" onclick="cbToggle()">Theme: <span class="js-theme-label">Light</span></button></div>
+<div class="ref-toggle"><button class="sh-btn sh-btn--secondary sh-btn--sm" onclick="cbToggle()">Theme: <span class="js-theme-label">Light</span></button></div>
 <main class="ref-main">
   <h1 class="ref-item__name">table-full</h1>
   <p class="ref-sub">52px rows. Selection is a left accent bar so it survives greyscale.</p>
   <div class="ref-demo">
-<div style="width:100%"><table class="cb-table"><thead><tr><th>PROJECT</th><th>REF</th><th>STATUS</th><th>DB SIZE</th><th>REGION</th></tr></thead><tbody><tr><td class="cb-table__name">production</td><td class="cb-mono">proj_7f3a9c</td><td><span class="cb-badge cb-badge--success"><span class="cb-dot"></span>READY</span></td><td class="cb-mono">412 MB</td><td>eu-central</td></tr><tr><td class="cb-table__name">staging</td><td class="cb-mono">proj_2b81de</td><td><span class="cb-badge"><span class="cb-dot"></span>PAUSED</span></td><td class="cb-mono">88 MB</td><td>eu-central</td></tr><tr class="is-selected"><td class="cb-table__name">analytics</td><td class="cb-mono">proj_9d02fa</td><td><span class="cb-badge cb-badge--error"><span class="cb-dot"></span>FAILED</span></td><td class="cb-mono">—</td><td>eu-central</td></tr><tr><td class="cb-table__name">edge-cache</td><td class="cb-mono">proj_44c1a0</td><td><span class="cb-badge cb-badge--info"><span class="cb-dot"></span>PROVISIONING</span></td><td class="cb-mono">—</td><td>eu-central</td></tr><tr><td class="cb-table__name">archive</td><td class="cb-mono">proj_0ba7e2</td><td><span class="cb-badge cb-badge--warning"><span class="cb-dot"></span>RESTORING</span></td><td class="cb-mono">2.1 GB</td><td>eu-central</td></tr></tbody></table></div>
+<div style="width:100%"><table class="sh-table"><thead><tr><th>PROJECT</th><th>REF</th><th>STATUS</th><th>DB SIZE</th><th>REGION</th></tr></thead><tbody><tr><td class="sh-table__name">production</td><td class="sh-mono">proj_7f3a9c</td><td><span class="sh-badge sh-badge--success"><span class="sh-dot"></span>READY</span></td><td class="sh-mono">412 MB</td><td>eu-central</td></tr><tr><td class="sh-table__name">staging</td><td class="sh-mono">proj_2b81de</td><td><span class="sh-badge"><span class="sh-dot"></span>PAUSED</span></td><td class="sh-mono">88 MB</td><td>eu-central</td></tr><tr class="is-selected"><td class="sh-table__name">analytics</td><td class="sh-mono">proj_9d02fa</td><td><span class="sh-badge sh-badge--error"><span class="sh-dot"></span>FAILED</span></td><td class="sh-mono">—</td><td>eu-central</td></tr><tr><td class="sh-table__name">edge-cache</td><td class="sh-mono">proj_44c1a0</td><td><span class="sh-badge sh-badge--info"><span class="sh-dot"></span>PROVISIONING</span></td><td class="sh-mono">—</td><td>eu-central</td></tr><tr><td class="sh-table__name">archive</td><td class="sh-mono">proj_0ba7e2</td><td><span class="sh-badge sh-badge--warning"><span class="sh-dot"></span>RESTORING</span></td><td class="sh-mono">2.1 GB</td><td>eu-central</td></tr></tbody></table></div>
   </div>
 </main>
 <script>
 (function(){
-  var r=document.documentElement, K='cb-theme';
+  var r=document.documentElement, K='sh-theme';
   try{var s=localStorage.getItem(K); if(s) r.setAttribute('data-theme',s);}catch(e){}
   window.cbToggle=function(){
     var cur=r.getAttribute('data-theme');

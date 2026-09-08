@@ -53,7 +53,7 @@ export function RotateCredentials({ projectRef }: { projectRef: string }) {
 
   return (
     <>
-      <button ref={trigger} type="button" className="cb-btn cb-btn--secondary cb-btn--sm"
+      <button ref={trigger} type="button" className="sh-btn sh-btn--secondary sh-btn--sm"
               onClick={() => setOpen(true)}>
         Rotate credentials
       </button>
@@ -61,10 +61,10 @@ export function RotateCredentials({ projectRef }: { projectRef: string }) {
       {open ? (
         <div className="layer layer--center"
              onMouseDown={(e) => { if (e.target === e.currentTarget) setOpen(false); }}>
-          <div className="cb-dialog" role="dialog" aria-modal="true" tabIndex={-1}
+          <div className="sh-dialog" role="dialog" aria-modal="true" tabIndex={-1}
                ref={dialog} aria-label="Rotate credentials" style={{ width: 460 }}>
-            <div className="cb-dialog__title">Rotate database credentials?</div>
-            <div className="cb-dialog__text">
+            <div className="sh-dialog__title">Rotate database credentials?</div>
+            <div className="sh-dialog__text">
               A new password is generated and applied. <strong>Applications already
               connected keep working</strong> — Postgres only checks the password when a
               connection is opened. Anything that opens a <em>new</em> connection needs
@@ -72,15 +72,15 @@ export function RotateCredentials({ projectRef }: { projectRef: string }) {
             </div>
 
             {rotate.error ? (
-              <div style={{ marginBottom: 'var(--cb-space-4)' }}>
+              <div style={{ marginBottom: 'var(--sh-space-4)' }}>
                 <ErrorSurface error={rotate.error} />
               </div>
             ) : null}
 
-            <label className="row" style={{ alignItems: 'flex-start', gap: 'var(--cb-space-3)' }}>
-              <input type="checkbox" className="cb-check" checked={terminate}
+            <label className="row" style={{ alignItems: 'flex-start', gap: 'var(--sh-space-3)' }}>
+              <input type="checkbox" className="sh-check" checked={terminate}
                      onChange={(e) => setTerminate(e.target.checked)} />
-              <span style={{ font: 'var(--cb-body-s)' }}>
+              <span style={{ font: 'var(--sh-body-s)' }}>
                 <strong>Also disconnect everything now.</strong>
                 <br />
                 <span className="muted">
@@ -91,14 +91,14 @@ export function RotateCredentials({ projectRef }: { projectRef: string }) {
               </span>
             </label>
 
-            <div className="cb-dialog__footer"
-                 style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--cb-space-2)' }}>
-              <button type="button" className="cb-btn cb-btn--secondary"
+            <div className="sh-dialog__footer"
+                 style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--sh-space-2)' }}>
+              <button type="button" className="sh-btn sh-btn--secondary"
                       onClick={() => { setOpen(false); trigger.current?.focus(); }}>
                 Cancel
               </button>
               <button type="button"
-                      className={`cb-btn${terminate ? ' cb-btn--danger' : ''}`}
+                      className={`sh-btn${terminate ? ' sh-btn--danger' : ''}`}
                       disabled={rotate.isPending} onClick={() => void run()}>
                 {rotate.isPending ? 'Rotating…'
                   : terminate ? 'Rotate and disconnect' : 'Rotate'}

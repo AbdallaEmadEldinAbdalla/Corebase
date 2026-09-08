@@ -40,7 +40,7 @@ export default function NewProjectPage({ params }: { params: Promise<{ slug: str
     () => `dash-${globalThis.crypto.randomUUID()}`, [keySeed]);
 
   const trimmed = name.trim();
-  // Mirrors CreateProjectRequest in @corebase/types — a single character fails
+  // Mirrors CreateProjectRequest in @steadhold/types — a single character fails
   // there too, since the rule needs a first *and* a last character.
   const shapeOk = trimmed.length >= 2 && trimmed.length <= 63 && NAME_RULE.test(trimmed);
   // Names are unique within the organization (D-217), so the collision is knowable
@@ -74,16 +74,16 @@ export default function NewProjectPage({ params }: { params: Promise<{ slug: str
       </div>
 
       {create.error ? (
-        <div style={{ marginBottom: 'var(--cb-space-4)' }}>
+        <div style={{ marginBottom: 'var(--sh-space-4)' }}>
           <ErrorSurface error={create.error} />
         </div>
       ) : null}
 
       <form onSubmit={submit} className="card">
         <div className="card__body">
-          <div className="cb-field">
-            <label className="cb-label" htmlFor="name">Project name</label>
-            <input className={`cb-input${showError ? ' cb-input--error' : ''}`}
+          <div className="sh-field">
+            <label className="sh-label" htmlFor="name">Project name</label>
+            <input className={`sh-input${showError ? ' sh-input--error' : ''}`}
                    id="name" value={name} autoFocus autoComplete="off" spellCheck={false}
                    placeholder="my-app"
                    aria-invalid={showError}
@@ -96,12 +96,12 @@ export default function NewProjectPage({ params }: { params: Promise<{ slug: str
                     ? `${org?.name ?? 'This organization'} already has a project called ${trimmed}. Names are unique within an organization.`
                     : 'Lowercase letters, numbers and dashes, starting and ending with a letter or number — this becomes part of URLs and role names.'}
                 </FieldError>
-              : <span className="cb-help">
+              : <span className="sh-help">
                   Lowercase letters, numbers and dashes. Unique within {org?.name ?? 'this organization'}.
                 </span>}
           </div>
 
-          <div className="facts" style={{ marginTop: 'var(--cb-space-5)' }}>
+          <div className="facts" style={{ marginTop: 'var(--sh-space-5)' }}>
             <div className="facts__k">Region</div>
             <div className="facts__v">eu-central <span className="muted">· the only region today</span></div>
             <div className="facts__k">Plan</div>
@@ -112,11 +112,11 @@ export default function NewProjectPage({ params }: { params: Promise<{ slug: str
         </div>
 
         <div className="card__foot" style={{ justifyContent: 'flex-end' }}>
-          <button className="cb-btn cb-btn--secondary" type="button"
+          <button className="sh-btn sh-btn--secondary" type="button"
                   onClick={() => router.push(`/org/${slug}`)}>
             Cancel
           </button>
-          <button className="cb-btn" type="submit"
+          <button className="sh-btn" type="submit"
                   disabled={!org || !valid || create.isPending}>
             {create.isPending ? 'Creating…' : 'Create project'}
           </button>

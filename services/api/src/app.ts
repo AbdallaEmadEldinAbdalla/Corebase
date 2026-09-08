@@ -113,10 +113,10 @@ export function buildApp(opts: BuildOptions = {}): FastifyInstance {
   registerControlPlane(app, {
     store: opts.store ?? createMemoryStore(),
     // No fallback. A default here is a credential: an API deployed without
-    // CB_STATIC_TOKEN used to accept the literal string 'dev-token' as the
+    // SH_STATIC_TOKEN used to accept the literal string 'dev-token' as the
     // bootstrap owner. Absent now means the static-token path does not exist.
-    ...(opts.staticToken ?? process.env.CB_STATIC_TOKEN
-      ? { staticToken: opts.staticToken ?? process.env.CB_STATIC_TOKEN! }
+    ...(opts.staticToken ?? process.env.SH_STATIC_TOKEN
+      ? { staticToken: opts.staticToken ?? process.env.SH_STATIC_TOKEN! }
       : {}),
     ...(opts.actorUserId ? { actorUserId: opts.actorUserId } : {}),
     ...(opts.projects ? { orgs: opts.projects.orgs, principals: opts.projects.principals } : {}),

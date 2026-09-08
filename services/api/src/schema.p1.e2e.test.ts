@@ -11,8 +11,8 @@ import { ensureBootstrapOrg } from './modules/control-plane/store.pg.ts';
  * owner, and the application connects as the owner, so "append-only at the
  * database layer" was false while looking true.
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
 
 let pool: Pool; let up = false; let reason = '';
 
@@ -98,7 +98,7 @@ describe('P1a — membership', () => {
     // Seeded without a password hash on purpose: a known-credential account in
     // every environment is how staging becomes a way into production.
     const { rows } = await pool.query<{ hash: string | null }>(
-      `select password_hash as hash from users where email = 'dev@corebase.local'`);
+      `select password_hash as hash from users where email = 'dev@steadhold.local'`);
     expect(rows[0]!.hash).toBeNull();
   });
 });
@@ -113,7 +113,7 @@ describe('P1b — the application role has only the privileges it needs', () => 
   const priv = async (table: string) => {
     const { rows } = await pool.query<{ p: string }>(
       `select privilege_type as p from information_schema.table_privileges
-        where grantee = 'corebase_app' and table_name = $1 order by privilege_type`, [table]);
+        where grantee = 'steadhold_app' and table_name = $1 order by privilege_type`, [table]);
     return rows.map((r) => r.p);
   };
 
@@ -132,11 +132,11 @@ describe('P1b — the application role has only the privileges it needs', () => 
     const { rows } = await pool.query<{ n: number }>(
       `select count(*)::int as n from pg_class c
          join pg_roles r on r.oid = c.relowner
-        where r.rolname = 'corebase_app'`);
+        where r.rolname = 'steadhold_app'`);
     expect(rows[0]!.n).toBe(0);
     const { rows: attrs } = await pool.query<{ super: boolean; createdb: boolean; createrole: boolean }>(
       `select rolsuper as super, rolcreatedb as createdb, rolcreaterole as createrole
-         from pg_roles where rolname = 'corebase_app'`);
+         from pg_roles where rolname = 'steadhold_app'`);
     expect(attrs[0]).toEqual({ super: false, createdb: false, createrole: false });
   });
 
@@ -159,7 +159,7 @@ describe('P1b — the application role has only the privileges it needs', () => 
       `select unnest(defaclacl)::text as acl from pg_default_acl d
          join pg_namespace n on n.oid = d.defaclnamespace
         where n.nspname = 'public' and d.defaclobjtype = 'r'`);
-    expect(rows.some((r) => r.acl.startsWith('corebase_app='))).toBe(true);
+    expect(rows.some((r) => r.acl.startsWith('steadhold_app='))).toBe(true);
   });
 });
 

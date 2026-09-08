@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The full lifecycle of a Corebase project, deepened from proposal §28–29 and §75–78: every state, every transition and its trigger, the provisioning saga step-by-step with idempotency and compensation, the deletion pipeline, and the reconciliation loop that catches drift. This is the behavioral contract that [jobs and workers](04-job-queue-and-workers.md) implement and the [platform API](02-platform-api.md) exposes.
+The full lifecycle of a Steadhold project, deepened from proposal §28–29 and §75–78: every state, every transition and its trigger, the provisioning saga step-by-step with idempotency and compensation, the deletion pipeline, and the reconciliation loop that catches drift. This is the behavioral contract that [jobs and workers](04-job-queue-and-workers.md) implement and the [platform API](02-platform-api.md) exposes.
 
 ## Design
 
@@ -102,7 +102,7 @@ One `provision_project` job executes the steps below in order, persisting a curs
 | 6 | Start PgBouncer | Pooler container for `<ref>` exists? → verify config hash matches; mismatch → recreate. Else create (transaction mode, D-015) | Stop + remove pooler |
 | 7 | Start PostgREST | Same pattern (D-011): exists → verify config hash; else create pointing direct at Postgres (`db:5432`), never through PgBouncer (D-101) | Stop + remove |
 | 8 | Generate keys & credentials | `project_api_keys` rows for `anon`+`service_role` exist? → skip (never regenerate silently). Else: generate ES256 keypair (D-014), mint both JWTs, store hashes (D-060), envelope-encrypt DB password + signing key into `project_secrets` (D-035) | Revoke keys (set `revoked_at`), delete secrets rows |
-| 9 | Register with gateway | Route for `<ref>.corebase.co` present in routing store? → verify target; else write ([request pipeline](../04-data-api/02-request-pipeline.md)) | Deregister route |
+| 9 | Register with gateway | Route for `<ref>.steadhold.app` present in routing store? → verify target; else write ([request pipeline](../04-data-api/02-request-pipeline.md)) | Deregister route |
 | 10 | Enable backups | pgBackRest stanza for `<ref>` exists? → `stanza-check`; else `stanza-create` + schedule the per-plan backup policy (D-077) + continuous WAL archiving | Remove stanza config (backups in object storage untouched) |
 | 11 | Mark READY | `UPDATE projects SET status='ready' WHERE id=$1 AND status='configuring'` — guarded update; 0 rows → log & stop (state changed underneath) | — |
 

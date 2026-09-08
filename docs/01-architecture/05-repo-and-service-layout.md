@@ -9,9 +9,9 @@ Turn proposal §102–103 into a concrete, V1-trimmed monorepo scaffold under th
 ### The monorepo (proposal §102, trimmed to what V1 ships)
 
 ```text
-corebase/
+steadhold/
 ├── apps/
-│   ├── dashboard/               # Next.js + Tailwind + shadcn/ui (D-025); talks only to api.corebase.com
+│   ├── dashboard/               # Next.js + Tailwind + shadcn/ui (D-025); talks only to api.steadhold.dev
 │   └── docs/                    # docs site (first-class product, proposal §107); content + framework
 ├── services/
 │   ├── api/                     # THE modular monolith (Node 22 + Fastify, D-010) — one deployable
@@ -25,13 +25,13 @@ corebase/
 │   │       └── main.ts              # composition root: the ONLY file that imports all modules and wires them
 │   └── worker/                  # the ONE separate process from day one (D-020): BullMQ consumers + reconciler (D-053), Docker Engine API client (D-052)
 ├── packages/
-│   ├── sdk/                     # @corebase/core — public client SDK (proposal §46); Apache-2.0 at release (D-034)
+│   ├── sdk/                     # @steadhold/core — public client SDK (proposal §46); Apache-2.0 at release (D-034)
 │   ├── config/                  # shared tsconfig/eslint/prettier presets; dependency-cruiser boundary rules (D-059)
 │   └── types/                   # shared contracts ONLY: API DTOs (zod schemas), job payloads, routing-table entry type, error codes — no runtime logic
-├── cli/                         # `corebase` CLI (TS, npm-distributed, D-026): init/dev/link/db push|pull|reset/export (D-004, D-028)
+├── cli/                         # `steadhold` CLI (TS, npm-distributed, D-026): init/dev/link/db push|pull|reset/export (D-004, D-028)
 ├── infra/
 │   ├── terraform/               # Hetzner nodes, Cloudflare DNS/TLS, R2 buckets (D-022, D-023)
-│   ├── docker/                  # Compose files: per-node data-plane template (project triplet, D-054), app-node stack, `corebase dev` local stack (D-027)
+│   ├── docker/                  # Compose files: per-node data-plane template (project triplet, D-054), app-node stack, `steadhold dev` local stack (D-027)
 │   └── monitoring/              # Prometheus rules, Grafana dashboards, Loki config (D-021)
 ├── migrations/                  # CONTROL-PLANE Postgres migrations (timestamped SQL, same format we sell, D-028); customer-project base schema lives with the provisioner assets in services/worker
 ├── tests/
@@ -114,7 +114,7 @@ lint:   eslint + dependency-cruiser (R1–R7)  — boundary violations fail here
 
 - **OQ-058** — Turborepo remote cache: self-host the cache server on the monitoring/app node vs. Vercel's hosted cache (external dependency + cost) vs. none until CI times hurt. Owner: [IaC & CI/CD](../11-infrastructure/02-iac-and-cicd.md).
 - **OQ-063** — Customer-project **base schema** versioning (the SQL the worker applies at provision: roles, auth schema, storage.objects): how do already-provisioned projects receive base-schema upgrades — reconciler-applied versioned migrations per project, or only-at-provision with explicit fleet migration jobs? Interacts with D-037's upgrade playbook. Owner: [postgres provisioning](../03-database-platform/01-postgres-provisioning.md) + [extensions & upgrades](../03-database-platform/06-extensions-and-upgrades.md).
-- **OQ-064** — Does `apps/docs` ship at V1 launch as a real app or as stub content on `corebase.com`? Docs are a "first-class product" (§107) but also real scope; the cut line belongs to [V1 scope & cut list](../14-roadmap/02-v1-scope-and-cutlist.md).
+- **OQ-064** — Does `apps/docs` ship at V1 launch as a real app or as stub content on `steadhold.dev`? Docs are a "first-class product" (§107) but also real scope; the cut line belongs to [V1 scope & cut list](../14-roadmap/02-v1-scope-and-cutlist.md).
 
 ## Dependencies
 

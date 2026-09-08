@@ -32,24 +32,24 @@ export function ErrorSurface({ error, onRetry, title }: {
   };
 
   return (
-    <div className="cb-banner cb-banner--error" role="alert">
-      <span className="cb-banner__icon" aria-hidden="true">
+    <div className="sh-banner sh-banner--error" role="alert">
+      <span className="sh-banner__icon" aria-hidden="true">
         <svg viewBox="0 0 12 12"><path d="M2 2 10 10M10 2 2 10" /></svg>
       </span>
-      <div className="cb-banner__body">
-        <div className="cb-banner__title">{title ?? api?.code ?? 'Error'}</div>
-        <div className="cb-banner__text">{message}</div>
+      <div className="sh-banner__body">
+        <div className="sh-banner__title">{title ?? api?.code ?? 'Error'}</div>
+        <div className="sh-banner__text">{message}</div>
         {api?.requestId ? (
-          <div className="reqid" style={{ marginTop: 'var(--cb-space-2)' }}>
+          <div className="reqid" style={{ marginTop: 'var(--sh-space-2)' }}>
             <span>{api.requestId}</span>
-            <button type="button" className="cb-btn cb-btn--ghost cb-btn--sm" onClick={copy}>
+            <button type="button" className="sh-btn sh-btn--ghost sh-btn--sm" onClick={copy}>
               {copied ? 'Copied' : 'Copy'}
             </button>
           </div>
         ) : null}
       </div>
       {onRetry ? (
-        <button type="button" className="cb-banner__action" onClick={onRetry}>Retry</button>
+        <button type="button" className="sh-banner__action" onClick={onRetry}>Retry</button>
       ) : null}
     </div>
   );
@@ -57,5 +57,5 @@ export function ErrorSurface({ error, onRetry, title }: {
 
 /** Inline field error. Replaces help text, never stacks with it (§5 rule 3). */
 export function FieldError({ children }: { children: React.ReactNode }) {
-  return <span className="cb-help cb-help--error">{children}</span>;
+  return <span className="sh-help sh-help--error">{children}</span>;
 }

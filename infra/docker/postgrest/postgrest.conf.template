@@ -29,9 +29,9 @@ jwt-role-claim-key = ".role"
 jwt-cache-max-lifetime = 3600
 
 ## Schema-cache reload without a restart (D-100). The event trigger in the project
-## image NOTIFYs this channel on DDL, so `corebase db push`, the dashboard's table
+## image NOTIFYs this channel on DDL, so `steadhold db push`, the dashboard's table
 ## editor and a developer in psql all get a reload for free — no code path in
-## Corebase has to remember to poke PostgREST. Possible only because this connects
+## Steadhold has to remember to poke PostgREST. Possible only because this connects
 ## directly to Postgres: LISTEN does not survive transaction pooling, which by
 ## itself settles the connection topology (D-101).
 db-channel-enabled = true
@@ -39,7 +39,7 @@ db-channel = "pgrst"
 
 ## Request id → application_name, so a slow query in pg_stat_activity can be
 ## traced back to the HTTP request that caused it (D-105).
-db-pre-request = "corebase.pre_request"
+db-pre-request = "steadhold.pre_request"
 
 ## Safe here and only here: a direct connection, not the transaction pooler.
 db-prepared-statements = true

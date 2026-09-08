@@ -6,8 +6,8 @@ import type { ContainerSpec } from './docker.ts';
  * Docker for is testable without Docker.
  */
 
-export const IMAGE = process.env.CB_PG_IMAGE ?? 'corebase/postgres:17.5';
-export const CONTAINER_PREFIX = 'cb-';
+export const IMAGE = process.env.SH_PG_IMAGE ?? 'steadhold/postgres:17.5';
+export const CONTAINER_PREFIX = 'sh-';
 
 /* ------------------------------------------------------------------ *
  * The rest of D-055's noisy-neighbour walls (P2f).
@@ -31,14 +31,14 @@ export const CONTAINER_PREFIX = 'cb-';
  * *node's* pid namespace, and a node that cannot fork cannot run any tenant's
  * database, or the reconciler that would notice.
  */
-export const PIDS_LIMIT = Number(process.env.CB_PIDS_LIMIT ?? 256);
+export const PIDS_LIMIT = Number(process.env.SH_PIDS_LIMIT ?? 256);
 
 /**
  * Relative disk-I/O share (cgroup v2 `io.weight`, 10–1000, Docker's default 500).
  *
  * Weight rather than a hard IOPS cap, because a hard cap has to name a block
  * device and the device a project's volume lives on is a property of the node,
- * not of the project. `CB_IO_DEVICE` supplies it where an operator knows it, and
+ * not of the project. `SH_IO_DEVICE` supplies it where an operator knows it, and
  * `ioDeviceLimits` below turns it into the free tier's read/write ceilings; where
  * it is unset, the weight alone still keeps one tenant's checkpoint storm from
  * starving its neighbours — it just does not cap the absolute rate.
@@ -55,7 +55,7 @@ export const PLAN_IO_WEIGHT: Record<string, number> = {
 };
 
 /** Free tier's absolute I/O ceiling in bytes/s, applied only when the device is known. */
-export const FREE_IO_BPS = Number(process.env.CB_FREE_IO_BPS ?? 50 * 1024 * 1024);
+export const FREE_IO_BPS = Number(process.env.SH_FREE_IO_BPS ?? 50 * 1024 * 1024);
 
 /**
  * Per-device byte-rate caps for a plan, or an empty pair when no device is
@@ -67,7 +67,7 @@ export const FREE_IO_BPS = Number(process.env.CB_FREE_IO_BPS ?? 50 * 1024 * 1024
  * a much worse outcome than an uncapped absolute rate behind a weight that still
  * works.
  */
-export function ioDeviceLimits(plan: string, device = process.env.CB_IO_DEVICE): {
+export function ioDeviceLimits(plan: string, device = process.env.SH_IO_DEVICE): {
   BlkioDeviceReadBps?: Array<{ Path: string; Rate: number }>;
   BlkioDeviceWriteBps?: Array<{ Path: string; Rate: number }>;
 } {
@@ -77,10 +77,10 @@ export function ioDeviceLimits(plan: string, device = process.env.CB_IO_DEVICE):
     BlkioDeviceWriteBps: [{ Path: device, Rate: FREE_IO_BPS }],
   };
 }
-export const LABEL_REF = 'com.corebase.project.ref';
-export const LABEL_MANAGED = 'com.corebase.managed';
+export const LABEL_REF = 'com.steadhold.project.ref';
+export const LABEL_MANAGED = 'com.steadhold.managed';
 /** Which of a project's containers this is: absent means the database (P2b). */
-export const LABEL_ROLE = 'com.corebase.role';
+export const LABEL_ROLE = 'com.steadhold.role';
 
 export const containerName = (ref: string) => `${CONTAINER_PREFIX}${ref}`;
 
@@ -102,7 +102,7 @@ export const DB_ALIAS = 'db';
 /** The pooler's container and the name it answers to on the project network. */
 export const poolerName = (ref: string) => `${CONTAINER_PREFIX}${ref}-pooler`;
 export const POOLER_ALIAS = 'pooler';
-export const POOLER_IMAGE = process.env.CB_POOLER_IMAGE ?? 'corebase/pgbouncer:1.23';
+export const POOLER_IMAGE = process.env.SH_POOLER_IMAGE ?? 'steadhold/pgbouncer:1.23';
 /** PgBouncer's listen port inside the container. The host port is allocated. */
 export const POOLER_PORT = 6432;
 
@@ -171,7 +171,7 @@ export function buildPoolerSpec(a: PoolerSpecArgs): ContainerSpec {
 /** PostgREST's container and the name it answers to on the project network. */
 export const postgrestName = (ref: string) => `${CONTAINER_PREFIX}${ref}-rest`;
 export const POSTGREST_ALIAS = 'rest';
-export const POSTGREST_IMAGE = process.env.CB_POSTGREST_IMAGE ?? 'corebase/postgrest:12.2';
+export const POSTGREST_IMAGE = process.env.SH_POSTGREST_IMAGE ?? 'steadhold/postgrest:12.2';
 /** PostgREST's listeners inside the container. Host ports are allocated in pairs. */
 export const POSTGREST_PORT = 3000;
 export const POSTGREST_ADMIN_PORT = 3001;
@@ -234,13 +234,13 @@ export function buildPostgrestSpec(a: PostgrestSpecArgs): ContainerSpec {
   return {
     Image: a.image ?? POSTGREST_IMAGE,
     Env: [
-      `COREBASE_REF=${a.ref}`,
+      `STEADHOLD_REF=${a.ref}`,
       // The database by its network alias, not its container name: the alias is
       // stable across a container being recreated, which reconciliation does.
-      `COREBASE_PG_HOST=${DB_ALIAS}`,
-      `COREBASE_DB_POOL=${pool}`,
+      `STEADHOLD_PG_HOST=${DB_ALIAS}`,
+      `STEADHOLD_DB_POOL=${pool}`,
       `PGRST_DB_URI=postgres://authenticator:${encodeURIComponent(a.authenticatorPassword)}@${DB_ALIAS}:5432/postgres`,
-      `COREBASE_JWKS=${JSON.stringify(a.jwks)}`,
+      `STEADHOLD_JWKS=${JSON.stringify(a.jwks)}`,
     ],
     Labels: {
       [LABEL_MANAGED]: 'true',
@@ -282,7 +282,7 @@ export function buildPostgrestSpec(a: PostgrestSpecArgs): ContainerSpec {
  */
 export function bootstrapPassword(secret: string, projectId: string): string {
   if (!secret || secret.length < 16) {
-    throw new Error('CB_BOOTSTRAP_SECRET must be at least 16 characters');
+    throw new Error('SH_BOOTSTRAP_SECRET must be at least 16 characters');
   }
   return createHmac('sha256', secret).update(`pgboot:${projectId}`).digest('hex').slice(0, 32);
 }

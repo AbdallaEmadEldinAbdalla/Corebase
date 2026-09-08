@@ -1,4 +1,4 @@
-# Corebase — single-node self-host stack (D-099).
+# Steadhold — single-node self-host stack (D-099).
 #
 # This is the local-dev stack (D-027) plus production hardening: real keys, real
 # TLS termination in front, real SMTP, and a backup sidecar. It runs ONE project.
@@ -6,7 +6,7 @@
 # multi-region routing — the fleet machinery that only makes sense for the cloud.
 #
 # Images below are placeholders until the first public release publishes them.
-name: corebase
+name: steadhold
 
 x-logging: &logging
   logging:
@@ -16,7 +16,7 @@ x-logging: &logging
 services:
   # ── data ────────────────────────────────────────────────────────────────
   db:
-    image: corebase/postgres:17.5
+    image: steadhold/postgres:17.5
     restart: unless-stopped
     <<: *logging
     # postgres wants `-c` and `name=value` as separate argv entries; `-c=name=value`
@@ -48,7 +48,7 @@ services:
     expose: ["5432"]
 
   pooler:
-    image: corebase/pgbouncer:1.23
+    image: steadhold/pgbouncer:1.23
     restart: unless-stopped
     <<: *logging
     depends_on:
@@ -89,42 +89,42 @@ services:
     expose: ["3000"]
 
   auth:
-    image: corebase/auth:0.1
+    image: steadhold/auth:0.1
     restart: unless-stopped
     <<: *logging
     depends_on:
       db: { condition: service_healthy }
     environment:
-      CB_DATABASE_URL: postgres://corebase_auth:${AUTH_DB_PASSWORD:?}@pooler:6432/postgres
-      CB_JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:?}   # ES256 keypair (D-014)
-      CB_JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:?}
-      CB_ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-3600}
-      CB_SITE_URL: ${SITE_URL:?}
-      CB_REDIRECT_ALLOWLIST: ${REDIRECT_ALLOWLIST:-}
-      CB_SMTP_HOST: ${SMTP_HOST:-mail}
-      CB_SMTP_PORT: ${SMTP_PORT:-1025}
-      CB_SMTP_USER: ${SMTP_USER:-}
-      CB_SMTP_PASS: ${SMTP_PASS:-}
-      CB_SMTP_FROM: ${SMTP_FROM:-auth@localhost}
-      CB_SIGNUPS_ENABLED: ${SIGNUPS_ENABLED:-true}
+      SH_DATABASE_URL: postgres://steadhold_auth:${AUTH_DB_PASSWORD:?}@pooler:6432/postgres
+      SH_JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:?}   # ES256 keypair (D-014)
+      SH_JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:?}
+      SH_ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-3600}
+      SH_SITE_URL: ${SITE_URL:?}
+      SH_REDIRECT_ALLOWLIST: ${REDIRECT_ALLOWLIST:-}
+      SH_SMTP_HOST: ${SMTP_HOST:-mail}
+      SH_SMTP_PORT: ${SMTP_PORT:-1025}
+      SH_SMTP_USER: ${SMTP_USER:-}
+      SH_SMTP_PASS: ${SMTP_PASS:-}
+      SH_SMTP_FROM: ${SMTP_FROM:-auth@localhost}
+      SH_SIGNUPS_ENABLED: ${SIGNUPS_ENABLED:-true}
     expose: ["9999"]
 
   storage:
-    image: corebase/storage:0.1
+    image: steadhold/storage:0.1
     restart: unless-stopped
     <<: *logging
     depends_on:
       db: { condition: service_healthy }
       objects: { condition: service_healthy }
     environment:
-      CB_DATABASE_URL: postgres://corebase_storage:${STORAGE_DB_PASSWORD:?}@pooler:6432/postgres
-      CB_S3_ENDPOINT: http://objects:9000
-      CB_S3_REGION: ${S3_REGION:-local}
-      CB_S3_BUCKET: ${S3_BUCKET:-corebase}
-      CB_S3_ACCESS_KEY: ${S3_ACCESS_KEY:?}
-      CB_S3_SECRET_KEY: ${S3_SECRET_KEY:?}
-      CB_JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:?}
-      CB_MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-50}
+      SH_DATABASE_URL: postgres://steadhold_storage:${STORAGE_DB_PASSWORD:?}@pooler:6432/postgres
+      SH_S3_ENDPOINT: http://objects:9000
+      SH_S3_REGION: ${S3_REGION:-local}
+      SH_S3_BUCKET: ${S3_BUCKET:-steadhold}
+      SH_S3_ACCESS_KEY: ${S3_ACCESS_KEY:?}
+      SH_S3_SECRET_KEY: ${S3_SECRET_KEY:?}
+      SH_JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:?}
+      SH_MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-50}
     expose: ["5000"]
 
   objects:
@@ -145,7 +145,7 @@ services:
 
   # ── edge ────────────────────────────────────────────────────────────────
   gateway:
-    image: corebase/gateway:0.1
+    image: steadhold/gateway:0.1
     restart: unless-stopped
     <<: *logging
     depends_on:
@@ -154,56 +154,56 @@ services:
       storage: { condition: service_started }
     environment:
       # reproduces the cloud path dispatch so the SDK needs only a URL swap
-      CB_MODE: selfhost
-      CB_ANON_KEY: ${ANON_KEY:?}
-      CB_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:?}
-      CB_JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:?}
-      CB_RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-100}
+      SH_MODE: selfhost
+      SH_ANON_KEY: ${ANON_KEY:?}
+      SH_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:?}
+      SH_JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:?}
+      SH_RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-100}
     ports:
       - "${API_PORT:-8000}:8000"        # /rest/v1  /auth/v1  /storage/v1
     healthcheck:
-      test: ["CMD", "cb-healthcheck", "http://127.0.0.1:8000/health"]
+      test: ["CMD", "sh-healthcheck", "http://127.0.0.1:8000/health"]
       interval: 10s
       retries: 10
 
   # ── dashboard (single-project mode) ─────────────────────────────────────
   meta:
     # schema introspection + DDL execution for the dashboard. Runs as the audited
-    # corebase_admin role — the dashboard never holds service_role (D-132).
-    image: corebase/meta:0.1
+    # steadhold_admin role — the dashboard never holds service_role (D-132).
+    image: steadhold/meta:0.1
     restart: unless-stopped
     <<: *logging
     depends_on:
       db: { condition: service_healthy }
     environment:
-      CB_DATABASE_URL: postgres://corebase_admin:${ADMIN_DB_PASSWORD:?}@db:5432/postgres
+      SH_DATABASE_URL: postgres://steadhold_admin:${ADMIN_DB_PASSWORD:?}@db:5432/postgres
     expose: ["8080"]
 
   studio:
     # the same dashboard build as the cloud, pointed at a single-project control
     # plane shim instead of the multi-tenant platform API (D-181)
-    image: corebase/studio:0.1
+    image: steadhold/studio:0.1
     restart: unless-stopped
     <<: *logging
     depends_on:
       meta: { condition: service_started }
       gateway: { condition: service_healthy }
     environment:
-      CB_SELFHOST: "true"
-      CB_PROJECT_NAME: ${PROJECT_NAME:-local}
-      CB_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
-      CB_META_URL: http://meta:8080
-      CB_ANON_KEY: ${ANON_KEY:?}
-      CB_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:?}
-      CB_DASHBOARD_USER: ${DASHBOARD_USER:-admin}
-      CB_DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:?set DASHBOARD_PASSWORD}
+      SH_SELFHOST: "true"
+      SH_PROJECT_NAME: ${PROJECT_NAME:-local}
+      SH_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
+      SH_META_URL: http://meta:8080
+      SH_ANON_KEY: ${ANON_KEY:?}
+      SH_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:?}
+      SH_DASHBOARD_USER: ${DASHBOARD_USER:-admin}
+      SH_DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:?set DASHBOARD_PASSWORD}
     ports:
       - "${STUDIO_PORT:-3000}:3000"
 
   # ── operations ──────────────────────────────────────────────────────────
   backups:
     # same tool as the cloud (D-019): base backups + WAL archiving, restore-to-new
-    image: corebase/pgbackrest:0.1
+    image: steadhold/pgbackrest:0.1
     restart: unless-stopped
     <<: *logging
     depends_on:

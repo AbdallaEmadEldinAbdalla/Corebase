@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { parseFilename, checksum, loadMigrations, MigrationError } from './index.ts';
 
 async function dirWith(files: Record<string, string>) {
-  const d = await mkdtemp(join(tmpdir(), 'cb-mig-'));
+  const d = await mkdtemp(join(tmpdir(), 'sh-mig-'));
   for (const [name, body] of Object.entries(files)) await writeFile(join(d, name), body);
   return d;
 }

@@ -14,9 +14,9 @@ Each project is exactly three containers plus one Docker bridge network on a sha
 
 ```
 net_<project_id>  (per-project Docker bridge network)
-├── pg_<project_id>        postgres:17-corebase      512 MiB mem limit (Free), 0.5 CPU
-├── pgb_<project_id>       pgbouncer:corebase         64 MiB mem limit
-└── pgrst_<project_id>     postgrest:corebase        128 MiB mem limit
+├── pg_<project_id>        postgres:17-steadhold      512 MiB mem limit (Free), 0.5 CPU
+├── pgb_<project_id>       pgbouncer:steadhold         64 MiB mem limit
+└── pgrst_<project_id>     postgrest:steadhold        128 MiB mem limit
 ```
 
 **Per-project bridge network, not a shared network namespace.** The pod-style alternative (`--network container:pg_x`) makes pgbouncer/postgrest share Postgres's netns and talk over localhost — but Docker recreates dependents whenever the anchor container is recreated, which turns every Postgres image bump into a three-container teardown. A dedicated bridge network gives us:
@@ -25,7 +25,7 @@ net_<project_id>  (per-project Docker bridge network)
 - independent restart of any container (minor image bumps touch one container);
 - isolation by construction: no container outside `net_<project_id>` can reach the project's Postgres. Cross-project traffic is impossible at the Docker network layer, not merely firewalled.
 
-Ingress: the node runs a TCP router that terminates TLS and routes by SNI (`db.<project>.corebase.co`) to the project's pgbouncer (pooled port) or Postgres (direct port); HTTP traffic to PostgREST/auth arrives via the gateway (D-016). Routing details are owned by [domain & region model](../01-architecture/04-domain-and-region-model.md) and [request pipeline](../04-data-api/02-request-pipeline.md).
+Ingress: the node runs a TCP router that terminates TLS and routes by SNI (`db.<project>.steadhold.app`) to the project's pgbouncer (pooled port) or Postgres (direct port); HTTP traffic to PostgREST/auth arrives via the gateway (D-016). Routing details are owned by [domain & region model](../01-architecture/04-domain-and-region-model.md) and [request pipeline](../04-data-api/02-request-pipeline.md).
 
 Container hardening (read-only rootfs except `PGDATA`, `no-new-privileges`, dropped capabilities, pids limit) is specified in the [threat model](../06-security/01-threat-model.md).
 
@@ -40,7 +40,7 @@ One dedicated volume per project:
 └── stack.env        # rendered container config (no secrets; secrets injected at start)
 ```
 
-**Disk cap mechanism: XFS project quotas** (`prjquota` mount option on `/data`, one XFS project ID per Corebase project). Comparison:
+**Disk cap mechanism: XFS project quotas** (`prjquota` mount option on `/data`, one XFS project ID per Steadhold project). Comparison:
 
 | | XFS project quota | LVM logical volume per project |
 |---|---|---|
@@ -99,14 +99,14 @@ The budget for `project create → READY`:
 | Image pull | 10–60s (unacceptable) | 0 — all images pre-pulled at node bootstrap and on every image release |
 | Container create + start ×3 | 3–6s | 0 — already running |
 | `initdb` + first Postgres start | 3–5s | 0 — already done |
-| Corebase base schema (auth schema, `storage.objects`, helper functions, roles) | 1–2s | 0 — baked into the warm instance |
+| Steadhold base schema (auth schema, `storage.objects`, helper functions, roles) | 1–2s | 0 — baked into the warm instance |
 | Claim + specialize (rename, generate credentials, `ALTER ROLE ... PASSWORD`, render JWT keys, register API keys) | — | 1–3s |
 | pgBackRest stanza-create + first archive check | 2–5s (async-able) | 2–5s (async, non-blocking for READY) |
 | Gateway/DNS registration | <1s | <1s |
 
 Two candidate designs for eliminating the cold path:
 
-- **Template database**: keep a `template_corebase` database inside… what? There is no shared instance under D-009 — every project is its own instance, so a template DB only accelerates the base-schema step (~2s), not container start or `initdb`. It solves the wrong 80%.
+- **Template database**: keep a `template_steadhold` database inside… what? There is no shared instance under D-009 — every project is its own instance, so a template DB only accelerates the base-schema step (~2s), not container start or `initdb`. It solves the wrong 80%.
 - **Pre-warmed container pool**: each node keeps N fully-started generic stacks (Postgres initialized with the base schema, pgbouncer and PostgREST up, throwaway credentials). Provisioning = *claim* one, then specialize: assign project ID, create/rename roles with fresh crypto-random passwords, load the project JWT public key into PostgREST config, register the stanza, register routes. Every expensive step moved to idle time.
 
 **Pre-warmed pool wins** (D-071). Target pool: **3 warm stacks per active node**, refilled by a background job within 60s of a claim; a burst deeper than the pool falls back to the cold path (~15–25s with pre-pulled images — still inside the target, just not inside the 5s experience we want for the dashboard). Warm stacks are booked against node RAM like real projects (see §7) so the pool can never oversubscribe a node.
@@ -120,7 +120,7 @@ A dedicated instance per free project is only affordable because idle projects r
 **Idle detection — two signals, both required:**
 
 1. **No data-plane traffic**: the gateway already meters requests per project (REST, auth, storage) into the control plane; zero requests for the window.
-2. **No database connections**: the node agent scrapes pgbouncer (`SHOW STATS`) and Postgres (`pg_stat_activity`, excluding Corebase-internal roles) into Prometheus; zero client connections for the window.
+2. **No database connections**: the node agent scrapes pgbouncer (`SHOW STATS`) and Postgres (`pg_stat_activity`, excluding Steadhold-internal roles) into Prometheus; zero client connections for the window.
 
 Window: **7 consecutive days for Free projects** (D-072). Dashboard activity (SQL editor, table editor) counts as traffic — opening your project keeps it awake. Warning email at day 5. Paid tiers do not auto-pause in V1 (OQ-071 tracks opt-in pause for paid).
 

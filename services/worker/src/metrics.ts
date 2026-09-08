@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import type { Pool } from 'pg';
-import { Registry, Counter, Gauge, Histogram } from '@corebase/metrics';
+import { Registry, Counter, Gauge, Histogram } from '@steadhold/metrics';
 
 /**
  * The worker's metrics (D-146's inventory, seeded in T9).
@@ -19,7 +19,7 @@ export const registry = new Registry();
  * a create that is going badly rather than clipping it into +Inf.
  */
 export const jobSeconds = registry.register(new Histogram({
-  name: 'corebase_provisioning_job_seconds',
+  name: 'steadhold_provisioning_job_seconds',
   help: 'End-to-end duration of a provisioning job, by type and outcome.',
   labelNames: ['job_type', 'outcome'],
   buckets: [0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 300],
@@ -27,7 +27,7 @@ export const jobSeconds = registry.register(new Histogram({
 
 /** Per-step durations: the distribution across steps is what makes a saga tunable. */
 export const stepSeconds = registry.register(new Histogram({
-  name: 'corebase_provisioning_step_seconds',
+  name: 'steadhold_provisioning_step_seconds',
   help: 'Duration of one saga step.',
   labelNames: ['job_type', 'step'],
   buckets: [0.01, 0.05, 0.1, 0.5, 1, 2.5, 5, 30, 60],
@@ -39,19 +39,19 @@ export const stepSeconds = registry.register(new Histogram({
  * the question every alert on it actually asks.
  */
 export const jobsTotal = registry.register(new Counter({
-  name: 'corebase_provisioning_jobs_total',
+  name: 'steadhold_provisioning_jobs_total',
   help: 'Provisioning jobs finished, by type and outcome.',
   labelNames: ['job_type', 'outcome'],
 }));
 
 export const nodeRamReservedRatio = registry.register(new Gauge({
-  name: 'corebase_node_ram_reserved_ratio',
+  name: 'steadhold_node_ram_reserved_ratio',
   help: 'Fraction of a node\'s RAM booked by placement (D-090 stops at 0.85).',
   labelNames: ['node'],
 }));
 
 export const nodeRamReservedMb = registry.register(new Gauge({
-  name: 'corebase_node_ram_reserved_mb',
+  name: 'steadhold_node_ram_reserved_mb',
   help: 'Absolute RAM booked by placement on a node.',
   labelNames: ['node'],
 }));
@@ -65,24 +65,24 @@ export const nodeRamReservedMb = registry.register(new Gauge({
  * is itself the alert.
  */
 export const oldestNonterminalJobSeconds = registry.register(new Gauge({
-  name: 'corebase_provisioning_oldest_nonterminal_job_seconds',
+  name: 'steadhold_provisioning_oldest_nonterminal_job_seconds',
   help: 'Age of the oldest job still pending, enqueued or running (0 if none).',
 }));
 
 export const jobsInState = registry.register(new Gauge({
-  name: 'corebase_provisioning_jobs_in_state',
+  name: 'steadhold_provisioning_jobs_in_state',
   help: 'Job rows by state — queue depth, dead letters, and everything between.',
   labelNames: ['state'],
 }));
 
 export const reconcileLastSuccess = registry.register(new Gauge({
-  name: 'corebase_reconcile_last_success_timestamp_seconds',
+  name: 'steadhold_reconcile_last_success_timestamp_seconds',
   help: 'Unix time of the last completed reconciliation sweep for a node.',
   labelNames: ['node'],
 }));
 
 export const reconcileDriftTotal = registry.register(new Counter({
-  name: 'corebase_reconcile_drift_total',
+  name: 'steadhold_reconcile_drift_total',
   help: 'Drift items found by reconciliation, by class and the action taken.',
   labelNames: ['class', 'action'],
 }));
@@ -101,7 +101,7 @@ export const reconcileDriftTotal = registry.register(new Counter({
  * permanently at the 5-minute warn line.
  */
 export const backupWalArchiveLagSeconds = registry.register(new Gauge({
-  name: 'corebase_backup_wal_archive_lag_seconds',
+  name: 'steadhold_backup_wal_archive_lag_seconds',
   help: 'Age of the oldest WAL segment closed but not yet archived (0 if none waiting).',
   labelNames: ['node', 'project_ref'],
 }));
@@ -119,20 +119,20 @@ export const backupWalArchiveLagSeconds = registry.register(new Gauge({
  * WAL now has its own timestamp gauge below.
  */
 export const backupLastSuccessTs = registry.register(new Gauge({
-  name: 'corebase_backup_last_success_ts',
+  name: 'steadhold_backup_last_success_ts',
   help: 'Unix time of the last successful base backup for a project.',
   labelNames: ['node', 'project_ref'],
 }));
 
 export const backupWalLastArchivedTs = registry.register(new Gauge({
-  name: 'corebase_backup_wal_last_archived_ts',
+  name: 'steadhold_backup_wal_last_archived_ts',
   help: 'Unix time of the last WAL segment successfully archived for a project.',
   labelNames: ['node', 'project_ref'],
 }));
 
 /** Base-backup attempts, by type and outcome. Failures are the interesting rows. */
 export const backupRunsTotal = registry.register(new Counter({
-  name: 'corebase_backup_runs_total',
+  name: 'steadhold_backup_runs_total',
   help: 'Base-backup runs finished, by type (full/incr) and outcome.',
   labelNames: ['type', 'outcome'],
 }));
@@ -143,14 +143,14 @@ export const backupRunsTotal = registry.register(new Counter({
  * have nothing waiting and a repo whose credentials expired last week.
  */
 export const backupCheckOk = registry.register(new Gauge({
-  name: 'corebase_backup_check_ok',
+  name: 'steadhold_backup_check_ok',
   help: '1 if the last pgbackrest check for this project succeeded, 0 if it failed.',
   labelNames: ['node', 'project_ref'],
 }));
 
 /** Segments waiting. Distinguishes a slow push from a repo that stopped accepting. */
 export const backupWalPending = registry.register(new Gauge({
-  name: 'corebase_backup_wal_pending_segments',
+  name: 'steadhold_backup_wal_pending_segments',
   help: 'WAL segments closed and waiting to be pushed to the repo.',
   labelNames: ['node', 'project_ref'],
 }));
@@ -165,7 +165,7 @@ export const backupWalPending = registry.register(new Gauge({
  * already answered.
  */
 export const restoreVerificationsTotal = registry.register(new Counter({
-  name: 'corebase_restore_verifications_total',
+  name: 'steadhold_restore_verifications_total',
   help: 'Restore verifications finished, by result and the check that failed.',
   labelNames: ['result', 'failed_check'],
 }));
@@ -179,12 +179,12 @@ export const restoreVerificationsTotal = registry.register(new Counter({
  * project at 200 days is the whole story.
  */
 export const projectsVerifiedRatio = registry.register(new Gauge({
-  name: 'corebase_projects_restore_verified_ratio',
+  name: 'steadhold_projects_restore_verified_ratio',
   help: 'Fraction of live projects whose backups passed verification within their plan floor.',
 }));
 
 export const reconcilePassSeconds = registry.register(new Histogram({
-  name: 'corebase_reconcile_pass_seconds',
+  name: 'steadhold_reconcile_pass_seconds',
   help: 'Duration of one reconciliation sweep.',
   labelNames: ['node'],
   buckets: [0.1, 0.5, 1, 2.5, 5, 15, 60],
@@ -272,7 +272,7 @@ export function startMetricsServer(port: number): Server {
  * one that pages somebody: is our shared sending domain still working.
  */
 export const emailSendsTotal = registry.register(new Counter({
-  name: 'corebase_email_sends_total',
+  name: 'steadhold_email_sends_total',
   help: 'Auth emails handled, by template and outcome (sent/failed/dead_lettered).',
   labelNames: ['template', 'outcome'],
 }));
@@ -286,7 +286,7 @@ export const emailSendsTotal = registry.register(new Counter({
  * completely different responses.
  */
 export const emailFailuresTotal = registry.register(new Counter({
-  name: 'corebase_email_failures_total',
+  name: 'steadhold_email_failures_total',
   help: 'Auth email send failures, by template and whether they were retryable.',
   labelNames: ['template', 'retryable'],
 }));

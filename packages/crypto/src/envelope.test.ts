@@ -9,7 +9,7 @@ let dir: string;
 const ID = { projectId: 'a1b2c3d4-0000-0000-0000-000000000001', name: 'DEVELOPER_PASSWORD', version: 1 };
 
 beforeAll(() => {
-  dir = mkdtempSync(join(tmpdir(), 'cb-kek-'));
+  dir = mkdtempSync(join(tmpdir(), 'sh-kek-'));
   writeFileSync(join(dir, 'kek_2026_08.key'), randomBytes(32));
 });
 afterAll(() => { rmSync(dir, { recursive: true, force: true }); });
@@ -74,7 +74,7 @@ describe('envelope encryption (D-035, D-075)', () => {
   });
 
   it('cannot decrypt with a different KEK', () => {
-    const other = mkdtempSync(join(tmpdir(), 'cb-kek-other-'));
+    const other = mkdtempSync(join(tmpdir(), 'sh-kek-other-'));
     writeFileSync(join(other, 'kek_2026_08.key'), randomBytes(32));  // same id, different bytes
     try {
       const sealed = createEnvelope({ kekDir: dir }).encrypt('secret', ID);
@@ -94,7 +94,7 @@ describe('envelope encryption (D-035, D-075)', () => {
 
 describe('KEK rotation (the kek_id indirection of D-075)', () => {
   it('wraps new secrets under the newest key while old rows still decrypt', () => {
-    const two = mkdtempSync(join(tmpdir(), 'cb-kek-two-'));
+    const two = mkdtempSync(join(tmpdir(), 'sh-kek-two-'));
     try {
       const oldKey = randomBytes(32);
       writeFileSync(join(two, 'kek_2026_08.key'), oldKey);
@@ -120,7 +120,7 @@ describe('KEK rotation (the kek_id indirection of D-075)', () => {
   });
 
   it('honours an explicitly pinned KEK', () => {
-    const two = mkdtempSync(join(tmpdir(), 'cb-kek-pin-'));
+    const two = mkdtempSync(join(tmpdir(), 'sh-kek-pin-'));
     try {
       writeFileSync(join(two, 'kek_2026_08.key'), randomBytes(32));
       writeFileSync(join(two, 'kek_2026_12.key'), randomBytes(32));
@@ -138,7 +138,7 @@ describe('startup refusals', () => {
   });
 
   it('refuses to start with an empty KEK directory', () => {
-    const empty = mkdtempSync(join(tmpdir(), 'cb-kek-empty-'));
+    const empty = mkdtempSync(join(tmpdir(), 'sh-kek-empty-'));
     try {
       expect(() => createEnvelope({ kekDir: empty })).toThrow(/no \*\.key files/);
     } finally {
@@ -147,7 +147,7 @@ describe('startup refusals', () => {
   });
 
   it('refuses a KEK of the wrong length', () => {
-    const short = mkdtempSync(join(tmpdir(), 'cb-kek-short-'));
+    const short = mkdtempSync(join(tmpdir(), 'sh-kek-short-'));
     try {
       writeFileSync(join(short, 'kek_2026_08.key'), randomBytes(16));
       expect(() => createEnvelope({ kekDir: short })).toThrow(/16 bytes, expected 32/);

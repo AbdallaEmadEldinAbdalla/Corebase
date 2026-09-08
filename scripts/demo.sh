@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Corebase, end to end, in one script.
+# Steadhold, end to end, in one script.
 #
 # Milestone 0 · T10. Create a project through the API, wait for it, connect to the
 # database it made with the credentials it handed back, do real SQL, then delete
@@ -15,9 +15,9 @@
 #   ./scripts/demo.sh --purge         also destroy it (what CI should run)
 set -euo pipefail
 
-API="${CB_API:-http://127.0.0.1:8099}"
-TOKEN="${CB_STATIC_TOKEN:-local-dev-only-not-a-production-credential}"   # matches scripts/dev.sh
-NAME="${CB_DEMO_NAME:-demo-$(date +%s)}"
+API="${SH_API:-http://127.0.0.1:8099}"
+TOKEN="${SH_STATIC_TOKEN:-local-dev-only-not-a-production-credential}"   # matches scripts/dev.sh
+NAME="${SH_DEMO_NAME:-demo-$(date +%s)}"
 KEEP=0
 PURGE=0
 for arg in "$@"; do
@@ -113,7 +113,7 @@ CREATE TABLE hello (
   body    text NOT NULL,
   created timestamptz NOT NULL DEFAULT now()
 );
-INSERT INTO hello (body) VALUES ('hello from Corebase'), ('the second row');
+INSERT INTO hello (body) VALUES ('hello from Steadhold'), ('the second row');
 SQL
 ok "created a table and inserted two rows"
 
@@ -172,7 +172,7 @@ if [ "$PURGE" -eq 1 ]; then
   # marked as such: there is no customer-facing "purge now", because seven days
   # of undo is the product. CI wants the residue gone, so it expires the window
   # by hand and lets the ordinary scheduled purge do the work.
-  CTRL="${CB_CONTROL_DATABASE_URL:-postgres://corebase:controlpass@127.0.0.1:55433/corebase_control}"
+  CTRL="${SH_CONTROL_DATABASE_URL:-postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control}"
   psql "$CTRL" -tAX -c \
     "UPDATE projects SET purge_after = now() - interval '1 second' WHERE ref = '$REF'" >/dev/null
   info "waiting for the purge scan to notice"
@@ -180,7 +180,7 @@ if [ "$PURGE" -eq 1 ]; then
   while :; do
     STATUS=$(psql "$CTRL" -tAX -c "SELECT status FROM projects WHERE ref = '$REF'")
     [ "$STATUS" = "deleted" ] && break
-    [ "$SECONDS" -gt "$DEADLINE" ] && die "still $STATUS after 180s — is CB_PURGE_SCAN_MS long?"
+    [ "$SECONDS" -gt "$DEADLINE" ] && die "still $STATUS after 180s — is SH_PURGE_SCAN_MS long?"
     sleep 1
   done
   ok "purged — container, volume, credentials and capacity all released"

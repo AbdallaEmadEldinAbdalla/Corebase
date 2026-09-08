@@ -1,5 +1,5 @@
 {
-  "extends": "@corebase/config/tsconfig.base.json",
+  "extends": "@steadhold/config/tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
     "allowImportingTsExtensions": true

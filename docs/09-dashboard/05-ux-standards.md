@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The interaction contract for every Corebase surface. [Design system](04-design-system.md)
+The interaction contract for every Steadhold surface. [Design system](04-design-system.md)
 fixes what things *look* like; this fixes how they *behave* — and it exists because
 the first dashboard shell was built without it and came out as a page router with
 panels rather than a product: correct in every colour and wrong in every mechanic.
@@ -22,7 +22,7 @@ not deferred to a redesign at the end.
 
 ### 1. The shell is the product
 
-Corebase has exactly two levels of context — **organization** and **project** — and
+Steadhold has exactly two levels of context — **organization** and **project** — and
 a user is always inside a known position in that hierarchy.
 
 - **Context is always visible and always switchable from where you are.** The
@@ -133,7 +133,7 @@ a panel that flashes red for two seconds on every create teaches distrust.
 
 ### 7. Words, numbers, and motion
 
-- **Nouns match the CLI and the docs exactly.** If `corebase db push` calls them
+- **Nouns match the CLI and the docs exactly.** If `steadhold db push` calls them
   migrations, the dashboard says migrations. A synonym invented for the UI is a
   second vocabulary users have to learn.
 - **Second person, present tense, no marketing voice**, and no "Oops". An error
@@ -194,7 +194,7 @@ half.
 
 ## Decisions
 
-- **D-224 — This document is binding for every Corebase UI surface, and §8's review gate runs on every UI change before it is committed. A "no" is either fixed or recorded as a known gap with its reason in [STATUS.md](../../STATUS.md).** *(Rationale: the first dashboard shell was built with the token layer honoured and no interaction contract at all, and it produced a page router with panels — the failure was not in any one screen but in the absence of a rule that would have caught all of them at once. A checklist run per change costs minutes and is the only mechanism that stays true as the surface grows from four pages to forty; a redesign at the end would instead mean rebuilding every screen twice.)*
+- **D-224 — This document is binding for every Steadhold UI surface, and §8's review gate runs on every UI change before it is committed. A "no" is either fixed or recorded as a known gap with its reason in [STATUS.md](../../STATUS.md).** *(Rationale: the first dashboard shell was built with the token layer honoured and no interaction contract at all, and it produced a page router with panels — the failure was not in any one screen but in the absence of a rule that would have caught all of them at once. A checklist run per change costs minutes and is the only mechanism that stays true as the surface grows from four pages to forty; a redesign at the end would instead mean rebuilding every screen twice.)*
 - **D-225 — Motion is functional, 120–180 ms, `transform`/`opacity` only, and fully disabled under `prefers-reduced-motion: reduce`. Nothing animates on load and nothing loops except an indeterminate progress indicator. Resolves OQ-170.** *(Rationale: the design system specified no motion at all, which is safe for a static board and wrong for a shell — a panel that appears instantly gives the user no idea where it came from, and layers that arrive without direction are the main reason an interface feels abrupt rather than smooth. Bounding it to two GPU-composited properties and one duration band keeps it from becoming a second, undocumented design language, and the reduced-motion clause is not optional: vestibular disorders make unbounded motion an accessibility failure, not a taste question.)*
 - **D-226 — The command palette (`⌘K`) and full keyboard reachability are shell requirements, not enhancements. Every capability a menu exposes must also be in the palette, and new capabilities land in the palette first.** *(Rationale: this is the single mechanic that makes a dashboard feel deep rather than wide, because it converts "learn where the button is" into "know what the thing is called" — and it is the cheapest surface to extend, so making it the default landing place for new actions means it stays complete instead of decaying into a search box that finds three things. Requiring it up front also forces every action to have a name and an invocable handler, which is what makes the same action scriptable in the CLI later.)*
 

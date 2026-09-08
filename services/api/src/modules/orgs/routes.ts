@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { ERROR_CODES, encodeId, decodeId, InvalidIdError } from '@corebase/types';
+import { ERROR_CODES, encodeId, decodeId, InvalidIdError } from '@steadhold/types';
 import { ApiError } from '../../kernel/errors.ts';
 import { resolvePrincipal, actorOf, type PrincipalDeps } from '../../kernel/principal.ts';
 import { require_, canAssignRole, canActOn, type Role } from '../../kernel/permissions.ts';

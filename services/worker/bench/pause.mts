@@ -12,8 +12,8 @@
  * miss the queue hop, which is part of what the customer waits for.
  *
  * Usage (staging up, migrated, images seeded):
- *   pnpm --filter @corebase/worker pause-bench
- *   CB_PB_CYCLES=50 pnpm --filter @corebase/worker pause-bench
+ *   pnpm --filter @steadhold/worker pause-bench
+ *   SH_PB_CYCLES=50 pnpm --filter @steadhold/worker pause-bench
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { join, resolve } from 'node:path';
@@ -21,30 +21,30 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { appDatabaseUrl } from './staging-env.mts';
 
 const ROOT = resolve(import.meta.dirname, '../../..');
-const CYCLES = Number(process.env.CB_PB_CYCLES ?? 20);
-const PORT = Number(process.env.CB_PB_API_PORT ?? 8097);
+const CYCLES = Number(process.env.SH_PB_CYCLES ?? 20);
+const PORT = Number(process.env.SH_PB_API_PORT ?? 8097);
 const TOKEN = 'pb-token-harness-token-long-enough-for-the-boot-check';
-const BUDGET_MS = Number(process.env.CB_PB_BUDGET_MS ?? 60_000);
+const BUDGET_MS = Number(process.env.SH_PB_BUDGET_MS ?? 60_000);
 
 const env = {
   ...process.env,
-  CB_CONTROL_DATABASE_URL: appDatabaseUrl(ROOT),
-  CB_REDIS_URL: process.env.CB_REDIS_URL ?? 'redis://127.0.0.1:56379',
-  CB_DOCKER_HOST: process.env.CB_DOCKER_HOST ?? '127.0.0.1',
-  CB_DOCKER_PORT: process.env.CB_DOCKER_PORT ?? '2376',
-  CB_DOCKER_CERT_DIR: process.env.CB_DOCKER_CERT_DIR ?? join(ROOT, 'infra/docker/staging/certs'),
-  CB_KEK_DIR: process.env.CB_KEK_DIR ?? join(ROOT, 'infra/docker/staging/kek.d'),
+  SH_CONTROL_DATABASE_URL: appDatabaseUrl(ROOT),
+  SH_REDIS_URL: process.env.SH_REDIS_URL ?? 'redis://127.0.0.1:56379',
+  SH_DOCKER_HOST: process.env.SH_DOCKER_HOST ?? '127.0.0.1',
+  SH_DOCKER_PORT: process.env.SH_DOCKER_PORT ?? '2376',
+  SH_DOCKER_CERT_DIR: process.env.SH_DOCKER_CERT_DIR ?? join(ROOT, 'infra/docker/staging/certs'),
+  SH_KEK_DIR: process.env.SH_KEK_DIR ?? join(ROOT, 'infra/docker/staging/kek.d'),
   // The id is the key file's basename, which staging.sh generates as
   // kek_<year>_<month>. Hard-coding 'local' produced a startup crash naming the
   // keys it did have, which is exactly the diagnostic that made this a one-line fix.
-  ...(process.env.CB_KEK_ID ? { CB_KEK_ID: process.env.CB_KEK_ID } : {}),
-  CB_BOOTSTRAP_SECRET: process.env.CB_BOOTSTRAP_SECRET ?? 'bench-bootstrap-secret-0123456789',
-  CB_STATIC_TOKEN: TOKEN,
-  CB_PG_PORT_MIN: '5433', CB_PG_PORT_MAX: '5462',
-  CB_POOLER_PORT_MIN: '6433', CB_POOLER_PORT_MAX: '6462',
+  ...(process.env.SH_KEK_ID ? { SH_KEK_ID: process.env.SH_KEK_ID } : {}),
+  SH_BOOTSTRAP_SECRET: process.env.SH_BOOTSTRAP_SECRET ?? 'bench-bootstrap-secret-0123456789',
+  SH_STATIC_TOKEN: TOKEN,
+  SH_PG_PORT_MIN: '5433', SH_PG_PORT_MAX: '5462',
+  SH_POOLER_PORT_MIN: '6433', SH_POOLER_PORT_MAX: '6462',
   PORT: String(PORT),
-  CB_METRICS_PORT: '9115',
-  CB_PROJECT_DOMAIN: 'localhost',
+  SH_METRICS_PORT: '9115',
+  SH_PROJECT_DOMAIN: 'localhost',
 };
 
 const children: ChildProcess[] = [];
@@ -52,7 +52,7 @@ const start = (name: string, cwd: string, script: string) => {
   const c = spawn('node', ['--experimental-strip-types', script], {
     cwd: join(ROOT, cwd), env, stdio: ['ignore', 'pipe', 'pipe'],
   });
-  c.stdout.on('data', (b) => { if (process.env.CB_PB_VERBOSE) process.stdout.write(`[${name}] ${b}`); });
+  c.stdout.on('data', (b) => { if (process.env.SH_PB_VERBOSE) process.stdout.write(`[${name}] ${b}`); });
   c.stderr.on('data', (b) => process.stderr.write(`[${name}] ${b}`));
   children.push(c);
   return c;

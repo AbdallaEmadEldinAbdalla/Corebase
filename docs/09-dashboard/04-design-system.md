@@ -2,11 +2,11 @@
 
 ## Purpose
 
-The visual and interaction contract for every Corebase surface: dashboard, docs, marketing, and the CLI's terminal output where colour applies. It exists so that a component built in month nine looks like one built in month one, and so that state — the thing users actually read the dashboard for — is expressed the same way everywhere.
+The visual and interaction contract for every Steadhold surface: dashboard, docs, marketing, and the CLI's terminal output where colour applies. It exists so that a component built in month nine looks like one built in month one, and so that state — the thing users actually read the dashboard for — is expressed the same way everywhere.
 
 Scope is tokens plus a component inventory with variants. It does not prescribe implementation beyond the token contract; the dashboard stack is fixed elsewhere (D-025: Next.js + Tailwind + shadcn/ui).
 
-The canonical artefact is the pair of design boards in Pencil (`pencil-new.pen`): frames **Corebase Design System** (light) and **Corebase Design System · Dark**, drawn from the same token set, plus five theme-exploration boards kept as the record of why violet won. This doc is the written source of truth for the values; the boards are the visual reference.
+The canonical artefact is the pair of design boards in Pencil (`pencil-new.pen`): frames **Steadhold Design System** (light) and **Steadhold Design System · Dark**, drawn from the same token set, plus five theme-exploration boards kept as the record of why violet won. This doc is the written source of truth for the values; the boards are the visual reference.
 
 ## Design
 
@@ -165,7 +165,7 @@ Three things that change between modes beyond the obvious:
 
 ## Decisions
 
-**D-177 — The brand accent is Electric Violet (`#7C3AED` light / `#8B5CF6` dark) with cool violet-tinted neutrals; the full token set and component inventory in this doc are binding for every Corebase surface.** *(Rationale: it was the only candidate of five where white text clears AA contrast on the accent in both themes, removing per-mode label exceptions across every component; it collides with no semantic colour, where both green candidates conflated brand with success and cyan forced info off blue; and it differentiates from a market that is uniformly blue and green.)*
+**D-177 — The brand accent is Electric Violet (`#7C3AED` light / `#8B5CF6` dark) with cool violet-tinted neutrals; the full token set and component inventory in this doc are binding for every Steadhold surface.** *(Rationale: it was the only candidate of five where white text clears AA contrast on the accent in both themes, removing per-mode label exceptions across every component; it collides with no semantic colour, where both green candidates conflated brand with success and cyan forced info off blue; and it differentiates from a market that is uniformly blue and green.)*
 
 **D-178 — Light and dark are both first-class and ship together. Components reference semantic role tokens only, never ramp steps; dark mode is a second set of role values, not an inversion.** *(Rationale: retrofitting dark mode means auditing every component twice; naming role tokens from day one makes the second theme a config change instead of a redesign, and it is the only way the "accent lifts one step in dark" rule can be applied centrally.)*
 

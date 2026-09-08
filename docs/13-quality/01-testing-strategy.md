@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The test pyramid for a platform company, layer by layer: what each layer proves, which tools run it, and who owns it. The proposal gave one line per layer (§73) plus the critical security test (§74); this doc makes each layer executable. Two properties distinguish Corebase's pyramid from an app company's: (1) the product under test *is* infrastructure, so the integration and E2E layers must run against real Postgres, real containers, and real object storage — mocks prove nothing about a BaaS; (2) two suites are **release-blocking by policy, not by convention**: the tenant-isolation suite ([tenant isolation tests](../06-security/03-tenant-isolation-tests.md), D-085) and the golden-path E2E defined here (D-151).
+The test pyramid for a platform company, layer by layer: what each layer proves, which tools run it, and who owns it. The proposal gave one line per layer (§73) plus the critical security test (§74); this doc makes each layer executable. Two properties distinguish Steadhold's pyramid from an app company's: (1) the product under test *is* infrastructure, so the integration and E2E layers must run against real Postgres, real containers, and real object storage — mocks prove nothing about a BaaS; (2) two suites are **release-blocking by policy, not by convention**: the tenant-isolation suite ([tenant isolation tests](../06-security/03-tenant-isolation-tests.md), D-085) and the golden-path E2E defined here (D-151).
 
 ## Design
 
@@ -12,7 +12,7 @@ The test pyramid for a platform company, layer by layer: what each layer proves,
 |---|---|---|---|---|---|
 | Unit | vitest | CI, no containers | Every PR | Feature author | Yes (red = no merge) |
 | Integration | vitest + testcontainers (or the D-027 compose stack) | CI, Docker | Every PR | Feature author | Yes |
-| Golden-path E2E | TS script using `@corebase/core` + CLI | Staging | Every deploy | Platform team | **Yes (D-151)** |
+| Golden-path E2E | TS script using `@steadhold/core` + CLI | Staging | Every deploy | Platform team | **Yes (D-151)** |
 | Isolation suite | Owned by [tenant isolation tests](../06-security/03-tenant-isolation-tests.md) | Staging + prod canaries | Every deploy + hourly staging + daily prod | Security owner | **Yes (D-085, fleet-wide freeze)** |
 | Load/perf | k6 | Staging | Nightly + before capacity-relevant releases | Platform team | Threshold regressions block |
 | Chaos-lite | Scripted fault injection | Staging | Weekly scheduled | On-call rotation | Findings triaged as Sev-2 |
@@ -22,7 +22,7 @@ The test pyramid for a platform company, layer by layer: what each layer proves,
 Pure logic, no I/O, milliseconds per test. The discipline is not "write unit tests" — it is **designing the risky logic to be unit-testable**, i.e. extracting it into pure functions with all effects at the edges. The enumerated unit-test targets:
 
 - **Token logic**: JWT claim construction, expiry/refresh-rotation decisions, reuse-detection state ([sessions & tokens](../05-auth/02-sessions-and-tokens.md)) — as pure functions over `(token, now, store-snapshot)`.
-- **Filter parsing**: the gateway's request-classification and key-validation logic; anything Corebase adds around PostgREST's grammar ([REST API design](../04-data-api/01-rest-api-design.md)). PostgREST's own grammar is *not* re-unit-tested — D-005/D-011 mean we inherit its test suite, not duplicate it.
+- **Filter parsing**: the gateway's request-classification and key-validation logic; anything Steadhold adds around PostgREST's grammar ([REST API design](../04-data-api/01-rest-api-design.md)). PostgREST's own grammar is *not* re-unit-tested — D-005/D-011 mean we inherit its test suite, not duplicate it.
 - **Quota math**: rate-limit window arithmetic (D-033), plan-cap and disk-headroom calculations, node bin-packing/reservation arithmetic ([postgres provisioning](../03-database-platform/01-postgres-provisioning.md) §7) — property-based where cheap (fast-check): reservations never exceed `0.85 × ram_total`, ladder thresholds monotone.
 - **State-machine transitions**: the provisioning lifecycle ([provisioning state machine](../02-control-plane/03-provisioning-state-machine.md)) as a **pure transition function** `(state, event) → (state', effects[])`. Every legal transition, every illegal transition (must yield a rejection, matching the `409 PROJECT_NOT_READY` contract), and every saga checkpoint/resume path is enumerated in a table-driven test.
 
@@ -30,7 +30,7 @@ This creates real design pressure, and D-150 makes it binding: the state machine
 
 ### 2. Integration (real dependencies, containerized)
 
-Everything that touches a database or a wire protocol. Tooling: **vitest + testcontainers** for suites that need one or two services (fast, parallel, per-suite isolation); the **D-027 compose stack** (`corebase dev` — the same Postgres 17 / PgBouncer / PostgREST / auth / MinIO images as prod) for suites that need the whole assembly. Using the D-027 stack in CI is deliberate double-duty: every CI run also proves the local-dev stack still boots, which is §119 criterion 13.
+Everything that touches a database or a wire protocol. Tooling: **vitest + testcontainers** for suites that need one or two services (fast, parallel, per-suite isolation); the **D-027 compose stack** (`steadhold dev` — the same Postgres 17 / PgBouncer / PostgREST / auth / MinIO images as prod) for suites that need the whole assembly. Using the D-027 stack in CI is deliberate double-duty: every CI run also proves the local-dev stack still boots, which is §119 criterion 13.
 
 Enumerated DB-touching suites:
 
@@ -42,7 +42,7 @@ Enumerated DB-touching suites:
 
 ### 3. End-to-end: the golden path (D-151)
 
-One scripted scenario, run against **staging on every deploy**, written in TypeScript **using `@corebase/core` and the CLI as its clients** (so the SDK and CLI are exercised as a side effect — §119 criterion 12). It is the proposal's §73 E2E chain extended to the full MVP surface, and per §119 **this script is the MVP acceptance test**: the release that makes it pass end-to-end is, by definition, the MVP.
+One scripted scenario, run against **staging on every deploy**, written in TypeScript **using `@steadhold/core` and the CLI as its clients** (so the SDK and CLI are exercised as a side effect — §119 criterion 12). It is the proposal's §73 E2E chain extended to the full MVP surface, and per §119 **this script is the MVP acceptance test**: the release that makes it pass end-to-end is, by definition, the MVP.
 
 The scenario, as numbered steps (each step asserts its exact expected result, not merely "no error"):
 
@@ -51,13 +51,13 @@ The scenario, as numbered steps (each step asserts its exact expected result, no
 3. Create a project; record `t0`.
 4. Poll `GET /v1/projects/:ref` until `READY`. **Assert `READY − t0 < 60s` (hard fail)**; warn above 30s, since the design target is <30s / warm-pool ~1–3s (D-071, [postgres provisioning](../03-database-platform/01-postgres-provisioning.md) §4). The 60s line is the customer-promise ceiling; the warning keeps the script honest about regression toward it.
 5. Fetch project keys (anon, service_role) and connection info.
-6. Write a migration (`create table todos … enable row level security` + owner-only policies + an anon-insert policy) and apply it with `corebase db push` (§119 criteria 4, 9, 14).
+6. Write a migration (`create table todos … enable row level security` + owner-only policies + an anon-insert policy) and apply it with `steadhold db push` (§119 criteria 4, 9, 14).
 7. Insert a row via `/rest/v1/todos` with the **anon key**; assert 201 and that RLS shaped the write as policied.
 8. Sign up an end user via the project's auth API; capture the verification mail from the sink; verify (§119 criterion 7).
 9. Log in; receive access + refresh JWTs (§119 criterion 8).
 10. **RLS-scoped read**: as the user, read `todos` — assert the user sees exactly their own rows; assert a second user sees zero of them (the in-project miniature of §74).
 11. Upload a file to a bucket; download it; assert byte-identical checksum (§119 criteria 10–11).
-12. Run `corebase export`; assert the tarball contains the DB dump, migrations directory, storage manifest, and users export, and that the dump restores into a scratch Postgres (D-004 — the moat claim gets tested every deploy).
+12. Run `steadhold export`; assert the tarball contains the DB dump, migrations directory, storage manifest, and users export, and that the dump restores into a scratch Postgres (D-004 — the moat claim gets tested every deploy).
 13. Pause the project (assert the data API goes dark/parked), then resume; assert the same row is readable again (D-008).
 14. Restore the latest backup **to a new instance** (D-019); assert the row exists there; delete both projects.
 
@@ -150,7 +150,7 @@ Explicitly allowed to be under-tested in V1 (listed so it's a choice, not an acc
 ## Open Questions
 
 - **OQ-150 — Staging topology fidelity:** how many nodes must staging run for placement-sensitive tests (same-node A/B pinning, provisioning-storm bin-packing, cordon behavior) to be meaningful, and what does that cost? Interacts with OQ-085. Revisit when staging is stood up ([IaC & CI/CD](../11-infrastructure/02-iac-and-cicd.md)).
-- ~~**OQ-151 — k6 threshold numbers**~~ — **resolved by D-388.** The latency budget's numbers are locked, and the suite now splits them by whether they travel between machines. The error rate, the RLS-correctness rate and the gateway's *added* cost (measured against a direct arm in the same interleaved run) are enforced everywhere. The absolute p50/p99 stay record-only except under `CB_LOAD_STRICT=1`, because a shared runner is not a production node and a threshold that ignores that gets muted rather than fixed. What remains open is narrower and is tracked as **OQ-184**: whether the doc's ~1.5 ms gateway figure is achievable at all, or wants revising — it was measured at 2.91 ms per request on a laptop with Docker-forwarded Redis, and needs a production-shaped node to settle.
+- ~~**OQ-151 — k6 threshold numbers**~~ — **resolved by D-388.** The latency budget's numbers are locked, and the suite now splits them by whether they travel between machines. The error rate, the RLS-correctness rate and the gateway's *added* cost (measured against a direct arm in the same interleaved run) are enforced everywhere. The absolute p50/p99 stay record-only except under `SH_LOAD_STRICT=1`, because a shared runner is not a production node and a threshold that ignores that gets muted rather than fixed. What remains open is narrower and is tracked as **OQ-184**: whether the doc's ~1.5 ms gateway figure is achievable at all, or wants revising — it was measured at 2.91 ms per request on a laptop with Docker-forwarded Redis, and needs a production-shaped node to settle.
 - **OQ-152 — Flake policy:** quarantine mechanism for a flaky non-critical test (auto-skip + tracking issue vs hard rule that flakes block like failures). The golden path and isolation suite are explicitly *not* quarantinable — flakes there are treated as failures — but the policy for the rest needs deciding before the suite is big enough to flake.
 
 ## Dependencies

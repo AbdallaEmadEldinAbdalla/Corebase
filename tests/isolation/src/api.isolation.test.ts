@@ -100,7 +100,7 @@ describe('API-6 — alg=none', () => {
     const part = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
     const now = Math.floor(Date.now() / 1000);
     const unsigned = `${part({ alg: 'none', typ: 'JWT', kid: A().signing.kid })}.`
-      + `${part({ iss: `https://${A().ref}.corebase.test`, ref: A().ref, role: 'service_role',
+      + `${part({ iss: `https://${A().ref}.steadhold.test`, ref: A().ref, role: 'service_role',
                   iat: now, exp: now + 3600 })}.`;
     const res = await get(hostOf(A()), { apikey: unsigned });
     expect(res.statusCode).toBe(401);
@@ -118,7 +118,7 @@ describe('API-7 — HS256 downgrade, signing with A\'s public key as the HMAC se
     const part = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
     const now = Math.floor(Date.now() / 1000);
     const head = part({ alg: 'HS256', typ: 'JWT', kid: A().signing.kid });
-    const body = part({ iss: `https://${A().ref}.corebase.test`, ref: A().ref,
+    const body = part({ iss: `https://${A().ref}.steadhold.test`, ref: A().ref,
                         role: 'service_role', iat: now, exp: now + 3600 });
     const sig = createHmac('sha256', pubPem).update(`${head}.${body}`).digest('base64url');
     const res = await get(hostOf(A()), { apikey: `${head}.${body}.${sig}` });

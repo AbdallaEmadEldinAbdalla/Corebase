@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Proposal §33 says "Phase 1: VMs + Docker. Phase 2: orchestration. Phase 3: Kubernetes where it provides actual value." This doc makes that concrete: the exact Phase A node inventory Corebase launches with (D-022, D-023), the entry/exit criteria that gate each phase transition (so the move is *measured*, not aspirational), the provider-abstraction interfaces from proposal §31–32 as real TypeScript sketches, and an honest provider-exit analysis — because D-023's "abstractions keep exit possible" is only true if someone has priced the exit.
+Proposal §33 says "Phase 1: VMs + Docker. Phase 2: orchestration. Phase 3: Kubernetes where it provides actual value." This doc makes that concrete: the exact Phase A node inventory Steadhold launches with (D-022, D-023), the entry/exit criteria that gate each phase transition (so the move is *measured*, not aspirational), the provider-abstraction interfaces from proposal §31–32 as real TypeScript sketches, and an honest provider-exit analysis — because D-023's "abstractions keep exit possible" is only true if someone has priced the exit.
 
 ## Design
 
@@ -31,7 +31,7 @@ Dedicated-vCPU (CCX) for data nodes is deliberate: customer Postgres on shared-v
 
 #### How each node runs software
 
-Per D-022: each node carries one or more **Docker Compose files rendered from the release manifest** ([IaC & CI/CD](02-iac-and-cicd.md)), each owned by a systemd unit (`corebase-<stack>.service`, `Restart=always`, `docker compose up` in the foreground). systemd is the process supervisor; Compose is the container spec; nothing hand-started. **Exception:** per-project triplets on data nodes are *not* Compose files — they are containers created directly by the worker's reconciler (D-052/D-053) and labeled with `project_ref`. Compose covers the platform's own standing services; the reconciler covers the per-tenant fleet.
+Per D-022: each node carries one or more **Docker Compose files rendered from the release manifest** ([IaC & CI/CD](02-iac-and-cicd.md)), each owned by a systemd unit (`steadhold-<stack>.service`, `Restart=always`, `docker compose up` in the foreground). systemd is the process supervisor; Compose is the container spec; nothing hand-started. **Exception:** per-project triplets on data nodes are *not* Compose files — they are containers created directly by the worker's reconciler (D-052/D-053) and labeled with `project_ref`. Compose covers the platform's own standing services; the reconciler covers the per-tenant fleet.
 
 #### The node-agent question (analyzed, and settled by D-052)
 
@@ -139,7 +139,7 @@ interface DnsProvider {
 }
 ```
 
-Notes: S3-compat (D-017) means `StorageProvider` is nearly free — the interface mostly wraps one SDK. `DatabaseNodeProvider` is where the real coupling risk lives (Docker Engine semantics leak into `ContainerSpec`); the discipline is that `ContainerSpec` stays a Corebase-shaped description (image, limits per D-055, mounts, labels, network), translated inside the impl. Wildcard TLS and DDoS sit *outside* these interfaces — they are Cloudflare product features, and their exit cost is accounted below, not hidden behind an interface that pretends they're portable.
+Notes: S3-compat (D-017) means `StorageProvider` is nearly free — the interface mostly wraps one SDK. `DatabaseNodeProvider` is where the real coupling risk lives (Docker Engine semantics leak into `ContainerSpec`); the discipline is that `ContainerSpec` stays a Steadhold-shaped description (image, limits per D-055, mounts, labels, network), translated inside the impl. Wildcard TLS and DDoS sit *outside* these interfaces — they are Cloudflare product features, and their exit cost is accounted below, not hidden behind an interface that pretends they're portable.
 
 ### Provider exit analysis (honest table)
 

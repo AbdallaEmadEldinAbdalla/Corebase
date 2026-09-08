@@ -20,12 +20,12 @@ import type { SagaStep, SagaContext } from './jobs/runner.ts';
  * starting, a step re-run after a partial success, cgroup limits that must
  * actually be on the container and not just in the spec object.
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
-const CERT_DIR = process.env.CB_DOCKER_CERT_DIR
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
+const CERT_DIR = process.env.SH_DOCKER_CERT_DIR
   ?? join(process.cwd(), '../../infra/docker/staging/certs');
-const HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
+const HOST = process.env.SH_DOCKER_HOST ?? '127.0.0.1';
+const PORT = Number(process.env.SH_DOCKER_PORT ?? 2376);
 const SECRET = 'test-bootstrap-secret-0123456789';
 
 let pool: Pool; let docker: Docker; let orgId: string;
@@ -165,23 +165,23 @@ describe('T5d — Docker Engine API client', () => {
 
   t('reports missing images and volumes as absent, not as errors', async () => {
     expect(await docker.imageExists(IMAGE)).toBe(true);
-    expect(await docker.imageExists('corebase/definitely-not-here:0')).toBe(false);
-    expect(await docker.volumeExists('cb-vol-does-not-exist')).toBe(false);
-    expect(await docker.inspectContainer('cb-not-a-container')).toBeUndefined();
+    expect(await docker.imageExists('steadhold/definitely-not-here:0')).toBe(false);
+    expect(await docker.volumeExists('sh-vol-does-not-exist')).toBe(false);
+    expect(await docker.inspectContainer('sh-not-a-container')).toBeUndefined();
   }, 20_000);
 
   t('surfaces non-404 engine failures as DockerError', async () => {
     // An invalid spec is a 400/500 from the engine — it must not be swallowed
     // into a false "does not exist".
     const err = await docker
-      .createContainer('cb-bad-spec', { Image: '' } as never)
+      .createContainer('sh-bad-spec', { Image: '' } as never)
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(DockerError);
     expect((err as DockerError).isNotFound).toBe(false);
   }, 20_000);
 
   t('volume create then remove is idempotent in both directions', async () => {
-    const name = 'cb-vol-idem-test';
+    const name = 'sh-vol-idem-test';
     created.volumes.add(name);
     await docker.createVolume(name, { [LABEL_MANAGED]: 'true' });
     await docker.createVolume(name, { [LABEL_MANAGED]: 'true' }); // again: no throw

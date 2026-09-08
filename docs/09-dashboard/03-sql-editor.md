@@ -24,7 +24,7 @@ The SQL editor at `/project/[ref]/sql` (proposal §42): the power surface of the
 
 | Feature | Where it lives | Spec |
 |---|---|---|
-| **Tabs** (unsaved scratch) | **localStorage**, keyed `corebase:sql:<ref>` | Per-project, survive reload, device-local, never sent to the server until executed. Cheap, private, zero API surface. |
+| **Tabs** (unsaved scratch) | **localStorage**, keyed `steadhold:sql:<ref>` | Per-project, survive reload, device-local, never sent to the server until executed. Cheap, private, zero API surface. |
 | **Saved queries** (named) | **Server-side, control plane** (`GET/POST /v1/projects/:ref/queries`) | Name + SQL text, project-scoped and shared with all project members; deep-linkable as `/sql/[queryId]`. This is the durable, team-visible tier — the reason tabs alone aren't enough. |
 | **History** | **Server-side, control plane** | Last **100** executions per project: SQL text, actor, started_at, duration, rows returned/affected, status (ok / error code). Rerun and save-as-query from any entry. Retention 30 days. **Sensitive-value caution:** history stores verbatim SQL, so literals (emails, tokens pasted into a WHERE clause) persist server-side — the history panel says so, entries are deletable individually and in bulk, and redaction policy is OQ-134. |
 
@@ -57,7 +57,7 @@ The SQL editor at `/project/[ref]/sql` (proposal §42): the power surface of the
 
 ### Safety rails (D-134)
 
-1. **Execution role choice — the RLS debugging story.** A role switcher in the toolbar, default **`corebase_admin`** (D-132; BYPASSRLS — sees everything, exactly like the owner connection string). Options: **`anon`**, **`authenticated`**, and **`authenticated` as a specific user** (paste or pick a user id; optional extra-claims JSON). Non-admin runs wrap the statement exactly like the [data-plane pipeline](../06-security/02-rls-design.md) does under D-015:
+1. **Execution role choice — the RLS debugging story.** A role switcher in the toolbar, default **`steadhold_admin`** (D-132; BYPASSRLS — sees everything, exactly like the owner connection string). Options: **`anon`**, **`authenticated`**, and **`authenticated` as a specific user** (paste or pick a user id; optional extra-claims JSON). Non-admin runs wrap the statement exactly like the [data-plane pipeline](../06-security/02-rls-design.md) does under D-015:
 
    ```sql
    BEGIN;
@@ -97,7 +97,7 @@ A failed run renders, in order:
 
 ## Decisions
 
-- **D-134 — The SQL editor is CodeMirror 6 (PostgreSQL dialect, schema-aware completions from an introspection cache), and ships with binding safety-rail defaults: execution via the D-132 admin path with a role switcher (default `corebase_admin`; `anon`/`authenticated`(+claims) runs wrap statements in the exact `SET LOCAL ROLE` + `request.jwt.claims` pattern of the data-plane pipeline); server-enforced destructive-statement guard with typed confirmation for `DROP TABLE`/`DROP SCHEMA`; `statement_timeout` 60 s default (project-configurable, 10 min cap); `LIMIT 501` auto-append on bare SELECTs with a show-more affordance; one transaction per run with explicit-`BEGIN` passthrough; per-tab read-only mode. Tabs are localStorage-only; named queries and 100-entry execution history are server-side in the control plane.** *(Rationale: CM6 wins on bundle weight and extension fit for a single-buffer console, serving the §90 speed principle; the rails encode the difference between "powerful console" and "outage generator", and mirroring the real RLS pipeline in the role switcher makes policy debugging trustworthy — what you test is literally what production executes.)*
+- **D-134 — The SQL editor is CodeMirror 6 (PostgreSQL dialect, schema-aware completions from an introspection cache), and ships with binding safety-rail defaults: execution via the D-132 admin path with a role switcher (default `steadhold_admin`; `anon`/`authenticated`(+claims) runs wrap statements in the exact `SET LOCAL ROLE` + `request.jwt.claims` pattern of the data-plane pipeline); server-enforced destructive-statement guard with typed confirmation for `DROP TABLE`/`DROP SCHEMA`; `statement_timeout` 60 s default (project-configurable, 10 min cap); `LIMIT 501` auto-append on bare SELECTs with a show-more affordance; one transaction per run with explicit-`BEGIN` passthrough; per-tab read-only mode. Tabs are localStorage-only; named queries and 100-entry execution history are server-side in the control plane.** *(Rationale: CM6 wins on bundle weight and extension fit for a single-buffer console, serving the §90 speed principle; the rails encode the difference between "powerful console" and "outage generator", and mirroring the real RLS pipeline in the role switcher makes policy debugging trustworthy — what you test is literally what production executes.)*
 
 ## Open Questions
 

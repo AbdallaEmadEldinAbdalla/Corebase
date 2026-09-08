@@ -6,8 +6,8 @@ import {
 } from './placement.ts';
 
 /** T5c integration: placement against the real staging control DB. */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
 
 let pool: Pool; let orgId: string; let up = false;
 
@@ -66,7 +66,7 @@ describe('T5c — placement', () => {
     const placement = await allocateNode(pool, { projectId: p.id, ref: p.ref, plan: 'free' });
     expect(placement.bookedMb).toBe(PLAN_RAM_MB['free']);
     expect(placement.port).toBe(PG_PORT_RANGE[0]);
-    expect(placement.volumeName).toBe(`cb-${p.ref}-pgdata`);
+    expect(placement.volumeName).toBe(`sh-${p.ref}-pgdata`);
     expect((await nodeRow()).ram_reserved_mb).toBe(350);
     const { rows } = await pool.query(`select status::text, ram_limit_mb from project_databases`);
     expect(rows[0]!.status).toBe('provisioning');

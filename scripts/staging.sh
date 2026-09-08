@@ -32,7 +32,7 @@ pull_certs() {
   # Redirection has no ownership to preserve, which removes the difference rather
   # than papering over it with sudo.
   for f in ca.pem cert.pem key.pem; do
-    docker exec cb-data-node cat "/certs/client/$f" > "$CERTS/$f"
+    docker exec sh-data-node cat "/certs/client/$f" > "$CERTS/$f"
     [ -s "$CERTS/$f" ] || { echo "  ✗ $f came back empty from the data node"; exit 1; }
   done
   chmod 644 "$CERTS/ca.pem" "$CERTS/cert.pem"
@@ -62,9 +62,9 @@ cmd_up() {
   # the first Linux runner.
   mkdir -p "$STAGING_DIR/object-store-certs"
   $DC up -d
-  wait_for "control-db"    60 docker exec cb-control-db pg_isready -U corebase -d corebase_control
-  wait_for "control-redis" 30 docker exec cb-control-redis redis-cli ping
-  wait_for "dockerd"       90 docker exec cb-data-node docker info
+  wait_for "control-db"    60 docker exec sh-control-db pg_isready -U steadhold -d steadhold_control
+  wait_for "control-redis" 30 docker exec sh-control-redis redis-cli ping
+  wait_for "dockerd"       90 docker exec sh-data-node docker info
   pull_certs
   wait_for "data-node TLS API" 30 node_docker info
   echo "▸ up"
@@ -84,7 +84,7 @@ cmd_kek() {
     chmod 600 "$KEK_DIR/$id.key"
     echo "  ✓ generated KEK $id (32 bytes)"
   fi
-  echo "    export CB_KEK_DIR=$KEK_DIR"
+  echo "    export SH_KEK_DIR=$KEK_DIR"
 }
 
 cmd_app_role() {
@@ -100,17 +100,17 @@ cmd_app_role() {
     . "$secret_file"
     echo "  ✓ reusing the existing app-role password"
   else
-    CB_APP_DB_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 32)"
-    printf 'CB_APP_DB_PASSWORD=%s\n' "$CB_APP_DB_PASSWORD" > "$secret_file"
+    SH_APP_DB_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 32)"
+    printf 'SH_APP_DB_PASSWORD=%s\n' "$SH_APP_DB_PASSWORD" > "$secret_file"
     chmod 600 "$secret_file"
     echo "  ✓ generated an app-role password → $(basename "$secret_file") (gitignored)"
   fi
-  docker exec -e PW="$CB_APP_DB_PASSWORD" cb-control-db \
-    psql -U corebase -d corebase_control -v ON_ERROR_STOP=1 -qc \
-    "ALTER ROLE corebase_app LOGIN PASSWORD '$CB_APP_DB_PASSWORD'" >/dev/null
-  echo "  ✓ corebase_app can log in"
-  printf '    export CB_CONTROL_DATABASE_URL=postgres://corebase_app:%s@127.0.0.1:%s/corebase_control\n' \
-    "$CB_APP_DB_PASSWORD" "$CONTROL_DB_PORT"
+  docker exec -e PW="$SH_APP_DB_PASSWORD" sh-control-db \
+    psql -U steadhold -d steadhold_control -v ON_ERROR_STOP=1 -qc \
+    "ALTER ROLE steadhold_app LOGIN PASSWORD '$SH_APP_DB_PASSWORD'" >/dev/null
+  echo "  ✓ steadhold_app can log in"
+  printf '    export SH_CONTROL_DATABASE_URL=postgres://steadhold_app:%s@127.0.0.1:%s/steadhold_control\n' \
+    "$SH_APP_DB_PASSWORD" "$CONTROL_DB_PORT"
 }
 
 # ── egress default-deny (D-081) ──────────────────────────────────────────────
@@ -139,8 +139,8 @@ cmd_app_role() {
 cmd_harden_egress() {
   local pool="10.201.0.0/16"
   local store_ip store_port
-  store_ip="$(grep -E '^CB_BACKUP_S3_ENDPOINT=' "$STAGING_DIR/backup-store.env" 2>/dev/null | cut -d= -f2)"
-  store_port="$(grep -E '^CB_BACKUP_S3_PORT=' "$STAGING_DIR/backup-store.env" 2>/dev/null | cut -d= -f2)"
+  store_ip="$(grep -E '^SH_BACKUP_S3_ENDPOINT=' "$STAGING_DIR/backup-store.env" 2>/dev/null | cut -d= -f2)"
+  store_port="$(grep -E '^SH_BACKUP_S3_PORT=' "$STAGING_DIR/backup-store.env" 2>/dev/null | cut -d= -f2)"
   if [ -z "$store_ip" ]; then
     echo "  ✗ no object-store endpoint — run ./scripts/staging.sh backup-store first." >&2
     echo "    Applying the deny without the archive allowlist would break WAL archiving," >&2
@@ -167,7 +167,7 @@ cmd_harden_egress() {
   # INPUT drops are safe for the data path: NAT egress and DNS forwarding are
   # FORWARD, and container-to-container traffic inside a project stays on its own
   # bridge. Nothing a project runs needs to originate a connection *to* the node.
-  docker exec cb-data-node sh -c "
+  docker exec sh-data-node sh -c "
     set -e
     iptables -F DOCKER-USER
     # Return traffic first: without it every allowed outbound connection dies on
@@ -205,9 +205,9 @@ cmd_backup_store() {
   # heard of it. An IP is what a project container can actually dial, and the
   # same field in production holds `<account>.r2.cloudflarestorage.com`, so the
   # shape of the config is identical either way.
-  local bucket="${BACKUP_BUCKET:-corebase-backups-eu-central}"
-  local key="${BACKUP_ACCESS_KEY:-corebase-backup}"
-  local secret="${BACKUP_SECRET_KEY:-corebase-backup-secret}"
+  local bucket="${BACKUP_BUCKET:-steadhold-backups-eu-central}"
+  local key="${BACKUP_ACCESS_KEY:-steadhold-backup}"
+  local secret="${BACKUP_SECRET_KEY:-steadhold-backup-secret}"
 
   # Self-signed TLS for the store, generated once. pgBackRest talks S3 over HTTPS
   # and has no plain-HTTP mode, so the substitute has to serve TLS the way R2 does.
@@ -220,8 +220,8 @@ cmd_backup_store() {
     docker run --rm -v "$cert_dir:/out" alpine/openssl:latest \
       req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
       -keyout /out/private.key -out /out/public.crt \
-      -subj "/CN=cb-object-store" \
-      -addext "subjectAltName=DNS:cb-object-store,DNS:object-store,DNS:localhost,IP:127.0.0.1" \
+      -subj "/CN=sh-object-store" \
+      -addext "subjectAltName=DNS:sh-object-store,DNS:object-store,DNS:localhost,IP:127.0.0.1" \
       >/dev/null 2>&1
     [ -s "$cert_dir/public.crt" ] || { echo "  ✗ could not generate the store's certificate"; return 1; }
     # openssl ran as root inside that container, so the key landed root-owned and
@@ -230,30 +230,30 @@ cmd_backup_store() {
     chmod 0644 "$cert_dir/public.crt" "$cert_dir/private.key" 2>/dev/null \
       || sudo chmod 0644 "$cert_dir/public.crt" "$cert_dir/private.key"
     echo "  ✓ generated a self-signed certificate for the object store"
-    docker restart cb-object-store >/dev/null
+    docker restart sh-object-store >/dev/null
     sleep 4
   fi
 
   # `--insecure` throughout: the store's certificate is self-signed, and mc
   # verifying it would only be testing our own CA plumbing rather than the store.
-  docker exec cb-object-store mc --insecure alias set local https://127.0.0.1:9000 "$key" "$secret" >/dev/null 2>&1 \
+  docker exec sh-object-store mc --insecure alias set local https://127.0.0.1:9000 "$key" "$secret" >/dev/null 2>&1 \
     || { echo "  ✗ cannot reach the object store over TLS"; return 1; }
-  if docker exec cb-object-store mc --insecure ls "local/$bucket" >/dev/null 2>&1; then
+  if docker exec sh-object-store mc --insecure ls "local/$bucket" >/dev/null 2>&1; then
     echo "  ✓ bucket $bucket already exists"
   else
-    docker exec cb-object-store mc --insecure mb "local/$bucket" >/dev/null
+    docker exec sh-object-store mc --insecure mb "local/$bucket" >/dev/null
     echo "  ✓ created bucket $bucket"
   fi
 
   local ip
-  ip="$(docker inspect cb-object-store \
+  ip="$(docker inspect sh-object-store \
         --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' | head -c 32)"
   if [ -z "$ip" ]; then echo "  ✗ could not resolve the object store's address"; return 1; fi
 
   local env_file="$STAGING_DIR/backup-store.env"
   cat > "$env_file" <<EOF
-CB_BACKUP_S3_ENDPOINT=$ip
-CB_BACKUP_S3_PORT=9000
+SH_BACKUP_S3_ENDPOINT=$ip
+SH_BACKUP_S3_PORT=9000
 # The *control plane's* view of the same store, which is not the projects' view.
 #
 # A project container reaches it through the node's NAT egress, so its endpoint is
@@ -261,14 +261,14 @@ CB_BACKUP_S3_PORT=9000
 # which cannot route to a container IP at all, so it uses the published port. In
 # production both are R2 over the internet and these two are identical, which is
 # why the control-plane pair falls back to the project pair when unset.
-CB_BACKUP_S3_CONTROL_ENDPOINT=127.0.0.1
-CB_BACKUP_S3_CONTROL_PORT=${OBJECT_STORE_PORT:-59000}
-CB_BACKUP_S3_BUCKET=$bucket
-CB_BACKUP_S3_KEY=$key
-CB_BACKUP_S3_SECRET=$secret
-CB_BACKUP_S3_REGION=auto
-CB_BACKUP_S3_URI_STYLE=path
-CB_BACKUP_S3_VERIFY_TLS=n
+SH_BACKUP_S3_CONTROL_ENDPOINT=127.0.0.1
+SH_BACKUP_S3_CONTROL_PORT=${OBJECT_STORE_PORT:-59000}
+SH_BACKUP_S3_BUCKET=$bucket
+SH_BACKUP_S3_KEY=$key
+SH_BACKUP_S3_SECRET=$secret
+SH_BACKUP_S3_REGION=auto
+SH_BACKUP_S3_URI_STYLE=path
+SH_BACKUP_S3_VERIFY_TLS=n
 EOF
   chmod 600 "$env_file"
   echo "  ✓ endpoint https://$ip:9000 → $(basename "$env_file") (gitignored)"
@@ -281,8 +281,8 @@ EOF
   # project network" when the real cause was that `backup-store` ran before
   # `seed-images` and the image simply was not there — a misleading diagnostic
   # pointing at the one thing that was working.
-  if ! node_docker image inspect corebase/postgres:17.5 >/dev/null 2>&1; then
-    echo "  ⚠ skipping the egress probe: corebase/postgres:17.5 is not on the node yet."
+  if ! node_docker image inspect steadhold/postgres:17.5 >/dev/null 2>&1; then
+    echo "  ⚠ skipping the egress probe: steadhold/postgres:17.5 is not on the node yet."
     echo "    Run ./scripts/staging.sh seed-images first, then this again, to check it."
     return 0
   fi
@@ -291,11 +291,11 @@ EOF
   # where the redirect is a syntax error — which fails the probe for a reason that
   # has nothing to do with routing and reads exactly like a routing failure.
   local probe_out
-  if probe_out="$(docker exec cb-data-node sh -c \
-      "docker network create cb-egress-probe >/dev/null 2>&1; \
-       docker run --rm --network cb-egress-probe --entrypoint bash corebase/postgres:17.5 \
+  if probe_out="$(docker exec sh-data-node sh -c \
+      "docker network create sh-egress-probe >/dev/null 2>&1; \
+       docker run --rm --network sh-egress-probe --entrypoint bash steadhold/postgres:17.5 \
          -c 'exec 3<>/dev/tcp/${ip}/9000' 2>&1; r=\$?; \
-       docker network rm cb-egress-probe >/dev/null 2>&1; exit \$r" 2>&1)"; then
+       docker network rm sh-egress-probe >/dev/null 2>&1; exit \$r" 2>&1)"; then
     echo "  ✓ reachable from a project's private network (NAT egress, as in production)"
   else
     echo "  ✗ NOT reachable from a project network — archiving would fail silently"
@@ -310,22 +310,22 @@ EOF
 # environment the services need, and prove the path they will actually take.
 cmd_mail_sink() {
   echo "▸ email sink"
-  if ! docker ps --filter name=cb-mailpit --filter status=running -q | grep -q .; then
-    echo "  ✗ cb-mailpit is not running — run ./scripts/staging.sh up"; return 1
+  if ! docker ps --filter name=sh-mailpit --filter status=running -q | grep -q .; then
+    echo "  ✗ sh-mailpit is not running — run ./scripts/staging.sh up"; return 1
   fi
 
   local env_file="$STAGING_DIR/mail-sink.env"
   cat > "$env_file" <<EOF
 # The worker runs on the host here, so it reaches the sink on the published port.
 # In production these are the provider's own host and 587 with STARTTLS.
-CB_SMTP_HOST=127.0.0.1
-CB_SMTP_PORT=${MAILPIT_SMTP_PORT:-51025}
+SH_SMTP_HOST=127.0.0.1
+SH_SMTP_PORT=${MAILPIT_SMTP_PORT:-51025}
 # Plaintext, and only ever correct for a local sink. The worker refuses this in
 # production, and refuses to send credentials over it anywhere.
-CB_SMTP_TLS=off
-CB_MAIL_FROM=auth@mail.corebase.co
+SH_SMTP_TLS=off
+SH_MAIL_FROM=auth@mail.steadhold.app
 # Where the tests read what arrived. Not used by the services.
-CB_MAILPIT_API=http://127.0.0.1:${MAILPIT_HTTP_PORT:-58025}
+SH_MAILPIT_API=http://127.0.0.1:${MAILPIT_HTTP_PORT:-58025}
 EOF
   chmod 600 "$env_file"
   echo "  ✓ smtp 127.0.0.1:${MAILPIT_SMTP_PORT:-51025} → $(basename "$env_file") (gitignored)"
@@ -337,7 +337,7 @@ EOF
   printf '  %-36s' "sink accepts a message"
   local before after
   before="$(curl -fsS "http://127.0.0.1:${MAILPIT_HTTP_PORT:-58025}/api/v1/messages"             | sed -n 's/.*"messages_count":\([0-9]*\).*/\1/p')"
-  if printf 'EHLO probe\r\nMAIL FROM:<probe@corebase.test>\r\nRCPT TO:<sink@corebase.test>\r\nDATA\r\nSubject: staging probe\r\n\r\nprobe\r\n.\r\nQUIT\r\n' \
+  if printf 'EHLO probe\r\nMAIL FROM:<probe@steadhold.test>\r\nRCPT TO:<sink@steadhold.test>\r\nDATA\r\nSubject: staging probe\r\n\r\nprobe\r\n.\r\nQUIT\r\n' \
      | nc -w 5 127.0.0.1 "${MAILPIT_SMTP_PORT:-51025}" >/dev/null 2>&1; then
     # Polled, not read once. The sink accepts the message on the SMTP socket and
     # indexes it a moment later, so a single read immediately after `nc` returns
@@ -366,7 +366,7 @@ cmd_seed_images() {
   # pooler (D-015) and its PostgREST (D-011). A node missing one of them fails
   # provisioning at the step that starts it rather than at create time, which is a
   # much worse diagnostic.
-  for image in corebase/postgres:17.5 corebase/pgbouncer:1.23 corebase/postgrest:12.2; do
+  for image in steadhold/postgres:17.5 steadhold/pgbouncer:1.23 steadhold/postgrest:12.2; do
     if ! docker image inspect "$image" >/dev/null 2>&1; then
       echo "  ✗ $image is not built locally — build it first:"
       # postgrest before postgres: "postgrest" *contains* "postgres", so the
@@ -382,7 +382,7 @@ cmd_seed_images() {
     echo "▸ loading $image into the data node"
     docker save "$image" | node_docker load >/dev/null
   done
-  node_docker images --format '  {{.Repository}}:{{.Tag}} ({{.Size}})' | grep corebase || true
+  node_docker images --format '  {{.Repository}}:{{.Tag}} ({{.Size}})' | grep steadhold || true
 }
 
 cmd_verify() {
@@ -390,11 +390,11 @@ cmd_verify() {
   echo "▸ T2 done-signal checks"
 
   printf '  %-36s' "control-db accepts SQL"
-  if docker exec cb-control-db psql -U corebase -d corebase_control -tAXc 'select 1' | grep -q '^1$'; then
+  if docker exec sh-control-db psql -U steadhold -d steadhold_control -tAXc 'select 1' | grep -q '^1$'; then
     echo "PASS"; else echo "FAIL"; fail=1; fi
 
   printf '  %-36s' "control-redis responds"
-  if [ "$(docker exec cb-control-redis redis-cli ping)" = "PONG" ]; then echo "PASS"; else echo "FAIL"; fail=1; fi
+  if [ "$(docker exec sh-control-redis redis-cli ping)" = "PONG" ]; then echo "PASS"; else echo "FAIL"; fail=1; fi
 
   printf '  %-36s' "data-node Engine API over TLS"
   if node_docker info >/dev/null 2>&1; then echo "PASS"; else echo "FAIL"; fail=1; fi
@@ -407,8 +407,8 @@ cmd_verify() {
     echo "FAIL (unauthenticated access!)"; fail=1; else echo "PASS"; fi
 
   printf '  %-36s' "project image present on node"
-  if node_docker image inspect corebase/postgres:17.5 >/dev/null 2>&1 \
-     && node_docker image inspect corebase/pgbouncer:1.23 >/dev/null 2>&1; then echo "PASS"; else echo "SKIP (run seed-images)"; fi
+  if node_docker image inspect steadhold/postgres:17.5 >/dev/null 2>&1 \
+     && node_docker image inspect steadhold/pgbouncer:1.23 >/dev/null 2>&1; then echo "PASS"; else echo "SKIP (run seed-images)"; fi
 
   printf '  %-36s' "host ports published"
   if nc -z 127.0.0.1 "$CONTROL_DB_PORT" >/dev/null 2>&1 && nc -z 127.0.0.1 "$CONTROL_REDIS_PORT" >/dev/null 2>&1; then echo "PASS"; else echo "FAIL"; fail=1; fi
@@ -417,30 +417,30 @@ cmd_verify() {
   # The control plane opens direct admin connections to project databases, so the
   # allocator's range has to be published from the node — not just allocated in
   # the control plane (D-192).
-  if docker port cb-data-node | grep -q '^5433/tcp'; then echo "PASS"; else
+  if docker port sh-data-node | grep -q '^5433/tcp'; then echo "PASS"; else
     echo "FAIL (publish PROJECT_PORT_MIN-MAX)"; fail=1; fi
 
   printf '  %-36s' "pooler port range reachable"
   # Same rule, second listener (P2b). A pooler on an unpublished port is a pooler
   # the health gate cannot reach and a DATABASE_URL that cannot connect.
-  if docker port cb-data-node | grep -q '^6433/tcp'; then echo "PASS"; else
+  if docker port sh-data-node | grep -q '^6433/tcp'; then echo "PASS"; else
     echo "FAIL (publish POOLER_PORT_MIN-MAX)"; fail=1; fi
 
   printf '  %-36s' "master key present"
   if ls "$KEK_DIR"/*.key >/dev/null 2>&1; then echo "PASS"; else echo "SKIP (run kek)"; fi
 
   printf '  %-36s' "node can run a project container"
-  if node_docker run --rm --name cb-smoke -e POSTGRES_PASSWORD=smoke -d corebase/postgres:17.5 >/dev/null 2>&1; then
+  if node_docker run --rm --name sh-smoke -e POSTGRES_PASSWORD=smoke -d steadhold/postgres:17.5 >/dev/null 2>&1; then
     ok=0
     for _ in $(seq 1 30); do
-      if node_docker exec cb-smoke pg_isready -U postgres -q >/dev/null 2>&1; then ok=1; break; fi
+      if node_docker exec sh-smoke pg_isready -U postgres -q >/dev/null 2>&1; then ok=1; break; fi
       sleep 1
     done
     # -v matters: the project image declares VOLUME /var/lib/postgresql/data, so a
     # container started without a mount gets an anonymous volume. Without -v this
     # check leaked ~60 MB of unreferenced volume every time it ran, which is
     # exactly the slow disk leak T8 exists to catch.
-    node_docker rm -f -v cb-smoke >/dev/null 2>&1 || true
+    node_docker rm -f -v sh-smoke >/dev/null 2>&1 || true
     [ "$ok" -eq 1 ] && echo "PASS" || { echo "FAIL (never became ready)"; fail=1; }
   else echo "FAIL (could not start)"; fail=1; fi
 
@@ -467,7 +467,7 @@ cmd_monitoring() {
   echo "▸ monitoring"
   printf '  %-12s %s\n' prometheus "http://127.0.0.1:${PROMETHEUS_PORT:-9090}"
   printf '  %-12s %s\n' loki       "http://127.0.0.1:${LOKI_PORT:-3100}/ready"
-  printf '  %-12s %s\n' grafana    "http://127.0.0.1:${GRAFANA_PORT:-3001}/d/corebase-provisioning"
+  printf '  %-12s %s\n' grafana    "http://127.0.0.1:${GRAFANA_PORT:-3001}/d/steadhold-provisioning"
   printf '  %-12s ' "prometheus up"
   curl -sf "http://127.0.0.1:${PROMETHEUS_PORT:-9090}/-/healthy" >/dev/null && echo PASS || echo FAIL
   printf '  %-12s ' "loki ready"

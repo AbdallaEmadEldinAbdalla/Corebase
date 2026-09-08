@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { createEnvelope } from '@corebase/crypto';
-import { createSecretStore, SECRET_NAMES } from '@corebase/secrets';
+import { createEnvelope } from '@steadhold/crypto';
+import { createSecretStore, SECRET_NAMES } from '@steadhold/secrets';
 import { createDocker, type Docker } from './docker.ts';
 import { buildSagas, superuserCandidates } from './jobs/sagas.ts';
 import { registerNode } from './placement.ts';
@@ -23,12 +23,12 @@ import type { SagaStep, SagaContext } from './jobs/runner.ts';
  * to where a few megabytes reach them. What is being tested is the ladder and the
  * recovery, not Postgres's ability to store data.
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
-const CERT_DIR = process.env.CB_DOCKER_CERT_DIR
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
+const CERT_DIR = process.env.SH_DOCKER_CERT_DIR
   ?? new URL('../../../infra/docker/staging/certs', import.meta.url).pathname;
-const HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
+const HOST = process.env.SH_DOCKER_HOST ?? '127.0.0.1';
+const PORT = Number(process.env.SH_DOCKER_PORT ?? 2376);
 const SECRET = 'test-bootstrap-secret-0123456789';
 
 let pool: Pool; let docker: Docker; let secrets: ReturnType<typeof createSecretStore>;
@@ -37,7 +37,7 @@ let kekDir: string; let orgId: string; let up = false; let seq = 0;
 const mkRef = () => 'd' + String(Date.now() % 100000) + String(++seq).padStart(14, 'x');
 
 beforeAll(async () => {
-  kekDir = mkdtempSync(join(tmpdir(), 'cb-p2e-'));
+  kekDir = mkdtempSync(join(tmpdir(), 'sh-p2e-'));
   writeFileSync(join(kekDir, 'k1.key'), randomBytes(32));
   try {
     pool = new Pool({ connectionString: DB, max: 6, connectionTimeoutMillis: 2000 });
@@ -85,7 +85,7 @@ beforeEach(async () => {
 async function runSaga(kind: string, projectId: string) {
   const steps = buildSagas({
     pool, docker, secrets, bootstrapSecret: SECRET,
-    healthTimeoutMs: 60_000, projectDomain: 'corebase.test',
+    healthTimeoutMs: 60_000, projectDomain: 'steadhold.test',
   })[kind]! as SagaStep<SagaContext>[];
   const job = { id: 'j', project_id: projectId, payload: {} } as unknown as JobRecord;
   for (const step of steps) await step.run({ job, log: () => {} });

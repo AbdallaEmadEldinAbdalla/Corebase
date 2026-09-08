@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The proposal's §74 — "create projects A and B, prove A cannot touch B, run it continuously" — is Corebase's single most important test, because tenant isolation is risk #1 (§115). This doc turns that one paragraph into an executable spec: the harness that provisions the fixtures, the full matrix of attacks with exact expected results across the API, database, storage, and network boundaries from the [threat model](01-threat-model.md), the RLS regression canaries, the run cadence, and the **hard rule that a failure here freezes all releases** (D-085). This suite is the continuous, automated proof behind every isolation claim in the corpus.
+The proposal's §74 — "create projects A and B, prove A cannot touch B, run it continuously" — is Steadhold's single most important test, because tenant isolation is risk #1 (§115). This doc turns that one paragraph into an executable spec: the harness that provisions the fixtures, the full matrix of attacks with exact expected results across the API, database, storage, and network boundaries from the [threat model](01-threat-model.md), the RLS regression canaries, the run cadence, and the **hard rule that a failure here freezes all releases** (D-085). This suite is the continuous, automated proof behind every isolation claim in the corpus.
 
 ## Design
 
@@ -30,7 +30,7 @@ Legend for expected result: the test asserts the *exact* status/outcome, not mer
 
 | # | Attack | Expected result | Asserts |
 |---|---|---|---|
-| API-1 | A's `anon` key → `GET https://<B>.corebase.co/rest/v1/<table>` | **401** (invalid key for project B) or **empty per default-deny** if B's table is anon-readable-nothing; assert no B rows ever returned | Project resolution binds to B's key set; A's anon key isn't valid at B |
+| API-1 | A's `anon` key → `GET https://<B>.steadhold.app/rest/v1/<table>` | **401** (invalid key for project B) or **empty per default-deny** if B's table is anon-readable-nothing; assert no B rows ever returned | Project resolution binds to B's key set; A's anon key isn't valid at B |
 | API-2 | A's `service_role` key → B's REST endpoint | **401** — signature verifies against B's JWKS and fails (A's key signed by A's keypair, D-014) | Per-project keypairs kill cross-tenant service_role replay |
 | API-3 | A's valid `authenticated` JWT → B's REST endpoint | **401** — same JWKS mismatch | The whole JWT class is project-bound |
 | API-4 | A's JWT with the `project_ref`/`aud` claim rewritten to B, re-signed with A's key | **401** — still fails B's signature check | Tampering the claim doesn't help without B's private key |

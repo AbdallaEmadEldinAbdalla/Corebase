@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The ranked register of what can actually kill or badly wound Corebase — technical, economic, and organizational — each with likelihood, impact, the mitigation the corpus commits to, and the early-warning signal to watch. This re-ranks the proposal's §115 list: the proposal's instincts were right about *categories*; this register corrects the *ordering* (cost economics and auth complexity move up) and adds the organizational risks the proposal only gestured at (§116–117).
+The ranked register of what can actually kill or badly wound Steadhold — technical, economic, and organizational — each with likelihood, impact, the mitigation the corpus commits to, and the early-warning signal to watch. This re-ranks the proposal's §115 list: the proposal's instincts were right about *categories*; this register corrects the *ordering* (cost economics and auth complexity move up) and adds the organizational risks the proposal only gestured at (§116–117).
 
 Scoring: likelihood and impact 1–5; exposure = L×I. Ranked by exposure, ties broken by irreversibility.
 
@@ -42,7 +42,7 @@ Scoring: likelihood and impact 1–5; exposure = L×I. Ranked by exposure, ties 
 | R-14 | **Migration/DDL foot-guns** — customers or the table editor corrupting schemas; drift between migrations and reality. | 3 | 2 | 6 | UI→SQL-with-preview rule ([table editor](../09-dashboard/02-table-editor.md)); destructive-statement guards ([sql editor](../09-dashboard/03-sql-editor.md)); drift stance in [migrations](../03-database-platform/04-migrations.md) | Support tickets about "push failed"; drift detections |
 | R-15 | **Key/secret compromise of the control plane** — the crown jewels (threat-model boundary e). | 1 | 5 | 5 | Envelope encryption (D-035); least-privilege matrix (D-088 context); JIT operator access ([audit & admin](../02-control-plane/05-audit-and-admin-access.md)); KMS decision pending (OQ-087 — resolve before Phase 1 ends) | Any anomalous control-plane access; audit-log gaps |
 | R-16 | **Competitive response** — an incumbent ships "pause-free tier + export" and blunts the lanes. | 3 | 2 | 6 | Lanes are compounding (economics + DX velocity + trust), not single features ([competitive analysis](../00-foundation/02-competitive-analysis.md)); speed of iteration is the real counter | Incumbent pricing/feature announcements matching the lanes |
-| R-17 | **Naming/trademark problem** with "Corebase" (OQ-099). | 2 | 3 | 6 | Clearance search before public launch; brand assets kept swappable until then | Clearance search findings |
+| R-17 | **Naming/trademark problem** with "Steadhold" (OQ-099). | 2 | 3 | 6 | Clearance search before public launch; brand assets kept swappable until then | Clearance search findings |
 
 ### Standing review
 

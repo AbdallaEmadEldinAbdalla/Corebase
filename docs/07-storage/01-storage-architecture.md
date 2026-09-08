@@ -4,7 +4,7 @@
 
 Specifies the object-storage subsystem promised in proposal §21–22: metadata in each project's Postgres, bytes in S3-compatible object storage — **R2 in production, MinIO locally** (D-017, D-023, D-027). This doc fixes the physical bucket layout, the `storage` schema DDL, the storage service's place in the monolith, and the upload/download data paths. The API surface, authorization model, and consistency machinery are in [02-storage-api-and-policies.md](02-storage-api-and-policies.md).
 
-Terminology guard: **"bucket" means two different things here.** A *Corebase bucket* is a logical namespace a customer creates (`avatars`, `invoices`) and is a row in their project's `storage.buckets`. An *R2 bucket* is the physical Cloudflare resource. The mapping between them is the first design question below.
+Terminology guard: **"bucket" means two different things here.** A *Steadhold bucket* is a logical namespace a customer creates (`avatars`, `invoices`) and is a row in their project's `storage.buckets`. An *R2 bucket* is the physical Cloudflare resource. The mapping between them is the first design question below.
 
 ## Design
 
@@ -25,10 +25,10 @@ Two candidate layouts:
 **Decision: shared bucket per region with per-project prefixes (D-120).** The per-project-bucket ceiling is disqualifying on its own; everything else is a wash or favors shared. Object keys are:
 
 ```
-projects/<project_ref>/<corebase_bucket>/<object_path>
+projects/<project_ref>/<steadhold_bucket>/<object_path>
 ```
 
-`project_ref` is the immutable slug from [the control-plane data model](../02-control-plane/01-data-model.md), so keys never need rewriting on project rename. One R2 bucket per region (`corebase-eu-central-prod`) — exactly one at launch, per D-024.
+`project_ref` is the immutable slug from [the control-plane data model](../02-control-plane/01-data-model.md), so keys never need rewriting on project rename. One R2 bucket per region (`steadhold-eu-central-prod`) — exactly one at launch, per D-024.
 
 Isolation consequence, stated plainly: **project isolation in object storage is enforced by the storage service's key construction, not by R2.** The service derives the `projects/<ref>/` prefix from the authenticated project context ([request pipeline](../04-data-api/02-request-pipeline.md)) and never from client input; object paths are normalized and rejected if they contain `..`, empty segments, or encoded separators before key assembly. This is the same trust position the gateway already holds for SQL routing (D-016) and it is covered by the cross-tenant suite in [tenant isolation tests](../06-security/03-tenant-isolation-tests.md).
 
@@ -39,7 +39,7 @@ Per-project encryption: R2 encrypts at rest with provider-managed keys by defaul
 Object *metadata* lives in the **project's own Postgres**, not the control plane (D-017). This placement is load-bearing twice over:
 
 1. **RLS on files works.** Authorization for storage operations is evaluated by querying these tables under the caller's RLS context — the exact pipeline the data API already has ([RLS design](../06-security/02-rls-design.md)). Policies on `storage.objects` *are* the file-permission system; no parallel ACL engine exists.
-2. **Export stays clean (D-004).** `corebase export` dumps the project DB, and the tarball's dedicated `storage/manifest.jsonl` (the format D-137 specifies) is derived directly from `storage.objects` — a real file in the tarball, but trivially regenerable from the dump. Bytes are fetched by walking `storage.objects` — no control-plane join required.
+2. **Export stays clean (D-004).** `steadhold export` dumps the project DB, and the tarball's dedicated `storage/manifest.jsonl` (the format D-137 specifies) is derived directly from `storage.objects` — a real file in the tarball, but trivially regenerable from the dump. Bytes are fetched by walking `storage.objects` — no control-plane join required.
 
 DDL (part of every project's base migration, alongside the `auth` schema):
 
@@ -95,7 +95,7 @@ Notes:
 The storage service is a module inside the data-plane monolith, structured exactly like auth (D-013, D-020, [repo layout](../01-architecture/05-repo-and-service-layout.md)): its own routes, its own module boundary, splittable later if bandwidth profiles demand it. It serves:
 
 ```
-https://<ref>.corebase.co/storage/v1/*
+https://<ref>.steadhold.app/storage/v1/*
 ```
 
 routed by the same gateway → project-resolution → authn pipeline as `/rest/v1` and `/auth/v1` ([request pipeline](../04-data-api/02-request-pipeline.md)).
@@ -123,10 +123,10 @@ Neither answer is right for both a 40 KB avatar and a 4 GB video, so V1 ships bo
 Objects in buckets with `public = true` are readable without authentication at:
 
 ```
-https://<ref>.corebase.co/storage/v1/object/public/<bucket>/<path>
+https://<ref>.steadhold.app/storage/v1/object/public/<bucket>/<path>
 ```
 
-- Public objects ride the **project origin**: the [domain & region model](../01-architecture/04-domain-and-region-model.md) drops proposal §61's `<ref>.storage.corebase.co` host in V1 — a two-label subdomain is not covered by the `*.corebase.co` wildcard (D-057), and a second wildcard cert plus routing tier buys zero V1 benefit. The dedicated storage host returns with the custom-domain/PSL work (OQ-057/OQ-062).
+- Public objects ride the **project origin**: the [domain & region model](../01-architecture/04-domain-and-region-model.md) drops proposal §61's `<ref>.storage.steadhold.app` host in V1 — a two-label subdomain is not covered by the `*.steadhold.app` wildcard (D-057), and a second wildcard cert plus routing tier buys zero V1 benefit. The dedicated storage host returns with the custom-domain/PSL work (OQ-057/OQ-062).
 - Cloudflare caches the public-object paths on the project origin — a cache rule keyed on `/storage/v1/object/public/*` (the rest of the origin stays uncached, like the other API paths): `Cache-Control: public, max-age=3600` default, overridable per object via `metadata`. Cache hits never touch our nodes — this is the free-tier bandwidth story.
 - Origin behavior: the storage service verifies `bucket.public` from the project DB (result cached in-process for 30 s), then streams from R2. Public reads deliberately skip per-object RLS — "public bucket" means the *bucket* is the ACL.
 - **Cache invalidation:** on object delete or overwrite, the service enqueues a Cloudflare purge-by-URL job (BullMQ, idempotent per D-018). Purge is best-effort and rate-limited by Cloudflare, so the honest contract is: *public-bucket content may be served stale up to `max-age` after overwrite/delete*. Latency-sensitive replacement should upload under a new path (content-hashed filenames — documented as the recommended pattern). Purge-API quota behavior at scale is OQ-123.

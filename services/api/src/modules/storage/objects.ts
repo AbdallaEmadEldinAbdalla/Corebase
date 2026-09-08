@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { STORAGE_ERROR_CODES as E } from '@corebase/types';
-import type { S3 } from '@corebase/s3';
-import type { SecretStore } from '@corebase/secrets';
+import { STORAGE_ERROR_CODES as E } from '@steadhold/types';
+import type { S3 } from '@steadhold/s3';
+import type { SecretStore } from '@steadhold/secrets';
 import { ApiError } from '../../kernel/errors.ts';
 import type { ProjectContext } from '../project-auth/context.ts';
 import { policyError, type Caller } from './context.ts';

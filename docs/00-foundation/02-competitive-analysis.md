@@ -2,7 +2,7 @@
 
 ## Purpose
 
-An honest map of the BaaS landscape as of mid-2026: what each incumbent actually does well, where they are weak, and which weaknesses are *exploitable* by a small team versus merely visible. This doc exists to keep Corebase from building a worse Supabase and calling it differentiation.
+An honest map of the BaaS landscape as of mid-2026: what each incumbent actually does well, where they are weak, and which weaknesses are *exploitable* by a small team versus merely visible. This doc exists to keep Steadhold from building a worse Supabase and calling it differentiation.
 
 ## Design
 
@@ -27,7 +27,7 @@ An honest map of the BaaS landscape as of mid-2026: what each incumbent actually
 4. **The anon/service-role two-key model.** Simple enough to explain in one paragraph, powerful enough for real apps.
 5. **Local dev parity** (`supabase start` = the real stack in Docker).
 
-### What the incumbents left open (Corebase's actual lanes)
+### What the incumbents left open (Steadhold's actual lanes)
 
 1. **Provisioning speed + first-five-minutes.** Supabase project creation takes minutes and the dashboard is dense. A sub-30-second provision with a ruthless onboarding path is a *felt* difference. Achievable: pre-warmed Postgres containers make this an engineering choice, not magic ([postgres provisioning](../03-database-platform/01-postgres-provisioning.md)).
 2. **Portability as a first-class verb.** Nobody ships a great `export` / `eject` story — incumbents' incentives point the other way. Cheap to build, high trust value, and it *compounds* with being late to market ("try us; leaving is easy").
@@ -40,7 +40,7 @@ An honest map of the BaaS landscape as of mid-2026: what each incumbent actually
 - **Feature breadth.** Vectors, AI, analytics, edge functions — chasing these in V1 is how the runway dies ([risk register](../15-risks/01-risk-register.md)).
 - **GraphQL.** Nhost owns it; the market slice is thin; REST + SDK covers V1 users.
 - **Enterprise compliance.** SOC2/SAML before PMF is capital destruction.
-- **Out-innovating Neon on database internals.** Storage/compute separation is a 20-engineer problem. Corebase buys the same economics with pause/resume and revisits later.
+- **Out-innovating Neon on database internals.** Storage/compute separation is a 20-engineer problem. Steadhold buys the same economics with pause/resume and revisits later.
 
 ### Moat honesty
 
@@ -54,13 +54,13 @@ A small team's real moats, in descending order of durability:
 ## Decisions
 
 - **D-005 — Compose proven OSS data-plane components rather than rewriting them** (PostgREST for the data API; evaluated per subsystem elsewhere). *(Rationale: Supabase's composition strategy is its most copyable structural advantage; rewriting PostgREST's decade of edge cases is negative-value work for V1.)*
-- **D-006 — Corebase's three declared lanes: provisioning speed, portability, economics.** Marketing, roadmap, and scope debates cite these lanes; features outside them need extraordinary justification.
+- **D-006 — Steadhold's three declared lanes: provisioning speed, portability, economics.** Marketing, roadmap, and scope debates cite these lanes; features outside them need extraordinary justification.
 - **D-007 — No GraphQL in V1–V2.** REST + SDK only.
 - **D-008 — Idle-project pause/resume is a core architectural requirement from day one**, not an optimization — it is what makes lane 3 (economics) real. Detailed in [postgres provisioning](../03-database-platform/01-postgres-provisioning.md) and [cost model](../12-business/01-cost-model.md).
 
 ## Open Questions
 
-- OQ-002: Should Corebase publicly benchmark provisioning time vs incumbents at launch? (Marketing decision; measurable claim requires keeping it true forever.)
+- OQ-002: Should Steadhold publicly benchmark provisioning time vs incumbents at launch? (Marketing decision; measurable claim requires keeping it true forever.)
 
 ## Dependencies
 

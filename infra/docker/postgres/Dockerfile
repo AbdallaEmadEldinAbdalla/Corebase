@@ -1,4 +1,4 @@
-# corebase/postgres — the per-project database image (D-009, D-054).
+# steadhold/postgres — the per-project database image (D-009, D-054).
 #
 # Pinned to one major fleet-wide (D-037). Extensions are allowlisted by being
 # the only ones present in the image: enforcement-by-image-contents cannot be
@@ -55,7 +55,7 @@ ENV POSTGRES_INITDB_ARGS="--auth-local=peer --auth-host=scram-sha-256 --data-che
 # Config template. Small-tenant defaults: max_connections is 20 because the
 # pooler multiplexes in front of it (D-074's 3 reserved / 7 PostgREST / 8 pooler
 # / 2 direct budget). Sized for the Free-tier 512 MiB cgroup.
-COPY postgresql.base.conf /etc/corebase/postgresql.base.conf
+COPY postgresql.base.conf /etc/steadhold/postgresql.base.conf
 COPY init/ /docker-entrypoint-initdb.d/
 
 # pgBackRest's working directories (P3a).
@@ -76,8 +76,8 @@ COPY init/ /docker-entrypoint-initdb.d/
 # the one that makes archiving real.
 RUN mkdir -p /var/lib/postgresql/wal_archive /etc/pgbackrest /var/log/pgbackrest \
     && chown -R postgres:postgres \
-         /var/lib/postgresql/wal_archive /etc/corebase /etc/pgbackrest /var/log/pgbackrest \
+         /var/lib/postgresql/wal_archive /etc/steadhold /etc/pgbackrest /var/log/pgbackrest \
     && chmod 700 /etc/pgbackrest
 
 USER postgres
-CMD ["postgres", "-c", "config_file=/etc/corebase/postgresql.base.conf"]
+CMD ["postgres", "-c", "config_file=/etc/steadhold/postgresql.base.conf"]

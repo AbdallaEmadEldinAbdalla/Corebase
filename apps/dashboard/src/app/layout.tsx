@@ -6,7 +6,7 @@ import '../styles/app.css';
 import '../styles/shell.css';
 
 export const metadata = {
-  title: 'Corebase',
+  title: 'Steadhold',
   description: 'The backend foundation for modern applications.',
 };
 
@@ -17,19 +17,19 @@ export const metadata = {
  * (D-178). Reading the stored choice in an effect would paint the wrong theme
  * first and flash — so it runs synchronously in `<head>`, ahead of the body.
  *
- * **Runtime config.** The API base is read from `window.__COREBASE__` rather than
+ * **Runtime config.** The API base is read from `window.__STEADHOLD__` rather than
  * inlined by the bundler, so one build serves staging and production. This is the
  * only server-rendered value in the app; everything data-driven is a client
  * component calling the platform API (D-130).
  */
 const THEME_BOOTSTRAP = `
 (function(){try{
-  var s=localStorage.getItem('cb-theme');
+  var s=localStorage.getItem('sh-theme');
   if(s==='dark'||s==='light')document.documentElement.setAttribute('data-theme',s);
 }catch(e){}})();`;
 
 export default function RootLayout({ children }: { children: ReactNode }) {
-  const apiBase = process.env.COREBASE_API_BASE ?? 'http://localhost:8099';
+  const apiBase = process.env.STEADHOLD_API_BASE ?? 'http://localhost:8099';
   return (
     // suppressHydrationWarning is on <html> and nowhere else: the theme script
     // above deliberately sets data-theme before React hydrates, so the server
@@ -47,7 +47,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
         <script
           dangerouslySetInnerHTML={{
-            __html: `window.__COREBASE__=${JSON.stringify({ apiBase })};`,
+            __html: `window.__STEADHOLD__=${JSON.stringify({ apiBase })};`,
           }}
         />
       </head>

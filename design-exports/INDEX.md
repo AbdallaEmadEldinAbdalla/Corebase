@@ -1,4 +1,4 @@
-# Corebase Design System — exports
+# Steadhold Design System — exports
 
 Rendered from the Pencil boards (`pencil-new.pen`) at **2x**. Accent: Electric Violet (D-177).
 Written source of truth for the values: [`docs/09-dashboard/04-design-system.md`](../docs/09-dashboard/04-design-system.md).
@@ -186,12 +186,12 @@ Written source of truth for the values: [`docs/09-dashboard/04-design-system.md`
 
 ## Using the tokens
 
-`tokens.css` is drop-in. Components must reference **role** tokens (`--cb-surface`, `--cb-text`, `--cb-accent`), never ramp steps — that is what makes dark mode a config change rather than a second design pass (D-178).
+`tokens.css` is drop-in. Components must reference **role** tokens (`--sh-surface`, `--sh-text`, `--sh-accent`), never ramp steps — that is what makes dark mode a config change rather than a second design pass (D-178).
 
 Three values behave differently than a naive inversion would suggest:
 
 - The accent **lifts one ramp step** in dark (`violet/500` → `violet/600`) so it holds against a dark surface.
-- `--cb-danger` (button fill) is **darker** than `--cb-error` (text/icon colour) in dark mode, so white labels keep contrast on destructive buttons.
+- `--sh-danger` (button fill) is **darker** than `--sh-error` (text/icon colour) in dark mode, so white labels keep contrast on destructive buttons.
 - There is **no shadow scale**. Elevation is surface tint plus border weight (D-179).
 
 ## HTML reference

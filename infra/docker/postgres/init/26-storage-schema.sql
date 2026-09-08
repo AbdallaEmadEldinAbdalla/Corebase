@@ -2,7 +2,7 @@
 --
 -- Object *metadata* lives in the project's own database, not the control plane,
 -- and that placement is load-bearing twice: RLS on these tables **is** the file
--- permission system — there is no second ACL engine anywhere — and `corebase
+-- permission system — there is no second ACL engine anywhere — and `steadhold
 -- export` carries a customer's file inventory out with a plain `pg_dump`.
 --
 -- In the image rather than in a saga step, for the same three reasons as the auth

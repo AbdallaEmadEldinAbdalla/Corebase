@@ -161,7 +161,7 @@ export function rankNodes(
  * with nobody driving it does not fail — it sits in `creating` until the saga
  * times out, which reads as "provisioning is slow" and points at nothing.
  */
-export const NODE_STALE_SECONDS = Number(process.env.CB_NODE_STALE_SECONDS ?? 900);
+export const NODE_STALE_SECONDS = Number(process.env.SH_NODE_STALE_SECONDS ?? 900);
 
 /**
  * Lowest free port in the range. Deterministic (not random) so a retry of the
@@ -203,7 +203,7 @@ export function pickPortPair(
  * name has been deleted — and a check that silently skips when the row is
  * missing is a check that passes vacuously.
  */
-export const volumeNameFor = (ref: string) => `cb-${ref}-pgdata`;
+export const volumeNameFor = (ref: string) => `sh-${ref}-pgdata`;
 
 export class NoCapacityError extends Error {}
 export class NoPortsError extends Error {}
@@ -216,8 +216,8 @@ export class NoPortsError extends Error {}
 const envRange = (min: string, max: string, dflt: [number, number]): [number, number] =>
   [Number(process.env[min] ?? dflt[0]), Number(process.env[max] ?? dflt[1])];
 
-export const PG_PORT_RANGE = envRange('CB_PG_PORT_MIN', 'CB_PG_PORT_MAX', [5433, 6432]);
-export const POOLER_PORT_RANGE = envRange('CB_POOLER_PORT_MIN', 'CB_POOLER_PORT_MAX', [6433, 7432]);
+export const PG_PORT_RANGE = envRange('SH_PG_PORT_MIN', 'SH_PG_PORT_MAX', [5433, 6432]);
+export const POOLER_PORT_RANGE = envRange('SH_POOLER_PORT_MIN', 'SH_POOLER_PORT_MAX', [6433, 7432]);
 /**
  * PostgREST's two listeners (P5b). One range, allocated in pairs: the API port
  * and the admin port next to it.
@@ -228,7 +228,7 @@ export const POOLER_PORT_RANGE = envRange('CB_POOLER_PORT_MIN', 'CB_POOLER_PORT_
  * so the adjacency is a fact rather than a convention.
  */
 export const POSTGREST_PORT_RANGE = envRange(
-  'CB_POSTGREST_PORT_MIN', 'CB_POSTGREST_PORT_MAX', [7433, 7492]);
+  'SH_POSTGREST_PORT_MIN', 'SH_POSTGREST_PORT_MAX', [7433, 7492]);
 
 export interface NodeRegistration {
   hostname: string; region?: string; ramTotalMb: number; diskTotalGb: number;

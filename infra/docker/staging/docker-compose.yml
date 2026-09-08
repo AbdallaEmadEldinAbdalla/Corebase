@@ -14,19 +14,19 @@
 # NVMe behaviour, XFS project quotas, or Hetzner-specific failure modes. Those
 # stay open until a real node exists (OQ-165).
 # The compose project name, which is what Docker Desktop and `docker ps` group by.
-# Plain `corebase`: this is the only stack the repo runs locally, so the "-staging"
+# Plain `steadhold`: this is the only stack the repo runs locally, so the "-staging"
 # suffix distinguished it from nothing and just made every container name longer.
-name: corebase
+name: steadhold
 
 services:
   control-db:
     image: postgres:17.5-bookworm
-    container_name: cb-control-db
+    container_name: sh-control-db
     restart: unless-stopped
     environment:
       POSTGRES_PASSWORD: ${CONTROL_DB_PASSWORD:-controlpass}
-      POSTGRES_DB: corebase_control
-      POSTGRES_USER: corebase
+      POSTGRES_DB: steadhold_control
+      POSTGRES_USER: steadhold
     command:
       - postgres
       - -c
@@ -38,14 +38,14 @@ services:
     volumes:
       - control-db-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U corebase -d corebase_control"]
+      test: ["CMD-SHELL", "pg_isready -U steadhold -d steadhold_control"]
       interval: 5s
       timeout: 3s
       retries: 20
 
   control-redis:
     image: redis:7.4-alpine
-    container_name: cb-control-redis
+    container_name: sh-control-redis
     restart: unless-stopped
     # appendonly so a restart does not silently lose queued jobs; the job row in
     # Postgres is still the source of truth (D-018/D-067), this is belt and braces
@@ -63,7 +63,7 @@ services:
   data-node:
     # stands in for a Hetzner data node running project containers
     image: docker:29-dind
-    container_name: cb-data-node
+    container_name: sh-data-node
     restart: unless-stopped
     privileged: true                     # required for dind; the real node runs dockerd natively
     environment:
@@ -93,7 +93,7 @@ services:
       # Thirty ports by default, not the fleet's thousand (PG_PORT_RANGE): enough
       # to hold T5f's twenty simultaneous projects with headroom, while publishing
       # 1000 through Docker Desktop's proxy would cost seconds of startup and a
-      # process per port for no extra coverage. CB_PG_PORT_MIN/MAX narrow the
+      # process per port for no extra coverage. SH_PG_PORT_MIN/MAX narrow the
       # allocator to match — see placement.ts.
       #
       # Both sides of the mapping use the same variables, and must: the
@@ -143,7 +143,7 @@ services:
   # a fresh private network inside the node.
   object-store:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
-    container_name: cb-object-store
+    container_name: sh-object-store
     restart: unless-stopped
     # TLS, because pgBackRest speaks S3 over HTTPS and has no plain-HTTP option:
     # `repo1-storage-verify-tls=n` relaxes *verification*, not the protocol. R2 is
@@ -152,8 +152,8 @@ services:
     # backup-store and mounted read-only.
     command: ["server", "/data", "--console-address", ":9001", "--certs-dir", "/certs"]
     environment:
-      MINIO_ROOT_USER: ${BACKUP_ACCESS_KEY:-corebase-backup}
-      MINIO_ROOT_PASSWORD: ${BACKUP_SECRET_KEY:-corebase-backup-secret}
+      MINIO_ROOT_USER: ${BACKUP_ACCESS_KEY:-steadhold-backup}
+      MINIO_ROOT_PASSWORD: ${BACKUP_SECRET_KEY:-steadhold-backup-secret}
       # Off by default: the console is a convenience for a human looking at
       # objects, and one fewer listener is one fewer thing to secure by accident.
       MINIO_BROWSER: ${MINIO_BROWSER:-on}
@@ -181,7 +181,7 @@ services:
   # through an SMTP conversation, which is the assertion worth making.
   mailpit:
     image: axllent/mailpit:v1.21.8
-    container_name: cb-mailpit
+    container_name: sh-mailpit
     restart: unless-stopped
     environment:
       # Keep everything: a test that asserts on the last message needs the
@@ -211,7 +211,7 @@ services:
   # rehearsed is the label discipline and the queries, not the topology.
   prometheus:
     image: prom/prometheus:v3.1.0
-    container_name: cb-prometheus
+    container_name: sh-prometheus
     restart: unless-stopped
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -230,7 +230,7 @@ services:
 
   loki:
     image: grafana/loki:3.3.2
-    container_name: cb-loki
+    container_name: sh-loki
     restart: unless-stopped
     command: ["-config.file=/etc/loki/loki.yml"]
     ports:
@@ -241,7 +241,7 @@ services:
 
   alloy:
     image: grafana/alloy:v1.5.1
-    container_name: cb-alloy
+    container_name: sh-alloy
     restart: unless-stopped
     command:
       - run
@@ -256,7 +256,7 @@ services:
 
   grafana:
     image: grafana/grafana:11.5.1
-    container_name: cb-grafana
+    container_name: sh-grafana
     restart: unless-stopped
     environment:
       # Anonymous admin: this is a local staging stack with no real data in it,

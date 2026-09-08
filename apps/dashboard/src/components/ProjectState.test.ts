@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ProjectStatus } from '@corebase/types';
+import { ProjectStatus } from '@steadhold/types';
 import { TONE, SETTLING } from './ProjectState.tsx';
 
 /**

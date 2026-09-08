@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { generateKeypair, toJwk, sign } from '@corebase/jwt';
+import { generateKeypair, toJwk, sign } from '@steadhold/jwt';
 import { buildApp } from '../../app.ts';
 import { createMemoryRateLimiter } from '../../kernel/rate-limit.ts';
 import { createRoutingTable, refFromHost, type RouteEntry, type RoutingTable } from './routing.ts';
@@ -19,7 +19,7 @@ import { createRoutingTable, refFromHost, type RouteEntry, type RoutingTable } f
  * cannot enqueue one resume per request. Each of those is a denial of service on
  * somebody else if it moves.
  */
-const DOMAIN = 'corebase.test';
+const DOMAIN = 'steadhold.test';
 const REF = 'abck3xw7qqqqqqqq';
 
 function fixture(over: Partial<RouteEntry> = {}, deps: Record<string, unknown> = {}) {
@@ -71,13 +71,13 @@ describe('P5c — refFromHost', () => {
   });
 
   it('refuses anything that is not a ref under this domain', () => {
-    // Suffix matching, not substring: `evil-corebase.test` must not resolve, and
+    // Suffix matching, not substring: `evil-steadhold.test` must not resolve, and
     // that is the classic way a host allowlist is written wrong.
     expect(refFromHost(`${REF}.evil-${DOMAIN}`, DOMAIN)).toBeUndefined();
     expect(refFromHost(`${REF}.${DOMAIN}.attacker.net`, DOMAIN)).toBeUndefined();
     expect(refFromHost(DOMAIN, DOMAIN)).toBeUndefined();
     expect(refFromHost(`sub.${REF}.${DOMAIN}`, DOMAIN)).toBeUndefined();
-    expect(refFromHost('short.corebase.test', DOMAIN)).toBeUndefined();
+    expect(refFromHost('short.steadhold.test', DOMAIN)).toBeUndefined();
     expect(refFromHost(undefined, DOMAIN)).toBeUndefined();
   });
 });

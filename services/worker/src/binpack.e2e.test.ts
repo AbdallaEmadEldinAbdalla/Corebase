@@ -12,8 +12,8 @@ import {
  * what happens when two provisions want the same last slot. Both of those are
  * SQL and locking, and neither can be tested by reasoning about them.
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
 
 let pool: Pool; let orgId: string; let up = false;
 

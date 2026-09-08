@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The complete PostgreSQL schema for the Corebase control plane — the database that stores *who our customers are and what we run for them* (proposal §54–59), never *their* data (§121, D-040's routing keeps that boundary in [control vs data plane](../01-architecture/02-control-vs-data-plane.md)). This doc is the DDL of record: the first migration of the control-plane database is generated from it. Postgres 17 (D-037 applies to the control plane too, per D-012).
+The complete PostgreSQL schema for the Steadhold control plane — the database that stores *who our customers are and what we run for them* (proposal §54–59), never *their* data (§121, D-040's routing keeps that boundary in [control vs data plane](../01-architecture/02-control-vs-data-plane.md)). This doc is the DDL of record: the first migration of the control-plane database is generated from it. Postgres 17 (D-037 applies to the control plane too, per D-012).
 
 ## Design
 
@@ -23,7 +23,7 @@ Rule of thumb: if deleting a row would delete something a *customer's end-user* 
 
 ### Conventions
 
-- Primary keys: `uuid DEFAULT gen_random_uuid()`. Projects additionally carry an immutable human-facing `ref` slug (§57) used in URLs (`<ref>.corebase.co`).
+- Primary keys: `uuid DEFAULT gen_random_uuid()`. Projects additionally carry an immutable human-facing `ref` slug (§57) used in URLs (`<ref>.steadhold.app`).
 - All timestamps `timestamptz`, `created_at`/`updated_at` everywhere; `updated_at` maintained by a shared trigger (omitted below for brevity, defined once in the migration).
 - Soft delete is `status` + `deleted_at`/`purge_after` on `projects` (D-038); other rows cascade or are retained for audit.
 - No plaintext secrets in any column, ever (§58, D-035). API keys are stored as hash + display prefix only.
@@ -76,7 +76,7 @@ CREATE TABLE users (                                                   -- §55
   password_hash  text,                    -- NULL when identity is OAuth-only
   email_verified boolean NOT NULL DEFAULT false,
   display_name   text,
-  is_staff       boolean NOT NULL DEFAULT false,  -- Corebase operators; gates admin API
+  is_staff       boolean NOT NULL DEFAULT false,  -- Steadhold operators; gates admin API
   disabled_at    timestamptz,             -- abuse suspension without deletion
   created_at     timestamptz NOT NULL DEFAULT now(),
   updated_at     timestamptz NOT NULL DEFAULT now()
@@ -98,7 +98,7 @@ CREATE TABLE user_identities (                                         -- §55
 CREATE INDEX idx_user_identities_user ON user_identities(user_id);
 ```
 
-*Rationale:* one row per external identity; the unique pair prevents one GitHub account linking to two Corebase users. Dashboard OAuth is post-V1 but the table costs nothing now (same logic as D-031).
+*Rationale:* one row per external identity; the unique pair prevents one GitHub account linking to two Steadhold users. Dashboard OAuth is post-V1 but the table costs nothing now (same logic as D-031).
 
 ```sql
 -- ============================================================
@@ -345,14 +345,14 @@ REVOKE UPDATE, DELETE, TRUNCATE ON audit_logs FROM PUBLIC;
 -- owner. A statement trigger raising on UPDATE/DELETE does bind the owner, and
 -- D-216 splits the application off the owner role so the privilege half becomes
 -- real too. Both layers ship; neither alone is enough.
-CREATE OR REPLACE FUNCTION corebase_audit_is_append_only() RETURNS trigger
+CREATE OR REPLACE FUNCTION steadhold_audit_is_append_only() RETURNS trigger
   LANGUAGE plpgsql AS $$
 BEGIN
   RAISE EXCEPTION 'audit_logs is append-only: % is not permitted', TG_OP;
 END $$;
 CREATE TRIGGER audit_logs_append_only
   BEFORE UPDATE OR DELETE ON audit_logs
-  FOR EACH STATEMENT EXECUTE FUNCTION corebase_audit_is_append_only();
+  FOR EACH STATEMENT EXECUTE FUNCTION steadhold_audit_is_append_only();
 ```
 
 *Rationale:* deliberately **no foreign keys** — audit rows must survive deletion of everything they reference. `bigint` identity, not uuid: monotonic ids make gap detection (tamper evidence) trivial. Grants make it append-only at the database layer, not just by convention.

@@ -3,23 +3,23 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>checkbox-all-states — Corebase</title>
+<title>checkbox-all-states — Steadhold</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap">
 <link rel="stylesheet" href="../tokens.css">
 <link rel="stylesheet" href="../components.css">
 </head>
 <body>
-<div class="ref-toggle"><button class="cb-btn cb-btn--secondary cb-btn--sm" onclick="cbToggle()">Theme: <span class="js-theme-label">Light</span></button></div>
+<div class="ref-toggle"><button class="sh-btn sh-btn--secondary sh-btn--sm" onclick="cbToggle()">Theme: <span class="js-theme-label">Light</span></button></div>
 <main class="ref-main">
   <h1 class="ref-item__name">checkbox-all-states</h1>
   <p class="ref-sub">Indeterminate is set in JS: <code>el.indeterminate = true</code>.</p>
   <div class="ref-demo">
-<div class="cb-stack"><label class="cb-check"><input type="checkbox"> Enable Row Level Security</label><label class="cb-check"><input type="checkbox" checked> Pause project when idle</label><label class="cb-check"><input type="checkbox" class="js-indeterminate"> Some tables selected</label><label class="cb-check"><input type="checkbox" disabled> Locked by organisation policy</label></div>
+<div class="sh-stack"><label class="sh-check"><input type="checkbox"> Enable Row Level Security</label><label class="sh-check"><input type="checkbox" checked> Pause project when idle</label><label class="sh-check"><input type="checkbox" class="js-indeterminate"> Some tables selected</label><label class="sh-check"><input type="checkbox" disabled> Locked by organisation policy</label></div>
   </div>
 </main>
 <script>
 (function(){
-  var r=document.documentElement, K='cb-theme';
+  var r=document.documentElement, K='sh-theme';
   try{var s=localStorage.getItem(K); if(s) r.setAttribute('data-theme',s);}catch(e){}
   window.cbToggle=function(){
     var cur=r.getAttribute('data-theme');

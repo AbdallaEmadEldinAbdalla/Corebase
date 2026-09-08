@@ -1,4 +1,4 @@
-# corebase/pgbouncer — the per-project connection pooler (D-015, D-074).
+# steadhold/pgbouncer — the per-project connection pooler (D-015, D-074).
 #
 # Our own image rather than a community one, for the same reason the Postgres
 # image is ours: the configuration *is* the security boundary here. The pool mode,

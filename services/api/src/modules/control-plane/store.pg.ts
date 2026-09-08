@@ -1,9 +1,9 @@
 import type { Pool, PoolClient } from 'pg';
-import type { Project, ProjectStatus } from '@corebase/types';
+import type { Project, ProjectStatus } from '@steadhold/types';
 import type { ControlPlaneStore, JobRow, DatabaseInfo } from './store.ts';
-import type { SecretStore } from '@corebase/secrets';
-import { SECRET_NAMES } from '@corebase/secrets';
-import { writeAudit, SYSTEM, type Actor } from '@corebase/audit';
+import type { SecretStore } from '@steadhold/secrets';
+import { SECRET_NAMES } from '@steadhold/secrets';
+import { writeAudit, SYSTEM, type Actor } from '@steadhold/audit';
 
 /**
  * Postgres implementation of the control-plane store (T4 on T3's schema).
@@ -77,7 +77,7 @@ export async function ensureBootstrapOrg(pool: Pool, slug = 'dev'): Promise<stri
   const orgId = rows[0]!.id;
   await pool.query(
     `INSERT INTO organization_members (organization_id, user_id, role)
-     SELECT $1, u.id, 'owner' FROM users u WHERE u.email = 'dev@corebase.local'
+     SELECT $1, u.id, 'owner' FROM users u WHERE u.email = 'dev@steadhold.local'
      ON CONFLICT (organization_id, user_id) DO NOTHING`, [orgId]);
   return orgId;
 }

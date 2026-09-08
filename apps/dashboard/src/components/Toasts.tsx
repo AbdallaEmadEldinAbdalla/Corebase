@@ -52,20 +52,20 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       <div className="toasts" aria-live="polite" aria-atomic="false">
         {items.map((t) => (
-          <div className="cb-toast" key={t.id} role="status">
-            <span className={`cb-toast__icon cb-toast__icon--${t.tone}`} aria-hidden="true">
+          <div className="sh-toast" key={t.id} role="status">
+            <span className={`sh-toast__icon sh-toast__icon--${t.tone}`} aria-hidden="true">
               <svg viewBox="0 0 12 12">
                 {t.tone === 'success'
                   ? <path d="M2.5 6.5 5 9l4.5-6" />
                   : <path d="M2.5 2.5 9.5 9.5M9.5 2.5 2.5 9.5" />}
               </svg>
             </span>
-            <div className="cb-toast__body">
-              <div className="cb-toast__title">{t.title}</div>
-              {t.detail ? <div className="cb-toast__text">{t.detail}</div> : null}
+            <div className="sh-toast__body">
+              <div className="sh-toast__title">{t.title}</div>
+              {t.detail ? <div className="sh-toast__text">{t.detail}</div> : null}
             </div>
             {t.action ? (
-              <button type="button" className="cb-toast__action" onClick={t.action.run}>
+              <button type="button" className="sh-toast__action" onClick={t.action.run}>
                 {t.action.label}
               </button>
             ) : null}

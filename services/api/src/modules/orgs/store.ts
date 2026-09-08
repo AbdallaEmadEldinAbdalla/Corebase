@@ -1,6 +1,6 @@
 import { randomBytes, createHash } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
-import { writeAudit, type Actor } from '@corebase/audit';
+import { writeAudit, type Actor } from '@steadhold/audit';
 import type { Role } from '../../kernel/permissions.ts';
 
 /**

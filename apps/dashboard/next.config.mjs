@@ -7,9 +7,9 @@ const nextConfig = {
   reactStrictMode: true,
   // The API base is read at *runtime* from the browser, not baked in at build
   // time, so one image can serve staging and production. See src/lib/api.ts.
-  // @corebase/types ships TypeScript source (main points at src/index.ts), which
+  // @steadhold/types ships TypeScript source (main points at src/index.ts), which
   // is the right call for a workspace package Node runs with type stripping — and
   // it means Next has to compile it rather than treat it as a built dependency.
-  transpilePackages: ['@corebase/types'],
+  transpilePackages: ['@steadhold/types'],
 };
 export default nextConfig;

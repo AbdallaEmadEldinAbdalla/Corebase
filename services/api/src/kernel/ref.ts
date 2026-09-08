@@ -5,7 +5,7 @@ const LETTERS = 'abcdefghijklmnopqrstuvwxyz';
 
 /**
  * Project ref: 20 chars of base32 (~100 bits), first char alphabetic so the ref
- * is always a legal DNS label for <ref>.corebase.co (D-056). Never reused.
+ * is always a legal DNS label for <ref>.steadhold.app (D-056). Never reused.
  */
 export function generateProjectRef(): string {
   const bytes = randomBytes(20);

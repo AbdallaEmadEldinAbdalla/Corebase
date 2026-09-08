@@ -18,9 +18,9 @@ Prometheus on `mon-1` ([infra phases](01-infra-phases.md), D-140) scrapes over t
 | monolith `/metrics` | cp-1 | API/gateway/auth/storage request rates, latencies, error rates; routing-table freshness (D-051) |
 | worker `/metrics` | cp-1 | queue depths, job durations/outcomes, reconcile-pass stats, drift-repair counts (D-053) |
 | Redis/pgBouncer/pgBackRest | cp-1 / data nodes | queue + pool + backup/archive telemetry (pgBackRest via textfile collector from timer runs) |
-| blackbox_exporter | mon-1 | external probes of `api.corebase.co`, a canary project's REST endpoint, cert expiry |
+| blackbox_exporter | mon-1 | external probes of `api.steadhold.app`, a canary project's REST endpoint, cert expiry |
 
-**Exporter-per-project vs multi-tenant collector — analyzed, picked (D-146).** A postgres_exporter sidecar per project would (a) make the tenant unit four containers, breaking D-054's triplet shape and every reconciler diff; (b) cost ~10–20 MB RSS × 200 active projects ≈ **2–4 GB/node of pure exporter overhead** — several paid projects' worth of density (D-002 ranks isolation over cost, but exporters aren't isolation: a read-only monitoring role gains nothing from a per-tenant process); (c) multiply scrape-config churn by project count. Instead: **one postgres_exporter per data node in multi-target mode**, target list = that node's placements from `http_sd`, connecting as a per-project `corebase_monitor` role (read-only, `pg_monitor`, created at provision time — added to the base-schema template in [postgres provisioning](../03-database-platform/01-postgres-provisioning.md)). Blast radius accepted: one exporter crash loses *metrics* for one node's projects, never the projects.
+**Exporter-per-project vs multi-tenant collector — analyzed, picked (D-146).** A postgres_exporter sidecar per project would (a) make the tenant unit four containers, breaking D-054's triplet shape and every reconciler diff; (b) cost ~10–20 MB RSS × 200 active projects ≈ **2–4 GB/node of pure exporter overhead** — several paid projects' worth of density (D-002 ranks isolation over cost, but exporters aren't isolation: a read-only monitoring role gains nothing from a per-tenant process); (c) multiply scrape-config churn by project count. Instead: **one postgres_exporter per data node in multi-target mode**, target list = that node's placements from `http_sd`, connecting as a per-project `steadhold_monitor` role (read-only, `pg_monitor`, created at provision time — added to the base-schema template in [postgres provisioning](../03-database-platform/01-postgres-provisioning.md)). Blast radius accepted: one exporter crash loses *metrics* for one node's projects, never the projects.
 
 ### Metric inventory and the cardinality budget
 
@@ -30,13 +30,13 @@ Prometheus on `mon-1` ([infra phases](01-infra-phases.md), D-140) scrapes over t
 |---|---|---|---|
 | `container_cpu/memory/io/net_*` (cAdvisor) | node, project_ref, container | ✅ (~10 series) | the noisy-neighbor view (D-055) |
 | `pg_up`, `pg_stat_database_*` (conns, TPS, size), WAL lsn | node, project_ref | ✅ (~8) | drives disk ladder + WAL-lag alerts |
-| `corebase_project_disk_used_ratio` | node, project_ref | ✅ (1) | XFS quota textfile; feeds D-073 ladder |
-| `corebase_gateway_requests_total` | project_ref, plane (rest/auth/storage) | ✅ (3) | **counter only** — no route, no status detail per project; 2xx/4xx/5xx as 3 sub-counters |
-| `corebase_gateway_request_seconds` (histogram) | plane only — **no project_ref** | ❌ | platform latency is fleet-level; per-project latency questions go to logs |
-| `corebase_provisioning_job_seconds` (histogram) | job_type, outcome | ❌ | provisioning funnel percentiles |
-| `corebase_reconcile_{drift_repairs,pass_seconds}` | node, action | ❌ | D-053 health |
-| `corebase_backup_{last_success_ts,wal_archive_lag_seconds,check_ok,wal_pending_segments}` | node, project_ref | ✅ (4) | pages (below). `check_ok` is a second, independent signal: a project can have nothing waiting and a repo whose credentials expired last week |
-| `corebase_node_{ram,disk}_reserved_ratio` | node | ❌ | bin-packing / headroom (D-148) |
+| `steadhold_project_disk_used_ratio` | node, project_ref | ✅ (1) | XFS quota textfile; feeds D-073 ladder |
+| `steadhold_gateway_requests_total` | project_ref, plane (rest/auth/storage) | ✅ (3) | **counter only** — no route, no status detail per project; 2xx/4xx/5xx as 3 sub-counters |
+| `steadhold_gateway_request_seconds` (histogram) | plane only — **no project_ref** | ❌ | platform latency is fleet-level; per-project latency questions go to logs |
+| `steadhold_provisioning_job_seconds` (histogram) | job_type, outcome | ❌ | provisioning funnel percentiles |
+| `steadhold_reconcile_{drift_repairs,pass_seconds}` | node, action | ❌ | D-053 health |
+| `steadhold_backup_{last_success_ts,wal_archive_lag_seconds,check_ok,wal_pending_segments}` | node, project_ref | ✅ (4) | pages (below). `check_ok` is a second, independent signal: a project can have nothing waiting and a repo whose credentials expired last week |
+| `steadhold_node_{ram,disk}_reserved_ratio` | node | ❌ | bin-packing / headroom (D-148) |
 | API/worker internals (event loop lag, pool waits, Redis) | service | ❌ | standard runtime SLIs |
 
 **Mitigations, standing:** recording rules pre-aggregate the per-project families into fleet/node rollups (dashboards query rollups; raw per-project series are only touched by the drill-down and the scoped customer API); per-project series use 60s scrape where 15s buys nothing (DB size, disk ratio); paused projects export nothing (their exporter targets drop out of `http_sd`, which is also the cheapest "is the pause economics working" signal). Growth path past ~10–20k projects: Prometheus per shard or Mimir — a Phase B concern, noted not built.
@@ -125,7 +125,7 @@ Measured from day one so V2's public SLA is a promotion of known numbers, not a 
 ## Open Questions
 
 - **OQ-146** — Paging delivery: self-hosted (Alertmanager→Twilio/ntfy) vs a free-tier incident tool (e.g. Grafana OnCall OSS). Needs picking before first paying customer; owner: [disaster recovery](04-disaster-recovery.md) incident frame.
-- **OQ-147** — `corebase_monitor` role: exact grants (pg_monitor + per-DB connect) and whether it appears in customer-visible `pg_stat_activity` output or is filtered from the dashboard connections view.
+- **OQ-147** — `steadhold_monitor` role: exact grants (pg_monitor + per-DB connect) and whether it appears in customer-visible `pg_stat_activity` output or is filtered from the dashboard connections view.
 - **OQ-148** — mon-1 is a single point of *observability* failure (accepted — it observes, it doesn't serve). Do we want Prometheus remote_write of the alert-critical series to a tiny secondary (or Grafana Cloud free tier) so a mon-1 loss doesn't blind on-call during an unrelated incident?
 
 ## Dependencies

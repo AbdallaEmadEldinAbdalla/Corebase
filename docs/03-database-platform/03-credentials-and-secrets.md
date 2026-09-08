@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Enumerates every credential a project carries, draws the customer-visible / Corebase-internal line, specifies generation and storage (envelope encryption per D-035, with the master-key backend chosen here for a bootstrap-stage company), and gives step-by-step rotation flows — including what happens to connections that are alive when a credential rotates. The proposal's treatment (§13, §48: "encrypted secrets, rotation, never plaintext unnecessarily") was directionally right and operationally empty; this doc is the operational content.
+Enumerates every credential a project carries, draws the customer-visible / Steadhold-internal line, specifies generation and storage (envelope encryption per D-035, with the master-key backend chosen here for a bootstrap-stage company), and gives step-by-step rotation flows — including what happens to connections that are alive when a credential rotates. The proposal's treatment (§13, §48: "encrypted secrets, rotation, never plaintext unnecessarily") was directionally right and operationally empty; this doc is the operational content.
 
 ## Design
 
@@ -12,7 +12,7 @@ Database roles (created at provision/claim time, [provisioning §4](01-postgres-
 
 | Credential / role | Login? | Purpose | Who sees the secret |
 |---|---|---|---|
-| `postgres` (superuser) | yes | Corebase-internal only: provisioner specialization, pgBackRest, node agent, break-glass ops (JIT, audited — [audit & admin access](../02-control-plane/05-audit-and-admin-access.md)) | **Never the customer** |
+| `postgres` (superuser) | yes | Steadhold-internal only: provisioner specialization, pgBackRest, node agent, break-glass ops (JIT, audited — [audit & admin access](../02-control-plane/05-audit-and-admin-access.md)) | **Never the customer** |
 | `authenticator` | yes, `NOINHERIT` | PostgREST's login role; immediately `SET ROLE`s per request | Never the customer (lives only in PostgREST config) |
 | `pgbouncer_auth` | yes | auth_query lookup ([pooling §4](02-connection-pooling.md)) | Never the customer |
 | `developer` | yes | The customer's `DATABASE_URL` / `DIRECT_DATABASE_URL` role: owns application schemas, can create tables/policies/functions; `NOSUPERUSER NOCREATEROLE NOREPLICATION`, no server-file/program role grants ([threat model](../06-security/01-threat-model.md)) | **Customer** |
@@ -70,7 +70,7 @@ AAD binds `(project_id, name, version)` into the AEAD so ciphertexts cannot be s
 
 **Choice: sealed keyfile now, KMS later by design** (D-075). At bootstrap stage, the realistic threat is a leaked control-plane *database* (backup theft, SQL injection, misconfigured dump) — envelope encryption with a KEK that is **not in the database** fully answers that, and a file-based KEK answers it as well as KMS does. The threats KMS additionally covers (compromise of the control-plane *host* itself) already imply game-over for a company whose control plane orchestrates every project. Mechanics:
 
-- KEK generated offline, 32 bytes; lives at `/etc/corebase/kek.d/<kek_id>.key`, `root:corebase 0440`, on control-plane nodes only; loaded into process memory at boot; **excluded from every backup** (a control-plane DB backup without the KEK is safe by construction).
+- KEK generated offline, 32 bytes; lives at `/etc/steadhold/kek.d/<kek_id>.key`, `root:steadhold 0440`, on control-plane nodes only; loaded into process memory at boot; **excluded from every backup** (a control-plane DB backup without the KEK is safe by construction).
 - Two offline copies (sealed envelopes, separate physical locations) — loss of the KEK is loss of every secret.
 - `kek_id` column makes KEK rotation an online re-wrap job (unwrap DEK with old, wrap with new, flip `kek_id`; ciphertexts untouched).
 - **Migration trigger to a real KMS:** first enterprise/compliance-driven customer, SOC 2 start, or >2 people with control-plane root. The `kek_id` indirection makes the migration a re-wrap job, not a redesign.
@@ -114,7 +114,7 @@ Constraint: the keypair signs both auth-service tokens *and* the two API keys (D
 
 ## Decisions
 
-**D-075 — Envelope-encryption master key (KEK) is a libsodium-sealed keyfile on control-plane nodes for the bootstrap stage: 32-byte KEK at `/etc/corebase/kek.d/<kek_id>.key` (root-only, excluded from all backups, two offline copies), XChaCha20-Poly1305 for DEKs and secrets with AAD binding `(project_id, name, version)`; `kek_id` indirection makes KEK rotation and the later KMS migration an online re-wrap job. KMS migration triggers: first compliance-driven customer, SOC 2 start, or >2 control-plane root holders.** *(Rationale: the bootstrap-stage threat is a leaked control-plane database, which a non-DB-resident KEK fully answers; a cloud KMS would add a second cloud dependency on the provisioning hot path (D-023) for protection against host compromise that is already game-over; the kek_id column keeps the exit cheap.)*
+**D-075 — Envelope-encryption master key (KEK) is a libsodium-sealed keyfile on control-plane nodes for the bootstrap stage: 32-byte KEK at `/etc/steadhold/kek.d/<kek_id>.key` (root-only, excluded from all backups, two offline copies), XChaCha20-Poly1305 for DEKs and secrets with AAD binding `(project_id, name, version)`; `kek_id` indirection makes KEK rotation and the later KMS migration an online re-wrap job. KMS migration triggers: first compliance-driven customer, SOC 2 start, or >2 control-plane root holders.** *(Rationale: the bootstrap-stage threat is a leaked control-plane database, which a non-DB-resident KEK fully answers; a cloud KMS would add a second cloud dependency on the provisioning hot path (D-023) for protection against host compromise that is already game-over; the kek_id column keeps the exit cheap.)*
 
 **D-187 — Envelope crypto is ChaCha20-Poly1305 (IETF, 96-bit nonce) from Node's built-in `crypto`, not XChaCha20-Poly1305.** *(Rationale: XChaCha20 needs libsodium — a native dependency and build step in every image that touches a secret. Its extended nonce exists so random nonces remain safe when one key encrypts an unbounded number of messages; under D-035 each DEK encrypts exactly one secret version, so a random 96-bit nonce has no reuse exposure. The AAD binding of `(project_id, name, version)` is unchanged and is what actually prevents ciphertexts from being swapped between rows. Revisit only if a single key is ever reused across a large message population.)*
 

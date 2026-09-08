@@ -54,17 +54,17 @@ const cache = new WeakMap<object, NodeCaps>();
  * that will not start gives no output to read.
  */
 export async function probeNodeCaps(docker: Docker, image: string): Promise<NodeCaps> {
-  const name = `cb-caps-probe-${Date.now().toString(36)}`;
+  const name = `sh-caps-probe-${Date.now().toString(36)}`;
   try {
     const id = await docker.createContainer(name, {
       Image: image,
       Env: [],
-      // Deliberately NOT labelled `com.corebase.managed`. The reconciler scans on
+      // Deliberately NOT labelled `com.steadhold.managed`. The reconciler scans on
       // that label, and a container claiming to be managed while belonging to no
       // project is drift by construction — the reconciler happens to skip it
       // today only because it also has no ref label, which is a coincidence and
       // not a contract.
-      Labels: { 'com.corebase.role': 'caps-probe' },
+      Labels: { 'com.steadhold.role': 'caps-probe' },
       Cmd: ['sh', '-c', 'test -e /sys/fs/cgroup/io.weight && echo yes || echo no'],
       HostConfig: {
         Memory: 64 * 1024 * 1024,

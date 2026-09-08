@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Full specification of the two-key model (D-029): what the `anon` and `service_role` keys *are* (long-lived JWTs signed with the project keypair, D-014), the four Postgres roles they map onto with their exact grants, how a Corebase-Auth user JWT relates to the anon key (the dual-header pattern), and the lifecycle — display, storage, rotation, and emergency revocation with its honestly-stated blast radius. This model must be explainable in one paragraph (the D-029 rationale); this doc is the paragraph plus everything an implementer needs.
+Full specification of the two-key model (D-029): what the `anon` and `service_role` keys *are* (long-lived JWTs signed with the project keypair, D-014), the four Postgres roles they map onto with their exact grants, how a Steadhold-Auth user JWT relates to the anon key (the dual-header pattern), and the lifecycle — display, storage, rotation, and emergency revocation with its honestly-stated blast radius. This model must be explainable in one paragraph (the D-029 rationale); this doc is the paragraph plus everything an implementer needs.
 
 **The paragraph:** every project has two API keys. The `anon` key identifies your *app* and grants only what Row Level Security allows an anonymous visitor; it is safe to ship in browsers and mobile binaries. The `service_role` key bypasses RLS entirely and belongs only on servers you control. When a user signs in, your app keeps sending the anon key as `apikey` and additionally sends the user's own JWT as `Authorization` — the user's token, not the app's key, decides what rows they can see.
 
@@ -15,7 +15,7 @@ Both keys are ES256 JWTs signed with the project's private key (D-014) — the s
 ```text
 header   {"alg": "ES256", "typ": "JWT", "kid": "cbk_2026_08_7f3a"}
 payload  {
-  "iss":  "corebase",
+  "iss":  "steadhold",
   "ref":  "abck3xw7qpl2vnd8",     // the project — gateway cross-checks vs Host
   "role": "anon",                  // or "service_role" — becomes the PG role
   "iat":  1756252800,              // fixed at keypair issuance (see D-107)
@@ -28,7 +28,7 @@ Properties that matter:
 - **`ref` binds the key to the project.** A key presented against another project's hostname fails at the gateway even though the signature check alone would need the right JWKS anyway — defense in depth against routing bugs ([request pipeline](02-request-pipeline.md) hop 4).
 - **`role` is the entire authorization payload.** No scopes, no permissions list — the key selects a Postgres role; everything else is grants + RLS inside the project database. This is what keeps the model one paragraph long.
 - **Long `exp`, short *effective* lifetime.** 10 years of validity, but rotation (below) or revocation ends a key at any time. `exp` exists so a leaked pre-rotation key eventually dies even if every revocation mechanism failed.
-- **`kid` names the keypair,** enabling dual-publish rotation. JWKS is served per project at `https://<ref>.corebase.co/auth/v1/.well-known/jwks.json` (D-014) and mirrored into the gateway routing entry and each PostgREST's `jwks.json` file.
+- **`kid` names the keypair,** enabling dual-publish rotation. JWKS is served per project at `https://<ref>.steadhold.app/auth/v1/.well-known/jwks.json` (D-014) and mirrored into the gateway routing entry and each PostgREST's `jwks.json` file.
 
 ### The four Postgres roles
 
@@ -70,14 +70,14 @@ ALTER ROLE service_role  SET statement_timeout = '60s';
 | Role | Login? | RLS | Default grants | Who becomes it |
 |---|---|---|---|---|
 | `anon` | no | enforced | `USAGE` on schema only — **no table access until explicitly granted** | requests carrying only the anon key |
-| `authenticated` | no | enforced | DML on developer-created tables (still filtered by RLS) | requests with a Corebase-Auth user JWT (`role: "authenticated"`) |
+| `authenticated` | no | enforced | DML on developer-created tables (still filtered by RLS) | requests with a Steadhold-Auth user JWT (`role: "authenticated"`) |
 | `service_role` | no | **`BYPASSRLS`** | DML on developer-created tables, unfiltered | server-side requests with the service_role key; never browsers |
 | `authenticator` | **yes** | n/a (never queries as itself) | membership in the other three, `NOINHERIT` | PostgREST's `db-uri`; the *only* data-API login role |
 
 **D-108 makes anonymous access opt-in per table** — a deliberate departure from Supabase's grant-everything-then-RLS default, per the D-002 priority stack (isolation over DX). The dashboard's "allow anonymous access" toggle emits the explicit `GRANT ... TO anon`. And belt-plus-suspenders with D-036, an event trigger installed at provision time force-enables RLS on every new table in the exposed schema:
 
 ```sql
-CREATE OR REPLACE FUNCTION corebase.force_rls() RETURNS event_trigger AS $$
+CREATE OR REPLACE FUNCTION steadhold.force_rls() RETURNS event_trigger AS $$
 DECLARE obj record;
 BEGIN
   FOR obj IN SELECT * FROM pg_event_trigger_ddl_commands()
@@ -88,8 +88,8 @@ BEGIN
   END LOOP;
 END; $$ LANGUAGE plpgsql;
 
-CREATE EVENT TRIGGER corebase_force_rls ON ddl_command_end
-  WHEN TAG IN ('CREATE TABLE') EXECUTE FUNCTION corebase.force_rls();
+CREATE EVENT TRIGGER steadhold_force_rls ON ddl_command_end
+  WHEN TAG IN ('CREATE TABLE') EXECUTE FUNCTION steadhold.force_rls();
 ```
 
 A new table is therefore deny-by-default for `anon` (no grant) *and* for `authenticated` (grants but RLS with zero policies = no rows) until the developer writes policies — there is never a moment where the API serves unprotected data (D-036). Policy patterns live in [RLS design](../06-security/02-rls-design.md); how the per-request `SET ROLE` + `SET LOCAL request.jwt.claims` executes is [request pipeline](02-request-pipeline.md) step 6.
@@ -100,13 +100,13 @@ Two credentials travel on every browser request, doing different jobs:
 
 ```http
 GET /rest/v1/todos?select=*
-Host: abck3xw7qpl2vnd8.corebase.co
+Host: abck3xw7qpl2vnd8.steadhold.app
 apikey: eyJhbGciOiJFUzI1NiIsImtpZCI6ImNia18yMDI2XzA4XzdmM2EifQ...   ← the ANON key
 Authorization: Bearer eyJhbGciOiJFUzI1NiIsImtpZCI6ImNia18yMDI2...   ← the USER's JWT
 ```
 
 - **`apikey` authenticates the app to the gateway.** It proves "this traffic belongs to project `abck3xw7…` and is at least anonymous-tier" — it is what the gateway verifies, rate-limits by, and revokes ([request pipeline](02-request-pipeline.md) hops 4–5). It never reaches a `SET ROLE` decision when an Authorization header is present.
-- **`Authorization` authenticates the user to the database.** PostgREST verifies it and its `role` claim (`authenticated` for Corebase-Auth-issued user tokens, per [sessions & tokens](../05-auth/02-sessions-and-tokens.md)) selects the Postgres role; its `sub` claim reaches RLS as `request.jwt.claims`.
+- **`Authorization` authenticates the user to the database.** PostgREST verifies it and its `role` claim (`authenticated` for Steadhold-Auth-issued user tokens, per [sessions & tokens](../05-auth/02-sessions-and-tokens.md)) selects the Postgres role; its `sub` claim reaches RLS as `request.jwt.claims`.
 
 Signed-out state: the SDK sends the anon key in *both* headers. If a client sends only `apikey`, the gateway injects `Authorization: Bearer <apikey value>` before proxying (**D-109**) so PostgREST always has exactly one code path ("verify Authorization, read role") and `db-anon-role` handles nothing security-relevant on its own. `service_role` usage is the same mechanics — the service key in both headers — and since `role: "service_role"` selects the `BYPASSRLS` role, it must never ship to a browser; the SDK refuses to construct a browser client with it (best-effort guard, documented loudly).
 
@@ -114,7 +114,7 @@ One subtlety worth stating: a user JWT from project A presented to project B fai
 
 ### Key display and storage
 
-The keys are *derivable*: signing the fixed claims above with the project private key reproduces them. So Corebase does not need to store the JWTs to re-display them — and per D-060 ([data model](../02-control-plane/01-data-model.md)) it doesn't: `project_api_keys` holds `key_hash` (SHA-256, for the gateway revocation set) + `key_prefix` (12 chars, for support tickets and dashboard identification) + `kind`, `created_by`, `created_at`, `revoked_at`.
+The keys are *derivable*: signing the fixed claims above with the project private key reproduces them. So Steadhold does not need to store the JWTs to re-display them — and per D-060 ([data model](../02-control-plane/01-data-model.md)) it doesn't: `project_api_keys` holds `key_hash` (SHA-256, for the gateway revocation set) + `key_prefix` (12 chars, for support tickets and dashboard identification) + `kind`, `created_by`, `created_at`, `revoked_at`.
 
 **Display rule (D-107):** these two keys are **not** show-once. The dashboard re-derives them on demand by signing with the project private key (decrypted via KMS per D-035, in worker/API memory only):
 

@@ -1,11 +1,11 @@
 ---
 name: ux-review
-description: Run the Corebase UX review gate on a dashboard change. Use before committing any UI work — new screens, changed screens, or a new component — and when asked to audit an existing surface. Checks the 20 questions in docs/09-dashboard/05-ux-standards.md §8 against the actual code and, where a browser is available, against the running app.
+description: Run the Steadhold UX review gate on a dashboard change. Use before committing any UI work — new screens, changed screens, or a new component — and when asked to audit an existing surface. Checks the 20 questions in docs/09-dashboard/05-ux-standards.md §8 against the actual code and, where a browser is available, against the running app.
 ---
 
 # UX review
 
-You are reviewing a Corebase UI surface against a written standard. The standard is
+You are reviewing a Steadhold UI surface against a written standard. The standard is
 **[docs/09-dashboard/05-ux-standards.md](../../../docs/09-dashboard/05-ux-standards.md)** —
 read it before reviewing, every time, because it changes as the product grows.
 

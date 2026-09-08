@@ -87,7 +87,7 @@ System-initiated jobs (idle pause, purge, reconcile, nightly backups) generate *
 | Backoff | Exponential with jitter: base 30 s, factor 4 → ~30 s, 2 m, 8 m, 32 m | Long tail on purpose: most infra failures are transient but not instant |
 | Retryable failures | Timeouts, Docker daemon errors, node unreachable, lock contention, KMS blips | Worker throws → BullMQ schedules retry; row gets `state='failed'`, `attempts++`, `last_error` |
 | Non-retryable failures | Precondition violations (project in wrong state), payload validation errors, a verify step finding *conflicting* resources | Worker marks the row `dead` immediately — retrying a logic error burns attempts and pages nobody |
-| Attempts exhausted | Row → `state='dead'`; the project surfaces as `failed` where applicable | **Operator alert fires**: Prometheus alert on `corebase_jobs_dead_total` + notification ([observability](../11-infrastructure/03-observability.md)) |
+| Attempts exhausted | Row → `state='dead'`; the project surfaces as `failed` where applicable | **Operator alert fires**: Prometheus alert on `steadhold_jobs_dead_total` + notification ([observability](../11-infrastructure/03-observability.md)) |
 | Dead-letter recovery | Operator action via the admin surface ([audit & admin access](05-audit-and-admin-access.md)): `retry` (re-enqueue, attempts reset, **same idempotency key** → saga resumes at its checkpoint) or `abort` (run compensation per the [state machine](03-provisioning-state-machine.md)) | Dead rows are never auto-deleted; they are the incident record until resolved, and both actions are audited |
 
 ### Honesty about delivery semantics

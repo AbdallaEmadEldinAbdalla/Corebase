@@ -2,8 +2,8 @@ import type { Pool } from 'pg';
 import {
   render, EmailSendError,
   type EmailProvider, type TemplateName, type TemplateVariables,
-} from '@corebase/email';
-import type { AuthEmailJobData } from '@corebase/queue';
+} from '@steadhold/email';
+import type { AuthEmailJobData } from '@steadhold/queue';
 
 /**
  * The consumer that turns an owed email into a sent one (P4d).
@@ -33,7 +33,7 @@ import type { AuthEmailJobData } from '@corebase/queue';
 export interface EmailSenderDeps {
   pool: Pool;
   provider: EmailProvider;
-  /** `Corebase Auth <auth@mail.corebase.co>` in production. */
+  /** `Steadhold Auth <auth@mail.steadhold.app>` in production. */
   from: string;
   fromName?: string | undefined;
   /** Reported when a job has spent its whole retry budget. */
@@ -52,17 +52,17 @@ export interface SendOutcome {
 }
 
 /**
- * `"Acme (via Corebase)"`.
+ * `"Acme (via Steadhold)"`.
  *
  * The project's name in the friendly-from, because a recipient needs to know
- * whose app is talking — a verification mail from an unrecognised "Corebase" for
+ * whose app is talking — a verification mail from an unrecognised "Steadhold" for
  * an app called Acme reads like phishing, which is both a support burden and a
- * complaint-rate problem. "via Corebase" rather than plain "Acme" because the
+ * complaint-rate problem. "via Steadhold" rather than plain "Acme" because the
  * envelope address is ours and claiming to *be* Acme while sending from
- * `mail.corebase.co` is what DMARC alignment checks exist to catch.
+ * `mail.steadhold.app` is what DMARC alignment checks exist to catch.
  */
 export const friendlyFrom = (projectName: string | undefined): string =>
-  projectName ? `${projectName} (via Corebase)` : 'Corebase Auth';
+  projectName ? `${projectName} (via Steadhold)` : 'Steadhold Auth';
 
 export function createEmailSender(deps: EmailSenderDeps) {
   return {

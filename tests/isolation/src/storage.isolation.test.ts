@@ -254,14 +254,14 @@ describe('ST-4 — a user of A against B, where B\'s policies would deny', () =>
     // which project's public bucket is served.
     const atB = await app.inject({
       method: 'GET', url: '/storage/v1/object/public/signage/poster.txt',
-      headers: { host: `${B().ref}.corebase.test` },
+      headers: { host: `${B().ref}.steadhold.test` },
     });
     expect(atB.statusCode).toBe(200);
     expect(atB.body).toContain(`${B().ref}-PUBLIC-POSTER`);
     // Same path, A's Host: A's own poster, never B's.
     const atA = await app.inject({
       method: 'GET', url: '/storage/v1/object/public/signage/poster.txt',
-      headers: { host: `${A().ref}.corebase.test` },
+      headers: { host: `${A().ref}.steadhold.test` },
     });
     expect(atA.statusCode).toBe(200);
     expect(atA.body).toContain(`${A().ref}-PUBLIC-POSTER`);

@@ -1,18 +1,18 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { CreateProjectRequest, ERROR_CODES, decodeId, encodeId, InvalidIdError } from '@corebase/types';
+import { CreateProjectRequest, ERROR_CODES, decodeId, encodeId, InvalidIdError } from '@steadhold/types';
 import { parsePageRequest, toPage } from '../../kernel/pagination.ts';
 import { serializeProject } from './serialize.ts';
-import { DELIVERY_ID_PATTERN } from '@corebase/queue';
+import { DELIVERY_ID_PATTERN } from '@steadhold/queue';
 import { ApiError } from '../../kernel/errors.ts';
 import { generateProjectRef } from '../../kernel/ref.ts';
 import type { ControlPlaneStore } from './store.ts';
-import type { Actor } from '@corebase/audit';
+import type { Actor } from '@steadhold/audit';
 import { resolvePrincipal, actorOf, type PrincipalDeps } from '../../kernel/principal.ts';
 import { require_, type Role } from '../../kernel/permissions.ts';
 import type { OrgStore } from '../orgs/store.ts';
-import { writeAudit } from '@corebase/audit';
-import { toJwk } from '@corebase/jwt';
-import { SECRET_NAMES, type SecretStore } from '@corebase/secrets';
+import { writeAudit } from '@steadhold/audit';
+import { toJwk } from '@steadhold/jwt';
+import { SECRET_NAMES, type SecretStore } from '@steadhold/secrets';
 
 /**
  * Phase two of the two-phase enqueue (D-067). Phase one — the job row — is
@@ -68,7 +68,7 @@ export interface ControlPlaneDeps {
  * (indie developers and startups, D-003) and far below what one node holds, so it
  * bounds abuse without being a ceiling a real user meets.
  */
-export const PROJECTS_PER_ORG_LIMIT = Number(process.env.CB_PROJECTS_PER_ORG ?? 20);
+export const PROJECTS_PER_ORG_LIMIT = Number(process.env.SH_PROJECTS_PER_ORG ?? 20);
 
 /**
  * How far back each plan can restore to (backups §3).
@@ -90,7 +90,7 @@ export const PROJECTS_PER_ORG_LIMIT = Number(process.env.CB_PROJECTS_PER_ORG ?? 
  * says "this is production now".
  */
 export const RESTORE_TTL_HOURS = Math.min(168, Math.max(1,
-  Math.floor(Number(process.env.CB_RESTORE_TTL_HOURS)) || 48));
+  Math.floor(Number(process.env.SH_RESTORE_TTL_HOURS)) || 48));
 
 export const PITR_WINDOW_DAYS: Record<string, number> = {
   free: 7, pro: 30, team: 90, enterprise: 90,

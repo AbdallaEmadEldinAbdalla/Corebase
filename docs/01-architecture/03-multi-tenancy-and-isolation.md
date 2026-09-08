@@ -16,12 +16,12 @@ Organization  (billing boundary, member roles: owner/admin/member — §56)
          ├── one PostgREST container     (the data API engine, D-011)
          ├── one R2 prefix               (storage objects, D-017)
          ├── one ES256 keypair           (JWT trust domain, D-014)
-         └── one immutable ref           (<ref>.corebase.co, D-056)
+         └── one immutable ref           (<ref>.steadhold.app, D-056)
 ```
 
 - **Org** is who pays and who administers. Agencies get many projects under one org (D-003: modeled, not featured).
 - **Project** is the unit of everything operational: isolation, provisioning, pausing, backup, deletion, rate limiting, export. In V1 a project *is* an environment — "staging" means a second project (D-031). The schema carries `environment` and project-group columns from day one so V2 environments don't require a migration, per D-031; see [control-plane data model](../02-control-plane/01-data-model.md).
-- There is deliberately **no tenancy inside a customer database**: whatever multi-tenant model the *customer* builds with RLS is their business. Corebase's boundary is the project.
+- There is deliberately **no tenancy inside a customer database**: whatever multi-tenant model the *customer* builds with RLS is their business. Steadhold's boundary is the project.
 
 ### The three isolation options (proposal §10), compared for real
 
@@ -36,7 +36,7 @@ Option A is analyzed in its corrected form per C-4: **container-per-project** �
 | Blast radius (crash/OOM/disk-full) | One project. A runaway query OOMs one container; a full volume stops one project (quota, D-055) | All projects on the instance | All projects, full stop |
 | Pause-ability (D-008) | **Native**: stop and remove the triplet's containers → RAM cost → ~0, disk retained (D-072). This is what makes the free tier possible | Can't stop one schema; the instance must stay hot for any active tenant | Meaningless — always hot |
 | Migration path (small→dedicated, §10) | Same artifact at every tier: move the container to a bigger/dedicated node | Re-platforming: schema → own instance is a data migration | Full export/re-import |
-| Portability (D-004) | `pg_dump` of *their* database — clean, complete | dump of a schema with platform namespaces entangled | Corebase-proprietary row extraction |
+| Portability (D-004) | `pg_dump` of *their* database — clean, complete | dump of a schema with platform namespaces entangled | Steadhold-proprietary row extraction |
 
 **Why A won (D-009):** the priority stack (D-002) puts isolation above cost, and A is the only option whose *worst realistic failure* (noisy neighbor, instance crash, backup mistake) is scoped to one tenant. Its weakness — the RAM floor — is attacked directly by pause/resume (D-008) rather than by weakening the boundary. B and C both trade the #1-ranked value (isolation) for the #4-ranked one (cost), which the stack forbids. B additionally poisons the upgrade story: one shared instance pins every tenant to the same maintenance window and extension set, violating "enhance Postgres, don't hide it."
 
@@ -57,7 +57,7 @@ project abck3xw7 unit (node n7)
   └── postgrest   db-uri → direct to Postgres (db:5432), never through
                   PgBouncer (D-101/D-074); jwt public key baked at provision,
                   reloaded on rotation
-  labels: corebase.project_ref, corebase.project_id  (reconciler identity)
+  labels: steadhold.project_ref, steadhold.project_id  (reconciler identity)
   states: READY (all 3 up) · PAUSED (containers removed; volume, per-project
           network definition, and config kept, D-072)
 ```

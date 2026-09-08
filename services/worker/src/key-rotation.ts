@@ -1,6 +1,6 @@
 import type { Pool } from 'pg';
-import { generateKeypair, sign as signJwt, projectKeyClaims, toJwk } from '@corebase/jwt';
-import { SECRET_NAMES, type SecretStore } from '@corebase/secrets';
+import { generateKeypair, sign as signJwt, projectKeyClaims, toJwk } from '@steadhold/jwt';
+import { SECRET_NAMES, type SecretStore } from '@steadhold/secrets';
 import { createHash } from 'node:crypto';
 
 /**
@@ -42,7 +42,7 @@ export interface RotationDeps {
 }
 
 /** The default swap window for the old key — OQ-104's 30 days. */
-export const SWAP_WINDOW_DAYS = Number(process.env.CB_KEY_SWAP_DAYS ?? 30);
+export const SWAP_WINDOW_DAYS = Number(process.env.SH_KEY_SWAP_DAYS ?? 30);
 
 /** `JWT_PRIVATE_KEY_CBK_2026_09_7F3A` — the per-kid name for a non-signing key. */
 export const privateKeyName = (kid: string) =>
@@ -233,8 +233,8 @@ async function remintApiKeys(
   privateKeyPem: string, kid: string,
 ): Promise<void> {
   const issuer = deps.keyIssuer?.(ref)
-    ?? process.env['CB_JWT_ISSUER']
-    ?? `https://${ref}.${process.env['CB_PROJECT_DOMAIN'] ?? 'corebase.co'}`;
+    ?? process.env['SH_JWT_ISSUER']
+    ?? `https://${ref}.${process.env['SH_PROJECT_DOMAIN'] ?? 'steadhold.app'}`;
   for (const role of ['anon', 'service_role'] as const) {
     const token = signJwt(projectKeyClaims({ ref, role, issuer }), { privateKeyPem, kid });
     const name = role === 'anon' ? SECRET_NAMES.anonKey : SECRET_NAMES.serviceRoleKey;

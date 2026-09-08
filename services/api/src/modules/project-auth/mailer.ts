@@ -1,6 +1,6 @@
 import type { Pool } from 'pg';
-import { capsFor, checkAndConsume, type CounterStore } from '@corebase/email';
-import { enqueueAuthEmail, type AuthEmailJobData, type Queue } from '@corebase/queue';
+import { capsFor, checkAndConsume, type CounterStore } from '@steadhold/email';
+import { enqueueAuthEmail, type AuthEmailJobData, type Queue } from '@steadhold/queue';
 import type { AuthMailer, AuthEmailJob } from './mail.ts';
 
 /**

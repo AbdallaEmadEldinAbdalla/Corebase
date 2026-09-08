@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Client } from 'pg';
-import { generateKeypair, toJwk, sign } from '@corebase/jwt';
+import { generateKeypair, toJwk, sign } from '@steadhold/jwt';
 import { createDocker, type Docker } from './docker.ts';
-import { buildApp } from '@corebase/api';
-import { createMemoryRateLimiter } from '@corebase/api/kernel/rate-limit.ts';
-import type { RouteEntry, RoutingTable } from '@corebase/api/modules/gateway/routing.ts';
+import { buildApp } from '@steadhold/api';
+import { createMemoryRateLimiter } from '@steadhold/api/kernel/rate-limit.ts';
+import type { RouteEntry, RoutingTable } from '@steadhold/api/modules/gateway/routing.ts';
 import type { FastifyInstance } from 'fastify';
 import { ensureDeveloperRole } from './project-admin.ts';
 import { join } from 'node:path';
@@ -33,17 +33,17 @@ import { join } from 'node:path';
  * matters — the claims arrive as a GUC set by PostgREST, and a policy is only
  * correct if it reads them the way the request delivers them.
  */
-const CERT_DIR = process.env.CB_DOCKER_CERT_DIR
+const CERT_DIR = process.env.SH_DOCKER_CERT_DIR
   ?? join(process.cwd(), '../../infra/docker/staging/certs');
-const HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
-const PG_IMAGE = process.env.CB_PG_IMAGE ?? 'corebase/postgres:17.5';
-const PGRST_IMAGE = process.env.CB_POSTGREST_IMAGE ?? 'corebase/postgrest:12.2';
+const HOST = process.env.SH_DOCKER_HOST ?? '127.0.0.1';
+const PORT = Number(process.env.SH_DOCKER_PORT ?? 2376);
+const PG_IMAGE = process.env.SH_PG_IMAGE ?? 'steadhold/postgres:17.5';
+const PGRST_IMAGE = process.env.SH_POSTGREST_IMAGE ?? 'steadhold/postgrest:12.2';
 
-const NET = 'cb-p5d-net';
-const PG = 'cb-p5d-pg';
-const PGRST = 'cb-p5d-pgrst';
-const PGRST_PORT = Number(process.env.CB_P5D_PORT ?? 7489);
+const NET = 'sh-p5d-net';
+const PG = 'sh-p5d-pg';
+const PGRST = 'sh-p5d-pgrst';
+const PGRST_PORT = Number(process.env.SH_P5D_PORT ?? 7489);
 const ADMIN_PORT = PGRST_PORT + 1;
 /**
  * The customer connection's host port, and it is deliberately **not**
@@ -60,8 +60,8 @@ const ADMIN_PORT = PGRST_PORT + 1;
  * the top of it is the safest slot: the placement allocator fills bottom-up, so
  * the last address is the last one a real project will be given.
  */
-const PG_HOST_PORT = Number(process.env.CB_P5D_PG_PORT ?? 5462);
-const DOMAIN = 'corebase.test';
+const PG_HOST_PORT = Number(process.env.SH_P5D_PG_PORT ?? 5462);
+const DOMAIN = 'steadhold.test';
 const REF = 'p5dcookbookrefaa';
 
 const ALICE = '11111111-1111-4111-8111-111111111111';
@@ -170,7 +170,7 @@ beforeAll(async () => {
     await docker.createNetwork(NET, {});
     await docker.createContainer(PG, {
       Image: PG_IMAGE, Env: ['POSTGRES_PASSWORD=p5dsmoke'],
-      Labels: { 'com.corebase.managed': 'true' },
+      Labels: { 'com.steadhold.managed': 'true' },
       HostConfig: {
         Memory: 512 * 1024 * 1024, MemorySwap: 512 * 1024 * 1024, NanoCpus: 1e9,
         RestartPolicy: { Name: 'no' }, Mounts: [],
@@ -241,12 +241,12 @@ beforeAll(async () => {
     await docker.createContainer(PGRST, {
       Image: PGRST_IMAGE,
       Env: [
-        'COREBASE_REF=p5d',
-        `COREBASE_PG_HOST=${PG}`,
+        'STEADHOLD_REF=p5d',
+        `STEADHOLD_PG_HOST=${PG}`,
         `PGRST_DB_URI=postgres://authenticator:p5dauth@${PG}:5432/postgres`,
-        `COREBASE_JWKS=${JSON.stringify({ keys: [toJwk(pair.publicKeyPem, pair.kid)] })}`,
+        `STEADHOLD_JWKS=${JSON.stringify({ keys: [toJwk(pair.publicKeyPem, pair.kid)] })}`,
       ],
-      Labels: { 'com.corebase.managed': 'true' },
+      Labels: { 'com.steadhold.managed': 'true' },
       HostConfig: {
         Memory: 256 * 1024 * 1024, MemorySwap: 256 * 1024 * 1024, NanoCpus: 5e8,
         RestartPolicy: { Name: 'no' }, Mounts: [],

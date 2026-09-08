@@ -3,23 +3,23 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>loading-progress-skeleton — Corebase</title>
+<title>loading-progress-skeleton — Steadhold</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap">
 <link rel="stylesheet" href="../tokens.css">
 <link rel="stylesheet" href="../components.css">
 </head>
 <body>
-<div class="ref-toggle"><button class="cb-btn cb-btn--secondary cb-btn--sm" onclick="cbToggle()">Theme: <span class="js-theme-label">Light</span></button></div>
+<div class="ref-toggle"><button class="sh-btn sh-btn--secondary sh-btn--sm" onclick="cbToggle()">Theme: <span class="js-theme-label">Light</span></button></div>
 <main class="ref-main">
   <h1 class="ref-item__name">loading-progress-skeleton</h1>
   <p class="ref-sub">Skeletons match the shape of what they replace.</p>
   <div class="ref-demo">
-<div class="cb-stack" style="width:320px"><div class="cb-row"><div class="cb-progress" style="flex:1"><div class="cb-progress__fill" style="width:60%"></div></div><span class="cb-help">60%</span></div><div class="cb-skeleton" style="width:70%"></div><div class="cb-skeleton" style="width:90%"></div><div class="cb-skeleton" style="width:50%"></div><div class="cb-spinner" role="status" aria-label="Loading"></div></div>
+<div class="sh-stack" style="width:320px"><div class="sh-row"><div class="sh-progress" style="flex:1"><div class="sh-progress__fill" style="width:60%"></div></div><span class="sh-help">60%</span></div><div class="sh-skeleton" style="width:70%"></div><div class="sh-skeleton" style="width:90%"></div><div class="sh-skeleton" style="width:50%"></div><div class="sh-spinner" role="status" aria-label="Loading"></div></div>
   </div>
 </main>
 <script>
 (function(){
-  var r=document.documentElement, K='cb-theme';
+  var r=document.documentElement, K='sh-theme';
   try{var s=localStorage.getItem(K); if(s) r.setAttribute('data-theme',s);}catch(e){}
   window.cbToggle=function(){
     var cur=r.getAttribute('data-theme');

@@ -12,13 +12,13 @@
  * scan would not exercise it.
  *
  * The assertion that matters is at the end and is about *residue*: nothing named
- * `cb-*` left on the node, and a control plane whose reserved RAM is back to
+ * `sh-*` left on the node, and a control plane whose reserved RAM is back to
  * zero. A capacity leak of 350 MB per deleted project is invisible until a node
  * refuses to place work it has room for.
  *
  * Usage (staging up, migrated, image seeded):
- *   pnpm --filter @corebase/worker lifecycle
- *   CB_LC_COUNT=3 pnpm --filter @corebase/worker lifecycle
+ *   pnpm --filter @steadhold/worker lifecycle
+ *   SH_LC_COUNT=3 pnpm --filter @steadhold/worker lifecycle
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { join, resolve } from 'node:path';
@@ -30,17 +30,17 @@ import {
 import { Pool, Client } from 'pg';
 
 const ROOT = resolve(import.meta.dirname, '../../..');
-const COUNT = Number(process.env.CB_LC_COUNT ?? 20);
-const PORT = Number(process.env.CB_LC_API_PORT ?? 8096);
+const COUNT = Number(process.env.SH_LC_COUNT ?? 20);
+const PORT = Number(process.env.SH_LC_API_PORT ?? 8096);
 const TOKEN = 'lc-token-harness-token-long-enough-for-the-boot-check';
-const STEP_BUDGET_MS = Number(process.env.CB_LC_BUDGET_MS ?? 90_000);
-const CERT_DIR = process.env.CB_DOCKER_CERT_DIR ?? join(ROOT, 'infra/docker/staging/certs');
-const DOCKER_HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
-const DOCKER_PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
+const STEP_BUDGET_MS = Number(process.env.SH_LC_BUDGET_MS ?? 90_000);
+const CERT_DIR = process.env.SH_DOCKER_CERT_DIR ?? join(ROOT, 'infra/docker/staging/certs');
+const DOCKER_HOST = process.env.SH_DOCKER_HOST ?? '127.0.0.1';
+const DOCKER_PORT = Number(process.env.SH_DOCKER_PORT ?? 2376);
 
 /**
  * The object store. Every harness here provisions a project, and provisioning
- * requires a backup repo (`CB_REQUIRE_BACKUPS`) since P3a added
+ * requires a backup repo (`SH_REQUIRE_BACKUPS`) since P3a added
  * `configure_backups` — so a harness without these settings cannot complete a
  * single cycle. All four of them were missing it, and the nightly reported it as
  * "ready did not happen within 90000ms" for four nights (D-358).
@@ -54,11 +54,11 @@ const orgId = async () => (cachedOrg ??= await bootstrapOrgId(
   `http://127.0.0.1:${PORT}`, auth as Record<string, string>));
 
 const backupEnv = backupStoreEnv(ROOT);
-if (!backupEnv['CB_BACKUP_S3_ENDPOINT']) {
+if (!backupEnv['SH_BACKUP_S3_ENDPOINT']) {
   throw new Error(
     'no object-store settings at infra/docker/staging/backup-store.env — '
     + 'run ./scripts/staging.sh backup-store. This harness provisions projects, '
-    + 'and provisioning requires a backup repo (CB_REQUIRE_BACKUPS).');
+    + 'and provisioning requires a backup repo (SH_REQUIRE_BACKUPS).');
 }
 
 const env = {
@@ -66,28 +66,28 @@ const env = {
   ...process.env,
   // The services run as the least-privilege app role (P1b); this harness's own
   // queries below use the owner, because fixtures are admin work.
-  CB_CONTROL_DATABASE_URL: appDatabaseUrl(ROOT),
-  CB_REDIS_URL: process.env.CB_REDIS_URL ?? 'redis://127.0.0.1:56379',
-  CB_DOCKER_HOST: DOCKER_HOST,
-  CB_DOCKER_PORT: String(DOCKER_PORT),
-  CB_DOCKER_CERT_DIR: CERT_DIR,
-  CB_KEK_DIR: process.env.CB_KEK_DIR ?? join(ROOT, 'infra/docker/staging/kek.d'),
-  CB_BOOTSTRAP_SECRET: process.env.CB_BOOTSTRAP_SECRET ?? 'lc-bootstrap-secret-0123456789',
-  CB_PROJECT_DOMAIN: process.env.CB_PROJECT_DOMAIN ?? 'localhost',
-  CB_PG_PORT_MIN: process.env.CB_PG_PORT_MIN ?? '5433',
-  CB_PG_PORT_MAX: process.env.CB_PG_PORT_MAX ?? '5462',
-  CB_NODE_RAM_MB: process.env.CB_NODE_RAM_MB ?? '16384',
-  CB_NODE_HOSTNAME: 'data-1',
-  CB_STATIC_TOKEN: TOKEN,
+  SH_CONTROL_DATABASE_URL: appDatabaseUrl(ROOT),
+  SH_REDIS_URL: process.env.SH_REDIS_URL ?? 'redis://127.0.0.1:56379',
+  SH_DOCKER_HOST: DOCKER_HOST,
+  SH_DOCKER_PORT: String(DOCKER_PORT),
+  SH_DOCKER_CERT_DIR: CERT_DIR,
+  SH_KEK_DIR: process.env.SH_KEK_DIR ?? join(ROOT, 'infra/docker/staging/kek.d'),
+  SH_BOOTSTRAP_SECRET: process.env.SH_BOOTSTRAP_SECRET ?? 'lc-bootstrap-secret-0123456789',
+  SH_PROJECT_DOMAIN: process.env.SH_PROJECT_DOMAIN ?? 'localhost',
+  SH_PG_PORT_MIN: process.env.SH_PG_PORT_MIN ?? '5433',
+  SH_PG_PORT_MAX: process.env.SH_PG_PORT_MAX ?? '5462',
+  SH_NODE_RAM_MB: process.env.SH_NODE_RAM_MB ?? '16384',
+  SH_NODE_HOSTNAME: 'data-1',
+  SH_STATIC_TOKEN: TOKEN,
   PORT: String(PORT),
   // Its own metrics port: a harness must not fight a worker someone is already
   // running from scripts/dev.sh for the same port.
-  CB_METRICS_PORT: process.env.CB_METRICS_PORT ?? '9112',
+  SH_METRICS_PORT: process.env.SH_METRICS_PORT ?? '9112',
   // The recovery window, compressed. Everything else about the purge path — the
   // scan, the job row, the verify_purgeable guard — runs exactly as it would
   // after seven real days.
-  CB_SOFT_DELETE_WINDOW: process.env.CB_SOFT_DELETE_WINDOW ?? '1 second',
-  CB_PURGE_SCAN_MS: process.env.CB_PURGE_SCAN_MS ?? '2000',
+  SH_SOFT_DELETE_WINDOW: process.env.SH_SOFT_DELETE_WINDOW ?? '1 second',
+  SH_PURGE_SCAN_MS: process.env.SH_PURGE_SCAN_MS ?? '2000',
 };
 
 const pool = new Pool({ connectionString: ownerDatabaseUrl(), max: 6 });
@@ -200,9 +200,9 @@ interface Residue { containers: string[]; volumes: string[]; bookedMb: number; s
 
 async function residue(): Promise<Residue> {
   const containers = (await nodeContainers())
-    .flatMap((c) => c.Names).filter((n) => n.startsWith('/cb-')).map((n) => n.slice(1));
+    .flatMap((c) => c.Names).filter((n) => n.startsWith('/sh-')).map((n) => n.slice(1));
   const volumes = ((await nodeVolumes()).Volumes ?? [])
-    .map((v) => v.Name).filter((n) => n.startsWith('cb-'));
+    .map((v) => v.Name).filter((n) => n.startsWith('sh-'));
   const { rows } = await pool.query<{ bookedMb: number; secrets: number; placements: number }>(
     `SELECT COALESCE((SELECT sum(ram_reserved_mb)::int FROM nodes), 0) AS "bookedMb",
             (SELECT count(*)::int FROM project_secrets) AS secrets,
@@ -215,10 +215,10 @@ async function main() {
 
   await pool.query(
     'truncate provisioning_jobs, project_secrets, project_databases, projects, nodes cascade');
-  for (const name of (await nodeContainers()).flatMap((c) => c.Names).filter((n) => n.startsWith('/cb-'))) {
+  for (const name of (await nodeContainers()).flatMap((c) => c.Names).filter((n) => n.startsWith('/sh-'))) {
     await nodeApi(`/containers/${name.slice(1)}?force=1&v=0`, 'DELETE').catch(() => {});
   }
-  for (const v of ((await nodeVolumes()).Volumes ?? []).filter((x) => x.Name.startsWith('cb-'))) {
+  for (const v of ((await nodeVolumes()).Volumes ?? []).filter((x) => x.Name.startsWith('sh-'))) {
     await nodeApi(`/volumes/${v.Name}`, 'DELETE').catch(() => {});
   }
 
@@ -252,8 +252,8 @@ async function main() {
 
   const left = await residue();
   console.log('\n▸ residue after the loop');
-  console.log(`  containers named cb-*        ${left.containers.length}`);
-  console.log(`  volumes named cb-*           ${left.volumes.length}`);
+  console.log(`  containers named sh-*        ${left.containers.length}`);
+  console.log(`  volumes named sh-*           ${left.volumes.length}`);
   console.log(`  node RAM still booked        ${left.bookedMb} MB`);
   console.log(`  credential rows              ${left.secrets}`);
   console.log(`  placement rows               ${left.placements}`);

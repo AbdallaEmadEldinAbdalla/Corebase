@@ -1,8 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { ERROR_CODES, encodeId } from '@corebase/types';
-import { burnVerify, PasswordFormatError, MIN_PASSWORD_LENGTH } from '@corebase/crypto';
-import { writeAudit } from '@corebase/audit';
+import { ERROR_CODES, encodeId } from '@steadhold/types';
+import { burnVerify, PasswordFormatError, MIN_PASSWORD_LENGTH } from '@steadhold/crypto';
+import { writeAudit } from '@steadhold/audit';
 import type { Pool } from 'pg';
 import { ApiError } from '../../kernel/errors.ts';
 import { resolvePrincipal, actorOf, type PrincipalDeps } from '../../kernel/principal.ts';

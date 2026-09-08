@@ -12,8 +12,8 @@ import { networkName, LABEL_MANAGED, LABEL_REF, DB_ALIAS, IMAGE } from './contai
  * only that we asked for it.
  */
 const CERT_DIR = new URL('../../../infra/docker/staging/certs', import.meta.url).pathname;
-const HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
+const HOST = process.env.SH_DOCKER_HOST ?? '127.0.0.1';
+const PORT = Number(process.env.SH_DOCKER_PORT ?? 2376);
 const REF = 'p2atestnetworkrefxx';
 const NET = networkName(REF);
 
@@ -34,7 +34,7 @@ beforeAll(async () => {
 afterAll(async () => {
   if (!up) return;
   // Clean up in dependency order; a network with an attached container will not go.
-  for (const name of [`cb-${REF}-probe`, `cb-${REF}`]) {
+  for (const name of [`sh-${REF}-probe`, `sh-${REF}`]) {
     const c = await docker.inspectContainer(name).catch(() => undefined);
     if (c) await docker.removeContainer(c.Id, true).catch(() => {});
   }
@@ -71,7 +71,7 @@ describe('P2a — the project network, on a real node', () => {
 
   t('a container on the network resolves `db` and connects to Postgres', async () => {
     // A real Postgres, aliased db, exactly as buildContainerSpec does it.
-    const pgName = `cb-${REF}`;
+    const pgName = `sh-${REF}`;
     if (!(await docker.inspectContainer(pgName))) {
       const id = await docker.createContainer(pgName, {
         Image: IMAGE,
@@ -102,7 +102,7 @@ describe('P2a — the project network, on a real node', () => {
     // Now the actual claim: another container on the same network reaches `db`.
     // Using the project image because it already has psql, and using the alias
     // rather than an IP because the alias is what every rendered config says.
-    const probeName = `cb-${REF}-probe`;
+    const probeName = `sh-${REF}-probe`;
     const probeId = await docker.createContainer(probeName, {
       Image: IMAGE,
       Env: ['PGPASSWORD=probe-password-long-enough'],

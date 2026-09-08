@@ -1,8 +1,8 @@
-# Corebase — Build Status
+# Steadhold — Build Status
 
 **Last updated:** 2026-09-05 · **Phase:** Phase 4 (auth) · **Milestone 0 complete** · **Phase 1 complete** (P1a–P1g, all exit criteria met) · **Phase 2 complete** (P2a–P2g) · **Phase 3 complete** (P3a–P3h; **all four exit criteria met**) · **Phase 4 complete** (P4a–P4i; 2 of 3 exit criteria met — the third needs a real domain and provider) · **Phase 5 started** (P5a done)
 
-This file is the handover document. If you are picking Corebase up — new collaborator,
+This file is the handover document. If you are picking Steadhold up — new collaborator,
 future me, or an agent — read this first, then [docs/INDEX.md](docs/INDEX.md) for the
 plan and [docs/00-foundation/05-decision-log.md](docs/00-foundation/05-decision-log.md)
 for the binding decisions.
@@ -79,8 +79,8 @@ pnpm install
 ./scripts/staging.sh up            # control-db + control-redis + Docker-in-Docker data node
 ./scripts/migrate-staging.sh       # apply migrations to the control plane
 ./scripts/staging.sh kek           # generate the local master key (gitignored)
-docker build -t corebase/postgres:17.5 infra/docker/postgres
-docker build -t corebase/pgbouncer:1.23 infra/docker/pgbouncer
+docker build -t steadhold/postgres:17.5 infra/docker/postgres
+docker build -t steadhold/pgbouncer:1.23 infra/docker/pgbouncer
 ./scripts/staging.sh seed-images   # push both project images onto the data node
 ./scripts/staging.sh backup-store  # bucket + TLS for the object store, and prove egress
 ./scripts/staging.sh mail-sink     # the SMTP sink that stands in for the provider
@@ -119,7 +119,7 @@ and psql, which is exactly what a customer has. `--purge` also destroys it;
 
 ### The dashboard
 
-`dev.sh` sets `CB_DASHBOARD_ORIGINS`, so with it running:
+`dev.sh` sets `SH_DASHBOARD_ORIGINS`, so with it running:
 
 ```bash
 pnpm dev:dashboard
@@ -155,17 +155,17 @@ pnpm test:unit
 ```
 
 ```bash
-pnpm --filter @corebase/worker bench
+pnpm --filter @steadhold/worker bench
 ```
 
 The crash-resume matrix is a separate script because 11 scenarios × ~35s is a
 nightly job, not a per-commit one:
 
 ```bash
-pnpm --filter @corebase/worker kill-matrix
+pnpm --filter @steadhold/worker kill-matrix
 ```
 
-`CB_KM_ONLY=start_container` narrows it to one scenario; `CB_KM_TIMELINE=1` prints
+`SH_KM_ONLY=start_container` narrows it to one scenario; `SH_KM_TIMELINE=1` prints
 the restarted worker's log with arrival times, which is how the 60s recovery
 mystery got solved.
 
@@ -173,26 +173,26 @@ The full lifecycle loop — create, use, delete, purge, twenty times, then asser
 the node and control plane are empty:
 
 ```bash
-pnpm --filter @corebase/worker lifecycle
+pnpm --filter @steadhold/worker lifecycle
 ```
 
 The node-reboot drill — restart the data node and watch it converge, with an
 orphan planted to prove the sweep reports rather than deletes:
 
 ```bash
-pnpm --filter @corebase/worker node-reboot
+pnpm --filter @steadhold/worker node-reboot
 ```
 
 ### Watching it work
 
 `scripts/dev.sh` (above) also tees the services' output to the files Alloy tails,
-so logs reach Loki. Grafana is at <http://127.0.0.1:3001/d/corebase-provisioning> (anonymous
+so logs reach Loki. Grafana is at <http://127.0.0.1:3001/d/steadhold-provisioning> (anonymous
 admin, local only) and `./scripts/staging.sh monitoring` prints the URLs plus a
 health check. To verify the whole observability path end to end — scrape targets,
 20 runs on the panel, logs queryable by ref, the alert actually firing:
 
 ```bash
-pnpm --filter @corebase/worker observability
+pnpm --filter @steadhold/worker observability
 ```
 
 **Note:** stop `dev.sh` before running `pnpm test`. A second worker on the same
@@ -213,17 +213,17 @@ Start the services with the staging environment (the bench harness does this for
 you; this is the manual equivalent):
 
 ```bash
-export CB_CONTROL_DATABASE_URL=postgres://corebase:controlpass@127.0.0.1:55433/corebase_control
-export CB_REDIS_URL=redis://127.0.0.1:56379
-export CB_DOCKER_HOST=127.0.0.1 CB_DOCKER_PORT=2376
-export CB_DOCKER_CERT_DIR=$PWD/infra/docker/staging/certs
-export CB_KEK_DIR=$PWD/infra/docker/staging/kek.d
-export CB_BOOTSTRAP_SECRET=local-bootstrap-secret-0123456789
-export CB_PROJECT_DOMAIN=localhost CB_PG_PORT_MIN=5433 CB_PG_PORT_MAX=5462
-export CB_NODE_RAM_MB=16384 CB_STATIC_TOKEN=dev-token PORT=8099
+export SH_CONTROL_DATABASE_URL=postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control
+export SH_REDIS_URL=redis://127.0.0.1:56379
+export SH_DOCKER_HOST=127.0.0.1 SH_DOCKER_PORT=2376
+export SH_DOCKER_CERT_DIR=$PWD/infra/docker/staging/certs
+export SH_KEK_DIR=$PWD/infra/docker/staging/kek.d
+export SH_BOOTSTRAP_SECRET=local-bootstrap-secret-0123456789
+export SH_PROJECT_DOMAIN=localhost SH_PG_PORT_MIN=5433 SH_PG_PORT_MAX=5462
+export SH_NODE_RAM_MB=16384 SH_STATIC_TOKEN=dev-token PORT=8099
 ```
 
-`CB_PROJECT_DOMAIN=localhost` matters: connection strings come back as
+`SH_PROJECT_DOMAIN=localhost` matters: connection strings come back as
 `<ref>.localhost`, which resolves to 127.0.0.1, so the string the API hands you is
 directly usable.
 
@@ -302,7 +302,7 @@ Two migrations, applied from empty. The DDL is copied verbatim from
 later: 6 enums, `organizations`, `project_groups`, `projects`, `nodes`,
 `project_databases`, `provisioning_jobs`, and (T5e) `project_secrets`.
 
-The migration runner (`@corebase/migrate`, 9 tests) takes a Postgres advisory lock,
+The migration runner (`@steadhold/migrate`, 9 tests) takes a Postgres advisory lock,
 runs one transaction per file, records a checksum per file and refuses to proceed if
 a previously-applied file has changed. CRLF is normalised so a Windows checkout does
 not read as drift.
@@ -370,14 +370,14 @@ persists them envelope-encrypted, then applies them. `write_connection` records 
 customer-facing host. `mark_ready` refuses to flip the status if the database is not
 running, there is no container, no connection host, or fewer than three credentials.
 
-**T5f — the measurement.** `pnpm --filter @corebase/worker bench`. 20/20 creates
+**T5f — the measurement.** `pnpm --filter @steadhold/worker bench`. 20/20 creates
 ready *and usable*, max 3.26s against a 60s budget. Per-step attribution showed
 ~85% of a create is `wait_healthy` (initdb plus a first Postgres start) and the
 control plane's own work totals 57 ms.
 
 ### T6 — Crash-resume proof · done · [M-003](docs/14-roadmap/05-measurements.md)
 
-`pnpm --filter @corebase/worker kill-matrix` SIGKILLs the worker at eleven points
+`pnpm --filter @steadhold/worker kill-matrix` SIGKILLs the worker at eleven points
 in the saga — seven step boundaries plus four mid-step windows where no
 checkpoint exists — restarts it, and asserts convergence with **exactly one**
 container, volume, placement row, credential set and RAM booking, and a database
@@ -416,7 +416,7 @@ binding, so that is what is built:
 said out loud in the logs rather than silently skipped) → disable_writes (`ALTER
 DATABASE … default_transaction_read_only`, so a client on a live direct
 connection cannot write data the final backup would miss) → final_backup (a
-**gate**, not a stub: `CB_REQUIRE_FINAL_BACKUP=true` makes deletion fail loudly
+**gate**, not a stub: `SH_REQUIRE_FINAL_BACKUP=true` makes deletion fail loudly
 rather than quietly skip D-066, and it is off in M0 because no backup system
 exists) → stop_container (clearing the restart policy first, or `unless-stopped`
 brings it straight back) → mark_soft_deleted, with `COALESCE` on `purge_after` so
@@ -458,7 +458,7 @@ alone.
 | project `ready`, container stopped or absent | enqueue the provisioning saga (**D-200**), bounded at 3/hour then mark `failed` and alert |
 | container running, project `soft_deleted`/`paused` | stop it and alert — a billing and security leak |
 | managed container with no project row | **alert only**, never removed |
-| `cb-*` volume with no placement row, **or any unlabelled volume** | **alert only**, never removed |
+| `sh-*` volume with no placement row, **or any unlabelled volume** | **alert only**, never removed |
 | `nodes.ram_reserved_mb` ≠ Σ plan bookings on that node | recompute from the rows |
 
 Repair goes through the provisioning saga rather than a bespoke restart path
@@ -482,13 +482,13 @@ connection string the API hands out.
 Prometheus + Loki + Alloy + Grafana in the staging stack, `/metrics` on both
 services, one provisioned dashboard and three alert rules.
 
-`@corebase/metrics` is a hand-written registry — three metric types and one
+`@steadhold/metrics` is a hand-written registry — three metric types and one
 well-specified text format, the same reasoning that put the Docker client here
 rather than a Docker SDK. What it buys beyond avoiding a dependency is control
 over label sets, which is the thing that actually matters: **D-146's cardinality
 budget is a design constraint**, and a registry that demands the label set at
 construction makes an accidental per-project histogram hard to write. The
-verification harness queries `{__name__=~"corebase_.*", project_ref!=""}` and
+verification harness queries `{__name__=~"steadhold_.*", project_ref!=""}` and
 fails if anything matches, so a regression breaks a check rather than a
 Prometheus.
 
@@ -595,7 +595,7 @@ least-privilege application role, below (**D-216**).
 ```sql
 CREATE TRIGGER audit_logs_append_only
   BEFORE UPDATE OR DELETE ON audit_logs
-  FOR EACH STATEMENT EXECUTE FUNCTION corebase_audit_is_append_only();
+  FOR EACH STATEMENT EXECUTE FUNCTION steadhold_audit_is_append_only();
 ```
 
 And the ordering bug CI found rather than I did: the migration linked the bootstrap
@@ -608,7 +608,7 @@ membership too, idempotently.
 
 ### P1b — the application role, the audit writer, the envelope · done · 15 tests
 
-**A role that cannot rewrite history.** `corebase_app` is `NOLOGIN` with grants
+**A role that cannot rewrite history.** `steadhold_app` is `NOLOGIN` with grants
 narrow enough that `UPDATE audit_logs` is refused by privilege and not only by
 trigger (`20260901100000_p1b_app_role.sql`). The API runs as it; migrations do not.
 
@@ -847,7 +847,7 @@ watching them fail: no stylesheet may name a ramp step (D-178) and there are no 
 shadows (D-179). The shadow rule had to be rewritten first — banning `box-shadow`
 outright failed on the design system's *own* focus ring and the 3px active-nav bar,
 which are required, so the rule is the blur radius. A third guard came out of a bug
-the user spotted: **`--cb-space-5` does not exist**, the 4-point scale being
+the user spotted: **`--sh-space-5` does not exist**, the 4-point scale being
 4/8/12/16/24/32/48, and an undefined custom property with no fallback invalidates the
 whole declaration rather than falling back — so five paddings silently became zero
 and the palette's input sat flush against its edge. A test now fails on any token
@@ -920,7 +920,7 @@ bin-packing placement, and cgroup limits.
 Phase 2 opens with substrate rather than a feature. The pooler's rendered
 `pgbouncer.ini` says `host=db` and PostgREST's `db-uri` will say the same, so both
 need a network the project's containers share and a stable name for Postgres on it
-(**D-228**). `cb-<ref>-net`, derived from the ref rather than stored — exactly one
+(**D-228**). `sh-<ref>-net`, derived from the ref rather than stored — exactly one
 exists per project and nothing allocates it, so a column would be a second place
 for the same fact to be wrong. The published host port stays, because
 `DIRECT_DATABASE_URL` is a contract.
@@ -985,7 +985,7 @@ mode, one per project (D-015), on the network P2a built — its config says
 
 **How the pooler gets credentials without holding them.** `auth_query`, not a
 `userlist.txt` (D-074): the pooler asks Postgres for a connecting user's verifier
-through `corebase.pgbouncer_lookup`, so a rotation is one `ALTER ROLE` with nothing
+through `steadhold.pgbouncer_lookup`, so a rotation is one `ALTER ROLE` with nothing
 to ship or reload. The image creates `pgbouncer_auth` as a **passwordless** LOGIN
 role and the worker sets its password at provision time, so no credential is baked
 into an image (**D-232**).
@@ -995,7 +995,7 @@ a caller shadowing `pg_shadow` with their own relation and having a definer-righ
 function read it instead — a SECURITY DEFINER function without a pinned search_path
 is a privilege escalation, not a style preference. And the allowlist inside it is a
 *boundary*: only `developer` is resolvable, so the pooled port cannot reach
-`postgres`, `authenticator`, `corebase_admin` or `pgbouncer_auth` itself even if
+`postgres`, `authenticator`, `steadhold_admin` or `pgbouncer_auth` itself even if
 PgBouncer is fully compromised. Verified by presenting the correct superuser
 password to a real project's pooled port and being refused — while `developer` still
 connected, so the refusals are the allowlist and not a broken pooler.
@@ -1042,7 +1042,7 @@ production.
 Also in this step: the staging substitute publishes the pooler port range (an
 allocated-but-unpublished port is a dead `DATABASE_URL` that looks like a broken
 pooler), `seed-images` loads both images and names the build command if either is
-missing, and the compose project is now `corebase` rather than `corebase-staging`.
+missing, and the compose project is now `steadhold` rather than `steadhold-staging`.
 
 ### P2c — pause and resume · done · 9 tests · [M-007](docs/14-roadmap/05-measurements.md)
 
@@ -1296,7 +1296,7 @@ create→`ready` p50 3514 ms / p95 5309 ms at concurrency 4, with a pooler start
 for each, still 5× inside the 30 s target. All 200 client connections attached and
 ran 1.4 million statements over 60 s.
 
-`pnpm --filter @corebase/worker density` is the instrument; the numbers are
+`pnpm --filter @steadhold/worker density` is the instrument; the numbers are
 **[M-008](docs/14-roadmap/05-measurements.md)** and the raw JSON is beside it.
 
 | per project (anon working set) | idle | under load |
@@ -1360,13 +1360,13 @@ Asked to revisit the whole build, not a step of it. Eight findings, all fixed; t
 two sharpest were the same shape — a protection this codebase applies carefully in
 one place and not in another.
 
-**A hardcoded credential** (**D-240**). `CB_STATIC_TOKEN` defaulted to the literal
+**A hardcoded credential** (**D-240**). `SH_STATIC_TOKEN` defaulted to the literal
 string `dev-token`, so an API deployed with no configuration accepted that header
 as the **bootstrap owner** — full rights, no expiry, no revocation, attributed to a
 real user so nothing in the audit log looked unusual. Verified before fixing:
 `buildApp({})` answered 200. The project refuses this deliberately elsewhere — the
 bootstrap user has no password hash, `trust` auth is banned at image build time
-(D-185), `corebase_app` is NOLOGIN (D-216) — and it arrived through a `??`.
+(D-185), `steadhold_app` is NOLOGIN (D-216) — and it arrived through a `??`.
 
 **An unmetered 64 MiB-per-request hash** (**D-241**). Only login was rate limited.
 Signup is the one unauthenticated endpoint that runs scrypt, at 64 MiB a call
@@ -1452,7 +1452,7 @@ completes.
   which forces a WAL switch and confirms the segment lands — so it tests config,
   credentials, cipher-pass and egress in the one place where failure is still
   cheap. Cost to provisioning: ~1.1 s.
-- `CB_REQUIRE_BACKUPS` fails provisioning closed for a project that cannot be
+- `SH_REQUIRE_BACKUPS` fails provisioning closed for a project that cannot be
   backed up. **Off** until Phase 3 finishes, because a fleet with no repo
   configured must still be able to provision; the log line saying a project has
   no PITR is what stops that being invisible in the meantime.
@@ -1594,7 +1594,7 @@ count cannot — pgBackRest expires a full older than the window only while anot
 at least that old remains, so a base always exists *before* the oldest restorable
 point, which is what the slack in Pro's 35-against-30 was always for.
 
-**`corebase_backup_last_success_ts` was wired to WAL archiving, not base backups**
+**`steadhold_backup_last_success_ts` was wired to WAL archiving, not base backups**
 (**D-277**). P3b did that, and the metric name hides it completely. The alert on it
 is "last-success age > 26 h → page", and pointed at WAL it stays green for a project
 whose nightly full has not succeeded in a week — because the WAL was flowing
@@ -1602,7 +1602,7 @@ perfectly the whole time. Two healthy-looking signals and one missing backup. WA
 now has its own timestamp gauge, and `BackupRunFailed` was added beside it: silence
 and refusal are different failures.
 
-**A counter declared and never incremented.** `corebase_backup_runs_total` existed,
+**A counter declared and never incremented.** `steadhold_backup_runs_total` existed,
 the alert read it, and nothing ever moved it — so `BackupRunFailed` could not fire.
 Caught by asking what actually writes each series rather than by any test, which is
 worth remembering: a metric with no writer passes every test that asserts the
@@ -1819,7 +1819,7 @@ customer who is already having a bad day. A failure **stops the deletion**, whic
 is the whole point of an interlock: nothing about a `DELETE` distinguishes "we are
 done with this" from "I typed the wrong ref", and a deletion that proceeded past a
 failed backup would close a recovery window with nothing behind it at the one moment
-nobody is watching, because the customer has already moved on. `CB_REQUIRE_FINAL_BACKUP`
+nobody is watching, because the customer has already moved on. `SH_REQUIRE_FINAL_BACKUP`
 now defaults **on** (**D-299**) — the failure it prevents is invisible, since a
 recovery window with nothing behind it looks exactly like a recovery window.
 
@@ -2017,7 +2017,7 @@ Every project now has the six `auth` tables from the auth architecture doc, crea
 by the image at `initdb` (**D-314**) rather than by a saga step: they are
 fleet-wide and identical, and `initdb` is the one moment when no client can see a
 half-created schema. It also makes D-004's export promise true — a project's users
-exist in the project's own database from its first second, so `corebase export`
+exist in the project's own database from its first second, so `steadhold export`
 carries them out with a plain `pg_dump` and **nothing about a project's end-users
 is ever stored in the control plane**.
 
@@ -2025,7 +2025,7 @@ The `auth` schema itself already existed with the RLS helpers (`auth.uid()` and
 friends, from D-015); this adds the tables, which the API roles are deliberately
 *not* allowed to touch.
 
-**The privilege boundary is the part worth reading.** `corebase_auth` is the only
+**The privilege boundary is the part worth reading.** `steadhold_auth` is the only
 role with table privileges here (**D-315**), and `service_role` is what makes that
 non-obvious: it is handed to a customer's server-side code and holds `BYPASSRLS`,
 so nothing about row-level security constrains it and the **only** thing between it
@@ -2084,7 +2084,7 @@ routing and rate-limit placement, not identity. Two things about that boundary a
 pinned by tests and both were nearly wrong:
 
 - **The two issuers are different strings** (**D-319**). The provisioning saga
-  signs API keys with `https://<ref>.corebase.co`; an access token's `iss` is
+  signs API keys with `https://<ref>.steadhold.app`; an access token's `iss` is
   `…/auth/v1`. The first wiring pinned one for both and 401'd every request with a
   perfectly valid signature.
 - **A user's own access token is refused in the `apikey` slot** (**D-320**). It is
@@ -2148,7 +2148,7 @@ back into a working session.
 **The redirect allowlist is the other half of the step, and it caught a real bug in
 my own code.** `/recover` originally passed `redirect_to` straight into the mailed
 link. That is not an open-redirect nuisance: the mail comes from a reputable
-domain, the link genuinely points at `<ref>.corebase.co`, and the tokens land
+domain, the link genuinely points at `<ref>.steadhold.app`, and the tokens land
 wherever the attacker asked — precisely the capability D-116's fixed templates
 exist to withhold. So validation happens where the link is **built**, not only
 where it is followed (**D-325**), and the substitution is audited because it is
@@ -2212,9 +2212,9 @@ sink.
 
 The SMTP client is hand-written (**D-332**), same reasoning as the S3 SigV4 client
 and the JWT signer. Testing it against a real listener rather than a mock earned
-its keep immediately: **`Acme (via Corebase) <auth@…>` unquoted is not the name it
+its keep immediately: **`Acme (via Steadhold) <auth@…>` unquoted is not the name it
 looks like.** Parentheses delimit a comment in RFC 5322, so the sink reported the
-display name as "Acme" alone — and the "via Corebase" half is the part that keeps
+display name as "Acme" alone — and the "via Steadhold" half is the part that keeps
 us from claiming to *be* the customer while sending from our own domain, which is
 what DMARC alignment exists to catch (**D-333**). A mock would have agreed with
 whatever we sent it.
@@ -2484,7 +2484,7 @@ mistake a developer will actually make; a 401 would send them hunting for an
 expired key.
 
 **Deletion keeps the id and nothing else** (**D-355**). The customer's tables
-reference `auth.users(id)` under their own FK semantics and Corebase does not
+reference `auth.users(id)` under their own FK semantics and Steadhold does not
 cascade into app schemas, so a hard delete would either break those references or
 force a decision about a customer's data that is not ours to make. The address
 becomes `deleted+<id>@invalid` — syntactically valid, in a reserved TLD that can
@@ -2538,8 +2538,8 @@ of worker log. **The error that explained everything was in memory and outside
 that window:**
 
 ```
-backups are required (CB_REQUIRE_BACKUPS) but no repo is configured —
-set CB_BACKUP_S3_ENDPOINT/_BUCKET/_KEY/_SECRET (./scripts/staging.sh backup-store)
+backups are required (SH_REQUIRE_BACKUPS) but no repo is configured —
+set SH_BACKUP_S3_ENDPOINT/_BUCKET/_KEY/_SECRET (./scripts/staging.sh backup-store)
 job row: state=dead_letter, attempts=5/5
 checkpoint: allocate_node … wait_healthy
 ```
@@ -2594,7 +2594,7 @@ died on its first line. It was invisible because T5f was skipped behind T6.
 So the harnesses are now **inside the worker's `tsc` pass** (**D-363**) — they
 were outside every typecheck, which is how that survived. One line of tsconfig,
 and it immediately found a second latent bug: `density.mts` read
-`env.CB_PG_IMAGE` from an object that never carried it, so the `??` always took
+`env.SH_PG_IMAGE` from an object that never carried it, so the `??` always took
 its fallback and the probe silently pinned an image the fleet may have moved off.
 It now imports `IMAGE` from `container-spec.ts` and cannot drift. The check is not
 a cure — `res.json()` is `any`, so the `{ref, id}` drift would still have slipped
@@ -2787,7 +2787,7 @@ third would be a new way to use a project. The auth module became one **without
 adding a container**: it is a shared multi-tenant process. So since P4b,
 `/auth/v1/*` has served per-project traffic while the idle scan still concluded
 from database connections alone — and the auth module's own connections open as
-`corebase_auth`, which the scan deliberately excludes along with every internal
+`steadhold_auth`, which the scan deliberately excludes along with every internal
 role. For that entire period **a project whose users only signed up and logged in
 looked idle**, and would have been paused under them after seven days with nothing
 to wake it, because resume-on-request is Phase 5 work. Nothing failed, which is
@@ -2834,7 +2834,7 @@ the base image's locale is POSIX, so a non-ASCII byte in a file it reads is
 entrypoint at EOF while the image still built cleanly. `information_schema` was
 revoked from `PUBLIC` by P1b's hardening, so PostgREST could not introspect and
 answered 503 forever with a message about neither. Granting `USAGE` on the
-`corebase` schema turned out not to grant `EXECUTE` on the function in it, and
+`steadhold` schema turned out not to grant `EXECUTE` on the function in it, and
 the pre-request hook failed the request it was supposed to annotate. And the data
 node published no port for the range the placement had picked.
 
@@ -2893,7 +2893,7 @@ an unreachable KEK and a project with no key were indistinguishable, and both
 present as *every request 401ing with nothing anywhere saying why*. It now
 reports through `onError` while still not failing the fleet's refresh over one
 project (**D-379**). Booting the wired `main.ts` against staging confirmed the
-rest: an unknown host 404s, a real ref reaches hop 4, `evil-corebase.test` is
+rest: an unknown host 404s, a real ref reaches hop 4, `evil-steadhold.test` is
 refused by the suffix check in the production wiring and not merely in a unit
 test, and the control plane is untouched.
 
@@ -2921,7 +2921,7 @@ written at the time.
 P5b went in red and stayed red for four pushes. The omission was small; what it
 exposed was not.
 
-**The omission:** P5b made `corebase/postgrest:12.2` mandatory and never taught
+**The omission:** P5b made `steadhold/postgrest:12.2` mandatory and never taught
 either workflow to build it. `seed-images` refused to run, which is the guard
 doing its job — the failure landed on the commit that added the requirement
 rather than as a timeout deep inside provisioning.
@@ -3130,7 +3130,7 @@ Isolation stayed green at 39/39, and credentials + auth-schema (34) unchanged.
 ### P5f — the latency budget under k6 · done · budget met, one real regression fixed
 
 Phase 5's third exit criterion. `tests/load/` holds the k6 scripts, `pnpm --filter
-@corebase/worker load` stands up the real thing — the real API process with the
+@steadhold/worker load` stands up the real thing — the real API process with the
 gateway wired, a project provisioned by the real saga, 4000 rows behind a real
 RLS policy — and it is the nightly's fifth drill.
 
@@ -3143,7 +3143,7 @@ nothing at all.** Both are worth recording, because the second is the more
 instructive.
 
 **The harness reported a beautiful 0.9 ms p50 across 47,351 requests — every one
-of them a 403.** It had set `CB_JWT_ISSUER` to a flat `https://corebase.test`, so
+of them a 403.** It had set `SH_JWT_ISSUER` to a flat `https://steadhold.test`, so
 every project's keys were minted under an issuer no project's gateway accepts.
 Rejections are fast. **A load test that does not check its own responses measures
 the error path and reports it as the happy path, and the faster the error the
@@ -3172,7 +3172,7 @@ latency is a property of the machine, and a threshold that pretends otherwise
 buys a red build whenever the runner is busy — which is how a performance gate
 gets muted, leaving nothing. So the error rate, the RLS-correctness rate and the
 gateway's *added* cost block anywhere; the absolute p50/p99 are reported unless
-`CB_LOAD_STRICT=1` says the hardware is production-shaped. The added cost is the
+`SH_LOAD_STRICT=1` says the hardware is production-shaped. The added cost is the
 only figure in the budget that travels between machines: two arms, same box, same
 interleaved run, so a noisy neighbour hits both equally.
 
@@ -3260,7 +3260,7 @@ not have.
 
 Object metadata lives in the project's own Postgres (D-017), which is
 load-bearing twice: RLS on these tables **is** the file-permission system — there
-is no second ACL engine anywhere — and `corebase export` carries a customer's
+is no second ACL engine anywhere — and `steadhold export` carries a customer's
 file inventory out with a plain `pg_dump`. Installed at initdb like the `auth`
 schema, for the same reasons: fleet-wide, identical per project, and the one
 moment no client can observe a half-created schema.
@@ -3763,20 +3763,86 @@ rows (P6g), which Phase 5 had recorded as a named gap.
 
 This is not a numbered plan step. It sits between Phase 6 and Phase 7 because the
 dashboard cannot be rebuilt against a visual layer that does not exist yet, and the
-name had to settle before ~200 files were rewritten around it.
+name had to settle before the repository was rewritten around it.
 
-### The name · Corebase → Steadhold · decided, not yet applied
+### The name · Corebase → Steadhold · done · 352 files
 
-`corebase.co` is taken, as are the `.dev`/`.io` pairs around "corebase", and the
+`corebase.co` was taken, as were the `.dev`/`.io` pairs around "corebase", and the
 name was generic besides — "core" plus "base" names a category, not a position.
 **Steadhold** is *stead* (a holding, a place one stands) plus *hold* (to keep; a
 stronghold): a backend you own outright rather than rent. **D-407.**
 
-**The rename has not been applied.** The repository, the `@corebase/*` packages, the
-container prefixes and every doc still say Corebase. That is deliberate — the mark
-had to exist and survive judgement first — but it means the identity in
-`design-exports/steadhold/` describes a name the code does not use yet. §8 carries
-this as an open item. `steadhold.dev` should be registered before the rename lands.
+Applied mechanically, in this order, because order is load-bearing (**D-412**):
+
+| From | To | Note |
+|---|---|---|
+| `corebase.com` | `steadhold.dev` | marketing, dashboard, API |
+| `corebase.co` | `steadhold.app` | project subdomains — **a separate apex on purpose** (D-411) |
+| `Corebase` / `corebase` / `COREBASE` | `Steadhold` / `steadhold` / `STEADHOLD` | includes `@corebase/*` → `@steadhold/*` and the `corebase.{test,local,managed,role,project,…}` label namespaces |
+| `CB_` | `SH_` | 799 environment references |
+| `cb-` | `sh-` | CSS tokens, container names, Docker resources |
+| `cb_` | `sh_` | SQL identifiers, session keys, metric names |
+
+The domain rules **must** run before the generic word rule, or `corebase.com`
+becomes `steadhold.devm`. Every prefix was rewritten on a word boundary, after
+checking that no `cb`-prefixed identifier in the repository belonged to anything
+else and that no `sh-`/`SH_`/`sh_` name already existed to collide with.
+
+**The two apexes stay two apexes (D-411).** Collapsing them would have silently
+deleted a documented security property: projects live on a different registrable
+domain from the dashboard so a tenant XSS cannot reach dashboard sessions. Both
+replacements happen to be HSTS-preloaded gTLDs, which forces HTTPS on
+tenant-served content — a side benefit, not the reason.
+
+**What it broke, and what that taught.** Three things, all now fixed:
+
+1. **The rename erased its own history.** D-407, this section's own heading and the
+   README all read "Steadhold → Steadhold" afterwards, because "Corebase" was the
+   *subject* of those sentences rather than a reference to be updated. A rename
+   cannot be applied to the record of the rename. Repaired by hand.
+2. **Gitignored generated state was invisible to it** (**D-413**).
+   `infra/docker/staging/app-role.env` and `mail-sink.env` still held `CB_*` keys;
+   `staging.sh` sourced them, found no `SH_APP_DB_PASSWORD` and stopped on
+   `unbound variable` — the good outcome, because `set -u` turned a silent empty
+   password into a halt. Deleted and regenerated. The mTLS certificates are the same
+   class and matter more: they carry `steadhold.test` SANs now, and a stale
+   `corebase.test` cert would have failed at a far less obvious layer.
+3. **Two of the three project images changed content, not just tags.** Retagging
+   `corebase/postgres` would have been wrong: the Dockerfiles moved
+   `/etc/corebase/postgresql.base.conf` and
+   `/usr/local/bin/corebase-entrypoint.sh`. All three were rebuilt.
+
+`pnpm install --lockfile-only` regenerates the lockfile but does **not** relink
+`node_modules`, so the first typecheck after the rename failed on
+`@steadhold/config/tsconfig.base.json not found` — a stale workspace symlink, not a
+rename error. A full `pnpm install` fixes it.
+
+**The rename is a breaking change for any live deployment, in four ways.** None
+matter on a staging stack that is rebuilt from empty, and all four would matter on a
+running one:
+
+- The session cookie is `sh_session` and the refresh-token prefix is `sh_rt_`
+  (`services/api/src/kernel/sessions.ts:20`, D-112). Every existing session and
+  refresh token stops being recognised — everyone is logged out once.
+- Migrations are **checksummed**, and the rename rewrote the body of applied ones
+  (`steadhold_app`, `steadhold_control`). An existing control database fails the
+  checksum gate on the next run; there is no in-place path, only a restore.
+- The compose project name changed, so `docker compose` creates fresh
+  `steadhold_*` volumes and leaves the old `corebase_*` ones orphaned rather than
+  migrating them.
+- Two of the three project images changed content, so the node's image store has to
+  be re-seeded, not re-tagged.
+
+**Still outward-facing and not done by me:** `steadhold.dev` and `steadhold.app` are
+not registered, and the GitHub repository is still named `Corebase`. Renaming the
+repository breaks existing clones and remotes, so it is the owner's call:
+
+```bash
+gh repo rename Steadhold
+```
+
+The local working directory is still `~/Desktop/Corebase`; renaming it mid-session
+would break every absolute path in flight.
 
 ### The mark · done · four rounds, 30 candidates, 1 shipped
 
@@ -3908,6 +3974,29 @@ role distinction exists, the tests present each role.
 
 
 
+**A rename is applied to references, never to the record of the rename.** A
+find-and-replace cannot tell a mention of the old name apart from a statement
+*about* the old name, so it rewrites "Corebase → Steadhold" into
+"Steadhold → Steadhold" and quietly deletes the only text that explained why. Three
+places said that after the rename: D-407, §4h's own heading and the README. The
+rule is to sweep for self-referential text afterwards and repair it by hand, and to
+leave a provenance line on any document preserved as a historical artifact.
+
+**A rename also has to reach what `git grep` cannot see.** Gitignored generated
+state, the contents of built images, and workspace symlinks all carry the old name
+and none of them appear in a search of tracked files. Each bit here: staging's
+`app-role.env` still held `CB_*` (caught only because `set -u` halted the script),
+two of three project images had the old name in a *path* rather than a tag so
+retagging would have been wrong, and `pnpm install --lockfile-only` left
+`node_modules` pointing at `@corebase/*`. Delete and regenerate that class of state
+rather than rewriting it.
+
+**Prove a mechanical change was mechanical.** The rename touched 352 files, which
+is far past reading. Re-applying the substitution rules to every removed line in
+the staged diff and asserting it equals the added line turns "I think that was just
+the rename" into a check — and it is the only thing standing between a 352-file
+commit and something unrelated riding along in it.
+
 ## 6. Decisions made while building (not from the plan)
 
 One hundred and thirty-three decisions came out of running the thing rather than planning it —
@@ -3935,7 +4024,7 @@ D-001…D-316 and is binding when two documents disagree.
 | D-199 | A soft-deleted project stays visible; only a purged one is gone | `deleted_at IS NULL` hid the project the moment it was deleted, making the recovery window unusable |
 | D-200 | Reconciliation repairs by enqueueing the provisioning saga, bounded at 3/hour | One convergence path, already idempotent; a bespoke restart would be a second, less-tested one |
 | D-201 | Each sweep persists its report to `nodes.last_reconcile` | "Is reconciliation running at all" should survive log retention and be one SELECT |
-| D-202 | Hand-written metrics registry; no `corebase_*` metric carries `project_ref`, asserted by a check | D-146's budget is a constraint: one per-project histogram would be 600k series |
+| D-202 | Hand-written metrics registry; no `steadhold_*` metric carries `project_ref`, asserted by a check | D-146's budget is a constraint: one per-project histogram would be 600k series |
 | D-203 | The worker re-asserts its node row on every reconcile, not just at startup | A vanished node row leaves the worker up while placement is blind to it |
 | D-204 | The stuck-job alert reads a purpose-built gauge, not a PromQL reconstruction | One comparison is reviewable; a stale series is itself an alert |
 | D-205 | A soft-deleted project exposes `deleted_at` and `purge_after`; both absent, not null, when alive | A recovery deadline you cannot read is not a deadline you can act on |
@@ -3949,7 +4038,7 @@ D-001…D-316 and is binding when two documents disagree.
 | D-213 | `POST /v1/invites/accept` exists; accepting requires the invite's email to match the account | The endpoint table had no way to accept an invite, and the email match stops a forwarded invite from being a bearer token |
 | D-214 | The two project keys are stored envelope-encrypted, replacing D-107's deterministic re-derivation | Deterministic ECDSA needs RFC 6979, which Node does not expose — and a bad nonce leaks the private key |
 | D-215 | `audit_logs` is append-only by **trigger**, not by `REVOKE` alone | Applied the REVOKE, then tried the UPDATE: it succeeded. Privileges do not bind a table's owner |
-| D-216 | The API connects as `corebase_app`, which owns nothing and cannot run DDL; `corebase` owns the schema | Three claims in the corpus were untrue while one role did both jobs |
+| D-216 | The API connects as `steadhold_app`, which owns nothing and cannot run DDL; `steadhold` owns the schema | Three claims in the corpus were untrue while one role did both jobs |
 | D-217 | A project name is unique **within its organization**; the `ref` is the global identity | A global check lets one tenant deny "api" to everyone, and says so in the 409 |
 | D-218 | `key_prefix` is a label (`cbk_anon_<ref4>`), not a literal prefix | Both keys displayed as `eyJhbGciOiJF` — the base64 of the JWT header, identical for every key ever minted |
 | D-219 | CORS is an explicit allowlist, empty by default, never a wildcard, always `Vary: Origin` | A localhost default ships to production the first time someone forgets the variable, because the service starts fine either way |
@@ -3961,7 +4050,7 @@ D-001…D-316 and is binding when two documents disagree.
 | D-225 | Motion is 120–180 ms, transform/opacity only, disabled under `prefers-reduced-motion` (resolves OQ-170) | "No motion at all" is right for a static board and wrong for a shell — layers arriving without direction is why an interface feels abrupt |
 | D-226 | The command palette and full keyboard reachability are shell requirements; every menu capability is also in the palette | It converts "learn where the button is" into "know what it is called", and it forces every action to have a name a CLI can reuse |
 | D-227 | No directory this repo writes to may be a compose bind-mount *source*; certs are copied out of the named volume by `docker exec cat` | On Linux the Docker daemon creates a missing bind-mount source as root, locking the scripts out; Docker Desktop remaps it, so the defect was invisible on macOS for months |
-| D-228 | Each project gets a private bridge network, `cb-<ref>-net`, with Postgres aliased `db`; the name is derived, not stored | The pooler and PostgREST both configure `host=db`, so a stable alias keeps those templates from ever learning a project's ref |
+| D-228 | Each project gets a private bridge network, `sh-<ref>-net`, with Postgres aliased `db`; the name is derived, not stored | The pooler and PostgREST both configure `host=db`, so a stable alias keeps those templates from ever learning a project's ref |
 | D-229 | The network is removed at soft-delete, not only at purge, and `verify_gone` asserts its absence | It holds no data and does hold a subnet from a finite node pool; 18 leaked in one afternoon, and an exhausted pool blocks the next project entirely |
 | D-230 | The Engine API client uses one pooled agent per node with `maxSockets: 8`; never the global agent | Node's global agent has had keepAlive on since v19, so ~130 operations broke a node's listener permanently — it read as "Docker Desktop is flaky" for weeks |
 | D-231 | No client may rely on the API's single-organization convenience default | `demo.sh` worked until the account had two orgs, which the test suite creates; the API is right to refuse to guess |
@@ -3973,7 +4062,7 @@ D-001…D-316 and is binding when two documents disagree.
 | D-237 | A project's RAM booking lives on its placement row; release credits what the row says, never what the plan says | Purging an already-paused project would have credited RAM that was never reserved, leaving the node under-counted and accepting work it cannot hold |
 | D-238 | An empty body under a JSON content-type parses as `{}` rather than being rejected (supersedes half of D-198) | It was a framework 400 blaming the client for our contract, on exactly the endpoints that take no body |
 | D-239 | Pause removes containers and keeps volume, network and placement row; resume reuses the provisioning steps | The row is what makes the connection string survive an idle week; a bespoke resume path would be a second, less-tested way to start a project |
-| D-240 | `CB_STATIC_TOKEN` has no default; a short or placeholder value refuses to boot | It defaulted to `dev-token`, so an unconfigured API accepted that header as the bootstrap owner — verified, 200 |
+| D-240 | `SH_STATIC_TOKEN` has no default; a short or placeholder value refuses to boot | It defaulted to `dev-token`, so an unconfigured API accepted that header as the bootstrap owner — verified, 200 |
 | D-241 | Every unauthenticated endpoint that hashes a password is rate limited, on its own budget, before the work | Signup ran a 64 MiB scrypt call unmetered; ~1.3 GiB for twenty concurrent requests |
 | D-242 | Connection strings need `?reveal=true` and revealing them is audited, deduplicated hourly | A database password is as powerful as the service_role key, which was gated and audited while the password was neither |
 | D-243 | A transitional status with no job running is `stuck_transition` drift — reported, not resolved | A `pausing` project whose job died read as "pausing" to its owner forever, and no sweep saw anything wrong |
@@ -4010,7 +4099,7 @@ D-001…D-316 and is binding when two documents disagree.
 | D-274 | An unreachable project keeps its rung and is never recorded healthy | "Cannot measure" is not "measured as fine" — that reports a green fleet during the incident the scan exists to catch |
 | D-275 | Alert rules are tested with `promtool test rules`, not merely syntax-checked | The criterion says alerts *fire*; a file that parses proves nothing, and the healthy-idle no-alert case is the regression worth pinning |
 | D-276 | Retention is a time policy in days, not a count of fulls | `count` on Pro's weekly fulls keeps ~8 months against a 30-day promise; time also guarantees a base exists before the oldest restorable point |
-| D-277 | `corebase_backup_last_success_ts` means the last base backup; WAL has its own gauge | Pointed at WAL, the ">26h" alert stays green for a project whose nightly full has failed all week |
+| D-277 | `steadhold_backup_last_success_ts` means the last base backup; WAL has its own gauge | Pointed at WAL, the ">26h" alert stays green for a project whose nightly full has failed all week |
 | D-278 | `backup_runs` records attempts, not only the backups that exist | A repo cannot know what was tried, and failures leave no trace in one by definition |
 | D-279 | The backup job's idempotency key carries the calendar day | A five-minute sweep against a half-hour slot would enqueue one nightly backup a dozen times |
 | D-280 | A project's window slot is derived from its id, never random | Random re-rolls each sweep — a lottery firing at a different time nightly, not a schedule |
@@ -4032,7 +4121,7 @@ D-001…D-316 and is binding when two documents disagree.
 | D-296 | `final_backup` is always a full, and its failure stops the deletion | The only copy that survives the project; nothing about a DELETE distinguishes "done with this" from "wrong ref" |
 | D-297 | Pause backs up after the checkpoint, confirms with `check`, and leaves containers running on failure | A paused project whose backup failed has one node disk as the only copy — worse than a running one |
 | D-298 | The pause backup is incremental under 7 days, full otherwise | Nothing extends the chain until resume, so a link nobody watches is a restore that depends on it |
-| D-299 | `CB_REQUIRE_FINAL_BACKUP` defaults on | The failure is invisible: a recovery window with nothing behind it looks exactly like one |
+| D-299 | `SH_REQUIRE_FINAL_BACKUP` defaults on | The failure is invisible: a recovery window with nothing behind it looks exactly like one |
 | D-300 | Retrievability is proven by reading the repo from a container that is not the deleted project's | A `succeeded` row is our bookkeeping; the criterion is about the repo |
 | D-301 | The control plane deletes purged repos itself over S3, with a hand-written SigV4 client | After purge there is no container to run pgBackRest in, and delete rights belong to the control plane alone |
 | D-302 | `project_repos` outlives every other trace of a project | What must survive a purge is what still needs deleting and when; RESTRICT so a future delete cannot orphan the objects |
@@ -4048,7 +4137,7 @@ D-001…D-316 and is binding when two documents disagree.
 | D-312 | The control plane's S3 client has no `PUT` | Delete is the only write right it should hold; the sabotage test overwrites with `mc`, from outside the product |
 | D-313 | Project end-user passwords use scrypt, not D-111's argon2id | Extends D-211: a native module on the path that absorbs every project's logins; bcrypt import compatibility deferred, not dropped |
 | D-314 | The `auth` tables are created by the image at initdb | Fleet-wide and identical, and it makes the export promise true — end-user data never touches the control plane |
-| D-315 | `corebase_auth` alone holds table privileges in `auth`, with its own password | `service_role` has BYPASSRLS, so the absent grant is the only thing between it and every password hash |
+| D-315 | `steadhold_auth` alone holds table privileges in `auth`, with its own password | `service_role` has BYPASSRLS, so the absent grant is the only thing between it and every password hash |
 | D-316 | No default privileges in `auth`, and force-RLS stays scoped to `public` | Enabling RLS on `auth.users` would lock the auth module out of its own tables — every login failing at once |
 
 ## 7. Measurements
@@ -4073,7 +4162,7 @@ reality is itself the finding.
   not self-restart rebuilt and serving queries 5.2s after the reboot, 4/4 projects
   answering, and the planted orphan reported without being touched.
 - **M-006** — the monitoring stack costs ~320 MiB across four containers and
-  produces 156 `corebase_*` series, **none carrying `project_ref`**. Says the
+  produces 156 `steadhold_*` series, **none carrying `project_ref`**. Says the
   platform half of D-146's budget is nearly free; says nothing yet about the
   per-project half, which is the half that can sink a node.
 
@@ -4163,7 +4252,7 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   kernel has no `io.weight` (no BFQ, no blk-iocost), so D-055's IO weight is
   probed and omitted here rather than applied (D-255). The absolute half —
   `io.max` per-device byte caps for the free tier — is enforceable on this kernel
-  but inert until an operator names the node's data device (`CB_IO_DEVICE`); no
+  but inert until an operator names the node's data device (`SH_IO_DEVICE`); no
   device is configured in staging, so neither I/O control is currently live. What
   is verified is that the spec and the probe agree, in both directions.
 - **The hard per-project disk quota is not implemented and cannot be verified here.**
@@ -4221,7 +4310,7 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   That makes **Phase 4's third exit criterion unmet**: mail delivering to Gmail,
   Outlook and Yahoo with SPF, DKIM and DMARC green is a property of a real domain
   at a real provider, and no amount of local testing substitutes. Nor do the DNS
-  records exist — `mail.corebase.co`, its SPF `-all`, its DKIM selector, its DMARC
+  records exist — `mail.steadhold.app`, its SPF `-all`, its DKIM selector, its DMARC
   policy and its aligned return path are all Terraform that has not been written.
 - **Nothing populates the suppression lists.** Both lists and the enqueue-time
   check are built and tested; the webhook endpoint that would feed them is not,
@@ -4229,8 +4318,8 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   only by an operator inserting a `manual` row, and the complaint score, the
   ≥3-project promotion to the global list, and the >10% bounce / >0.1% complaint
   auto-pause are all part of that same unbuilt half (D-116).
-- **No deliverability monitoring and no canary.** `corebase_email_sends_total` and
-  `corebase_email_failures_total` exist and are labelled by template, not by
+- **No deliverability monitoring and no canary.** `steadhold_email_sends_total` and
+  `steadhold_email_failures_total` exist and are labelled by template, not by
   project — per-project labels on a fleet-wide counter is the cardinality mistake
   D-146's budget exists to prevent, so per-project numbers live in `email_sends`
   instead. What that leaves missing is the doc's whole monitoring table: bounce and
@@ -4263,7 +4352,7 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   address and spends the link (OQ-114). Accepted for V1 deliberately; the audit
   action `verify_failed_confirmation` is the signal that would justify building the
   interstitial page, and nothing yet counts it.
-- `corebase_auth` is still not in the pooler's `auth_query` allowlist, and OQ-110
+- `steadhold_auth` is still not in the pooler's `auth_query` allowlist, and OQ-110
   is still open. P4b took the third option — a fresh connection per request
   (D-323) — because a cached pool breaks on credential rotation. Putting auth
   behind the pooler is a change to the pooler's security posture (D-074) and needs
@@ -4310,7 +4399,7 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
   but **nothing is wired to a receiver**: Prometheus would fire and there is no
   Slack or pager on the other end (OQ-146 owns the vendor choice). "Alerts fire" is
   met in the sense the criterion tests; "someone is woken up" is Phase 4's sender.
-- `CB_REQUIRE_BACKUPS` and `CB_REQUIRE_FINAL_BACKUP` are both **on** now that
+- `SH_REQUIRE_BACKUPS` and `SH_REQUIRE_FINAL_BACKUP` are both **on** now that
   Phase 3 is complete: a fleet with no object storage refuses to provision and
   refuses to delete rather than doing either silently. `=false` on each is the
   deliberate opt-out.
@@ -4331,7 +4420,7 @@ accounts, orgs, roles, audit, project keys — not the customer-facing data plan
 - The pooler's pool sizing is one profile for every plan. The doc's "larger plans
   scale `default_pool_size` and `max_connections` together" is a value change the
   entrypoint is structured for and nothing sets yet.
-- `corebase_admin` exists as a role with no password; the audited dashboard path that
+- `steadhold_admin` exists as a role with no password; the audited dashboard path that
   needs it does not exist yet.
 - `verify-email` and `password-reset` are **absent, not stubbed** — both need the
   Phase-4 email sender. Email verification is what gates project creation in the
@@ -4391,11 +4480,22 @@ resolver.
 
 
 
-**The brand is decided but only half-applied.** The name is Steadhold (D-407)
-and the mark ships (§4h), but the rename has not touched the code: the repository,
-the `@corebase/*` package names, the container prefixes, the `corebase.co` domain
-in the docs and every reference in the planning corpus still say Corebase.
-`steadhold.dev` is not registered.
+**The rename is applied in the code but not outside it.** Everything in the
+repository says Steadhold (§4h, D-407), but `steadhold.dev` and `steadhold.app` are
+**not registered**, the GitHub repository is still named `Corebase`, and OQ-099
+— whether "Steadhold" is registrable as a word mark in EU/US software classes — is
+still open. All three are commercial tasks outside this corpus, and the third could
+in principle force a second rename.
+
+**One test reads the ambient environment.**
+`services/api/src/credentials-guard.test.ts` builds `buildApp({})` and asserts an
+unconfigured API rejects `Bearer dev-token`, but `buildApp` falls through to
+`process.env.SH_STATIC_TOKEN` — so the test fails for anyone who has exported the
+variable from the run recipe in §2. It passes under `env -u SH_STATIC_TOKEN` and in
+CI, which sets neither. The assertion is right and the fixture is incomplete: it
+should clear the variable itself (§5 already says a test declares its fixture in
+every dimension). Pre-existing, not rename fallout — the same sensitivity existed
+against `CB_STATIC_TOKEN`.
 
 **The design token system is the Pencil-derived layer, and it is being replaced.**
 `apps/dashboard/src/styles/tokens.css` and `components.css` predate the identity

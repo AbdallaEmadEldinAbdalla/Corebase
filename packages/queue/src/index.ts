@@ -14,10 +14,10 @@ import IORedis, { type Redis } from 'ioredis';
 /**
  * BullMQ reserves ':' for its own key namespacing and rejects it in queue
  * names, so namespacing goes through `prefix` instead. Redis keys still come
- * out as `corebase:provisioning:*`.
+ * out as `steadhold:provisioning:*`.
  */
 export const QUEUE_PROVISIONING = 'provisioning';
-export const QUEUE_PREFIX = 'corebase';
+export const QUEUE_PREFIX = 'steadhold';
 
 /**
  * BullMQ reserves ':' in job ids as well as in queue names, and rejects it with

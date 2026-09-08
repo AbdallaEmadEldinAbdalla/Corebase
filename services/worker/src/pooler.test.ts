@@ -11,7 +11,7 @@ const spec = () => buildPoolerSpec({
 
 describe('P2b — the pooler container spec', () => {
   it('is a second container, named apart from the database', () => {
-    expect(poolerName(REF)).toBe('cb-abcdefghijklmnopqrst-pooler');
+    expect(poolerName(REF)).toBe('sh-abcdefghijklmnopqrst-pooler');
     expect(poolerName(REF)).not.toBe(containerName(REF));
   });
 

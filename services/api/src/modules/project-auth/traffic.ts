@@ -13,7 +13,7 @@ import type { Pool } from 'pg';
  *
  * The auth module walked straight past it. It is a *shared multi-tenant process*,
  * not a per-project container, so nothing tripped when P4b started serving
- * `/auth/v1/*` per project — and its database connections open as `corebase_auth`,
+ * `/auth/v1/*` per project — and its database connections open as `steadhold_auth`,
  * which the scan deliberately excludes along with every other internal role. So
  * since P4b, **a project whose users only sign up and log in has looked idle**, and
  * would be paused under them after a week. Worse, resume-on-request is Phase 5
@@ -47,7 +47,7 @@ import type { Pool } from 'pg';
  * on the hot path that D-051 exists to keep free of them.
  */
 export const TRAFFIC_WRITE_INTERVAL_MS = Number(
-  process.env['CB_TRAFFIC_WRITE_MS'] ?? 60_000);
+  process.env['SH_TRAFFIC_WRITE_MS'] ?? 60_000);
 
 /**
  * Bounds the in-process memo. One entry per project seen since this process

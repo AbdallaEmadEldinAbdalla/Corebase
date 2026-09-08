@@ -6,7 +6,7 @@ import { Trend } from 'k6/metrics';
  * P5f — what the gateway costs, measured rather than asserted.
  *
  * The latency budget's structural claim is a single sentence: *"everything
- * Corebase added around PostgREST (hops 3–7) costs ~1.5 ms p50 — the gateway must
+ * Steadhold added around PostgREST (hops 3–7) costs ~1.5 ms p50 — the gateway must
  * stay cheap enough that nobody is ever tempted to bypass it."* That is the
  * number worth defending, because it is the one that decides whether the thin
  * gateway (D-016) stays thin.
@@ -22,14 +22,14 @@ import { Trend } from 'k6/metrics';
  * equally instead of landing entirely on whichever ran second.
  */
 
-const DIRECT = __ENV.CB_LOAD_DIRECT_URL;     // straight at PostgREST
-const GATEWAY = __ENV.CB_LOAD_BASE_URL;      // through the gateway
-const HOST = __ENV.CB_LOAD_HOST;
-const ANON = __ENV.CB_LOAD_ANON_KEY;
-const USER = __ENV.CB_LOAD_USER_TOKEN;
+const DIRECT = __ENV.SH_LOAD_DIRECT_URL;     // straight at PostgREST
+const GATEWAY = __ENV.SH_LOAD_BASE_URL;      // through the gateway
+const HOST = __ENV.SH_LOAD_HOST;
+const ANON = __ENV.SH_LOAD_ANON_KEY;
+const USER = __ENV.SH_LOAD_USER_TOKEN;
 
-const direct = new Trend('cb_direct_latency', true);
-const viaGateway = new Trend('cb_gateway_latency', true);
+const direct = new Trend('sh_direct_latency', true);
+const viaGateway = new Trend('sh_gateway_latency', true);
 
 export const options = {
   // k6's exported summary carries only p(90) and p(95) by default, and the budget
@@ -38,8 +38,8 @@ export const options = {
   scenarios: {
     ab: {
       executor: 'constant-vus',
-      vus: Number(__ENV.CB_LOAD_VUS || 10),
-      duration: __ENV.CB_LOAD_DURATION || '30s',
+      vus: Number(__ENV.SH_LOAD_VUS || 10),
+      duration: __ENV.SH_LOAD_DURATION || '30s',
     },
   },
   thresholds: {
@@ -56,7 +56,7 @@ export const options = {
 // answers at `/bench`. Sharing one string sent the direct arm to a path PostgREST
 // does not have, and a 404 is fast — the A/B then reported a 6 ms "gateway
 // overhead" that was really the difference between a real query and a miss.
-const q = `select=id,body&owner=eq.${__ENV.CB_LOAD_OWNER}&limit=20`;
+const q = `select=id,body&owner=eq.${__ENV.SH_LOAD_OWNER}&limit=20`;
 const directPath = `/bench?${q}`;
 const gatewayPath = `/rest/v1/bench?${q}`;
 

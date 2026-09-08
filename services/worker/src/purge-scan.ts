@@ -1,6 +1,6 @@
 import type { Pool } from 'pg';
-import type { Queue, ProvisioningJobData } from '@corebase/queue';
-import { enqueueProvisioning } from '@corebase/queue';
+import type { Queue, ProvisioningJobData } from '@steadhold/queue';
+import { enqueueProvisioning } from '@steadhold/queue';
 
 /**
  * The purge scan closes the recovery window (D-038).

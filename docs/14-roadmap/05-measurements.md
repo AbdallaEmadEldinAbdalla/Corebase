@@ -15,7 +15,7 @@ Each entry states the environment, because a number without its hardware is a ru
 | | |
 |---|---|
 | Host | macOS Docker VM, `linux/aarch64` — **not** the target Hetzner CCX43 (x86, bare-metal-ish) |
-| Image | `corebase/postgres:17.5` (PG 17.5, bookworm) as specced in `infra/docker/postgres` |
+| Image | `steadhold/postgres:17.5` (PG 17.5, bookworm) as specced in `infra/docker/postgres` |
 | Limits | `--memory 512m --memory-swap 512m --cpus 0.5` (Free-tier shape, D-054/D-055 subset) |
 | Config | `shared_buffers=128MB`, `max_connections=20`, `wal_level=logical`, archiving on |
 | Scope | **Postgres only** — no PgBouncer, no PostgREST. The triplet is not yet measured. |
@@ -46,7 +46,7 @@ Each entry states the environment, because a number without its hardware is a ru
 | Path measured | `POST /v1/projects` → poll `GET /v1/projects/:ref` to `ready` → connect on the returned `direct` string → `CREATE TABLE` + `INSERT` + `SELECT` |
 | Node declared | 16384 MB so twenty Free projects sit under the 85% fill ceiling (D-090); a capacity refusal would measure the wrong thing |
 | Scope | **Postgres only** — no PgBouncer, no PostgREST, no warm pool (D-071 unbuilt). This is the cold path. |
-| Harness | `pnpm --filter @corebase/worker bench`; raw numbers in [measurements/m-002-provisioning.json](measurements/m-002-provisioning.json) |
+| Harness | `pnpm --filter @steadhold/worker bench`; raw numbers in [measurements/m-002-provisioning.json](measurements/m-002-provisioning.json) |
 
 **Provisioning latency — 20/20 succeeded, 0 over the 60s budget:**
 
@@ -89,7 +89,7 @@ This is direct evidence for D-071: a warm pool eliminates exactly the two steps 
 
 **What it does not license.** Raising density (D-091's 150/node) on this evidence. Twenty-one idle databases on ARM with no clients attached is the cheapest corner of the state space; two of three triplet processes are absent; and the binding constraint at real density is expected to be page cache and disk, neither of which this stresses. It also does not license dropping the 350 MB booking — the booking exists to survive projects that *are* used.
 
-**Incidental finding (feeds T7/T8).** Volumes from earlier runs survive their containers, exactly as designed (`removeContainer` keeps volumes; nothing deletes them yet). Note that `docker volume prune` does **not** remove named volumes without `--all`, so the obvious cleanup command silently does nothing — worth knowing before writing T8's sweeper. A named `cb-*-pgdata` volume with no container and no `project_databases` row is precisely the orphan class T8 must detect and T7 must remove deliberately.
+**Incidental finding (feeds T7/T8).** Volumes from earlier runs survive their containers, exactly as designed (`removeContainer` keeps volumes; nothing deletes them yet). Note that `docker volume prune` does **not** remove named volumes without `--all`, so the obvious cleanup command silently does nothing — worth knowing before writing T8's sweeper. A named `sh-*-pgdata` volume with no container and no `project_databases` row is precisely the orphan class T8 must detect and T7 must remove deliberately.
 
 **Next measurement to take:** the full triplet under light request load on x86, with 10 and 50 projects co-resident; and a create-latency run *after* the warm pool exists, to see what D-071 actually buys against the 2463 ms cold p50.
 
@@ -126,7 +126,7 @@ This is direct evidence for D-071: a warm pool eliminates exactly the two steps 
 
 **Environment:** same Docker staging substitute as M-002/M-003. Recovery window compressed from 7 days to 1 second and the purge scan to 2 s; every other part of the purge path — the scan, the job row, the `verify_purgeable` guard, the saga — runs exactly as it would after seven real days.
 
-**Method:** 20 cycles of `POST /v1/projects` → `ready` → connect on the returned credential and write a row → `DELETE` → `soft_deleted` → *(window closes)* → `deleted`, all through the HTTP API and the running worker. Nothing calls a saga directly. Then list the node and the control plane and assert nothing named `cb-*` remains.
+**Method:** 20 cycles of `POST /v1/projects` → `ready` → connect on the returned credential and write a row → `DELETE` → `soft_deleted` → *(window closes)* → `deleted`, all through the HTTP API and the running worker. Nothing calls a saga directly. Then list the node and the control plane and assert nothing named `sh-*` remains.
 
 **Numbers:**
 
@@ -140,8 +140,8 @@ This is direct evidence for D-071: a warm pool eliminates exactly the two steps 
 
 | | |
 |---|---|
-| containers named `cb-*` on the node | **0** |
-| volumes named `cb-*` on the node | **0** |
+| containers named `sh-*` on the node | **0** |
+| volumes named `sh-*` on the node | **0** |
 | node RAM still booked | **0 MB** |
 | credential rows | **0** |
 | placement rows | **0** |
@@ -210,9 +210,9 @@ The orphan pair is the more important half of the result. Both were reported and
 | | |
 |---|---|
 | Prometheus head series, everything | 912 |
-| `corebase_*` series | **156** |
-| largest family: `corebase_provisioning_step_seconds_bucket` | 80 (8 steps × 10 buckets) |
-| `corebase_api_requests_total` | 2 (method × route pattern × status class) |
+| `steadhold_*` series | **156** |
+| largest family: `steadhold_provisioning_step_seconds_bucket` | 80 (8 steps × 10 buckets) |
+| `steadhold_api_requests_total` | 2 (method × route pattern × status class) |
 | series carrying `project_ref` | **0** |
 
 **Reading it honestly.** 320 MiB for the whole monitoring stack supports D-146's premise that a single Prometheus is enough for a long time — this is a fraction of one project's RAM booking. The number that matters more is the last row: **zero** platform series carry `project_ref`. D-146 projects ~25 series per project at 10k projects ≈ 250k series, and every one of those comes from cAdvisor and postgres_exporter, neither of which exists yet. So this measurement says the *platform* half of the budget is nearly free; it says nothing yet about the per-project half, which is the half that can sink a single node.
@@ -262,7 +262,7 @@ Per D-209 this may not be used to re-base any density or RAM planning number: on
 | Per-org ceiling | raised from 20 to 120 for the run. The ceiling is an abuse control, not a capacity one, and it was the first wall this hit: 20 created, 80 refused with a 409, the node nowhere near its limits |
 | Stack | **postgres + pgbouncer** — no PostgREST (Phase 5). Two containers per project, not three |
 | Load | 2 connections per project (200 total), each with its own table of 500 rows, looping an aggregate query for 60 s |
-| Harness | `pnpm --filter @corebase/worker density`; raw numbers in [measurements/m-008-density.json](measurements/m-008-density.json) |
+| Harness | `pnpm --filter @steadhold/worker density`; raw numbers in [measurements/m-008-density.json](measurements/m-008-density.json) |
 
 **It holds. 100/100 projects, 200 containers, no failures.**
 

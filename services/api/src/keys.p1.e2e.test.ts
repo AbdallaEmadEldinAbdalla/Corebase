@@ -4,9 +4,9 @@ import { createPublicKey, randomBytes } from 'node:crypto';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createEnvelope } from '@corebase/crypto';
-import { createSecretStore, SECRET_NAMES } from '@corebase/secrets';
-import { generateKeypair, sign, verify, projectKeyClaims } from '@corebase/jwt';
+import { createEnvelope } from '@steadhold/crypto';
+import { createSecretStore, SECRET_NAMES } from '@steadhold/secrets';
+import { generateKeypair, sign, verify, projectKeyClaims } from '@steadhold/jwt';
 import { buildApp } from './app.ts';
 import { createUserStore } from './modules/auth/store.ts';
 import { createOrgStore } from './modules/orgs/store.ts';
@@ -23,8 +23,8 @@ import { createPgStore, ensureBootstrapOrg } from './modules/control-plane/store
  * plus an audit row — because it bypasses RLS, and a key that bypasses RLS being
  * readable by every member is the whole security model undone.
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
 const PASSWORD = 'a-perfectly-fine-password';
 
 let pool: Pool; let up = false; let reason = ''; let kekDir: string;
@@ -34,7 +34,7 @@ let orgStore: ReturnType<typeof createOrgStore>;
 
 beforeAll(async () => {
   pool = new Pool({ connectionString: DB, max: 8, connectionTimeoutMillis: 1500 });
-  kekDir = mkdtempSync(join(tmpdir(), 'cb-kek-p1e-'));
+  kekDir = mkdtempSync(join(tmpdir(), 'sh-kek-p1e-'));
   writeFileSync(join(kekDir, 'kek_2026_08.key'), randomBytes(32));
   try {
     const organizationId = await ensureBootstrapOrg(pool);
@@ -75,12 +75,12 @@ let seq = 0;
 interface Who { userId: string; email: string; cookie: string; csrf: string }
 
 async function account(): Promise<Who> {
-  const addr = `p1e-${Date.now()}-${++seq}@corebase.test`;
+  const addr = `p1e-${Date.now()}-${++seq}@steadhold.test`;
   const res = await app.inject({
     method: 'POST', url: '/v1/auth/signup', payload: { email: addr, password: PASSWORD } });
   const body = res.json() as { user: { id: string }; csrf_token: string };
   return { userId: body.user.id, email: addr, csrf: body.csrf_token,
-    cookie: /cb_session=([^;]+)/.exec(String(res.headers['set-cookie']))![1]! };
+    cookie: /sh_session=([^;]+)/.exec(String(res.headers['set-cookie']))![1]! };
 }
 const as = (w: Who, m = false) => ({
   cookie: `${SESSION_COOKIE}=${w.cookie}`, ...(m ? { [CSRF_HEADER]: w.csrf } : {}) });

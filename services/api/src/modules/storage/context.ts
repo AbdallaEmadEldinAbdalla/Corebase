@@ -1,6 +1,6 @@
 import { Client } from 'pg';
 import type { FastifyRequest } from 'fastify';
-import { STORAGE_ERROR_CODES as E } from '@corebase/types';
+import { STORAGE_ERROR_CODES as E } from '@steadhold/types';
 import { ApiError } from '../../kernel/errors.ts';
 import type { ProjectContext } from '../project-auth/context.ts';
 import { verifyBearer } from '../project-auth/bearer.ts';

@@ -11,8 +11,8 @@ import { createPgStore } from './modules/control-plane/store.pg.ts';
  * handing the other to anyone with `project.read` and recording nothing was a hole
  * with a lock next to it.
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
 const TOKEN = 'review-fixes-static-token-long-enough';
 
 let pool: Pool; let up = false; let orgId: string;
@@ -119,14 +119,14 @@ describe('P2 review — a user can be deleted without a foreign-key violation', 
     // the first person to write that path would have met it as a mystery.
     const { rows: u } = await pool.query<{ id: string }>(
       `insert into users (email, display_name) values ($1, 'Doomed') returning id`,
-      [`doomed-${Date.now()}@corebase.test`]);
+      [`doomed-${Date.now()}@steadhold.test`]);
     const userId = u[0]!.id;
     const p = await project();
 
     await pool.query(
       `insert into organization_invites (organization_id, email, role, token_hash, invited_by, expires_at)
        values ($1, $2, 'member', $3, $4, now() + interval '7 days')`,
-      [orgId, `invitee-${Date.now()}@corebase.test`, `hash-${Date.now()}`, userId]);
+      [orgId, `invitee-${Date.now()}@steadhold.test`, `hash-${Date.now()}`, userId]);
     await pool.query(
       `insert into project_api_keys (project_id, kind, key_prefix, key_hash, created_by)
        values ($1, 'anon', 'cbk_anon_rv', $2, $3)`, [p.id, `kh-${Date.now()}`, userId]);

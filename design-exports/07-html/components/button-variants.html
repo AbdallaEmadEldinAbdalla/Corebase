@@ -3,26 +3,26 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>button-variants — Corebase</title>
+<title>button-variants — Steadhold</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap">
 <link rel="stylesheet" href="../tokens.css">
 <link rel="stylesheet" href="../components.css">
 </head>
 <body>
-<div class="ref-toggle"><button class="cb-btn cb-btn--secondary cb-btn--sm" onclick="cbToggle()">Theme: <span class="js-theme-label">Light</span></button></div>
+<div class="ref-toggle"><button class="sh-btn sh-btn--secondary sh-btn--sm" onclick="cbToggle()">Theme: <span class="js-theme-label">Light</span></button></div>
 <main class="ref-main">
   <h1 class="ref-item__name">button-variants</h1>
   <p class="ref-sub">One primary action per view — the accent must stay rare.</p>
   <div class="ref-demo">
-<div class="ref-labelled"><span>primary</span><button class="cb-btn">Button</button></div>
-<div class="ref-labelled"><span>secondary</span><button class="cb-btn cb-btn--secondary">Button</button></div>
-<div class="ref-labelled"><span>ghost</span><button class="cb-btn cb-btn--ghost">Button</button></div>
-<div class="ref-labelled"><span>danger</span><button class="cb-btn cb-btn--danger">Button</button></div>
+<div class="ref-labelled"><span>primary</span><button class="sh-btn">Button</button></div>
+<div class="ref-labelled"><span>secondary</span><button class="sh-btn sh-btn--secondary">Button</button></div>
+<div class="ref-labelled"><span>ghost</span><button class="sh-btn sh-btn--ghost">Button</button></div>
+<div class="ref-labelled"><span>danger</span><button class="sh-btn sh-btn--danger">Button</button></div>
   </div>
 </main>
 <script>
 (function(){
-  var r=document.documentElement, K='cb-theme';
+  var r=document.documentElement, K='sh-theme';
   try{var s=localStorage.getItem(K); if(s) r.setAttribute('data-theme',s);}catch(e){}
   window.cbToggle=function(){
     var cur=r.getAttribute('data-theme');

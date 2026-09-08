@@ -23,7 +23,7 @@ export function CopyButton({ value, what, size = 'sm', variant = 'secondary' }: 
   const toast = useToast();
   return (
     <button type="button"
-            className={`cb-btn cb-btn--${variant}${size === 'sm' ? ' cb-btn--sm' : ''}`}
+            className={`sh-btn sh-btn--${variant}${size === 'sm' ? ' sh-btn--sm' : ''}`}
             onClick={async () => {
               const ok = await copyText(value);
               if (ok) toast.copied(what);
@@ -43,8 +43,8 @@ export function CopyField({ value, what, children }: {
   children?: ReactNode;
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--cb-space-3)' }}>
-      <code style={{ flex: 1, minWidth: 0, font: 'var(--cb-code)', overflowWrap: 'anywhere' }}>
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--sh-space-3)' }}>
+      <code style={{ flex: 1, minWidth: 0, font: 'var(--sh-code)', overflowWrap: 'anywhere' }}>
         {children ?? value}
       </code>
       <CopyButton value={value} what={what} />

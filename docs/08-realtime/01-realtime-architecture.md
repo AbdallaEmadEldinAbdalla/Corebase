@@ -9,7 +9,7 @@ The design for database-change streaming (CDC) over WebSockets — proposal §23
 1. **`wal_level = logical` as the fleet default from day one** (decided below, D-125). Changing it later requires a restart of *every* customer primary.
 2. Headroom params in the V1 Postgres template: `max_wal_senders = 4`, `max_replication_slots = 2` (both unused in V1; shared-memory cost is negligible).
 3. **`max_slot_wal_keep_size` set even in V1** (a slot created by accident or by a support operator must still be capped).
-4. The names `realtime` (schema), `corebase_realtime` (publication), and `corebase_rt_*` (slot prefix) are **reserved** — migrations tooling ([../03-database-platform/04-migrations.md](../03-database-platform/04-migrations.md)) must reject user objects with these names.
+4. The names `realtime` (schema), `steadhold_realtime` (publication), and `steadhold_rt_*` (slot prefix) are **reserved** — migrations tooling ([../03-database-platform/04-migrations.md](../03-database-platform/04-migrations.md)) must reject user objects with these names.
 5. A network path from the node agent to each project container's Postgres port that **bypasses PgBouncer** — logical replication connections cannot go through a transaction-mode pooler (D-015).
 6. Disk-usage and WAL-volume metrics per project already exported ([../11-infrastructure/03-observability.md](../11-infrastructure/03-observability.md)); slot lag is one more gauge on an existing pipeline.
 7. Per-plan realtime quota columns modeled in the control-plane schema (same "model now, surface later" pattern as D-031; see [../02-control-plane/01-data-model.md](../02-control-plane/01-data-model.md)).
@@ -21,8 +21,8 @@ The design for database-change streaming (CDC) over WebSockets — proposal §23
 ### A. Pipeline
 
 ```
-project Postgres (publication: corebase_realtime)
-   │  logical replication protocol, slot corebase_rt_<project_ref>, plugin pgoutput
+project Postgres (publication: steadhold_realtime)
+   │  logical replication protocol, slot steadhold_rt_<project_ref>, plugin pgoutput
    ▼
 per-project decoder  (inside the per-node realtime agent, colocated with the project's containers)
    │  decoded change events (JSON), project-scoped
@@ -30,7 +30,7 @@ per-project decoder  (inside the per-node realtime agent, colocated with the pro
 channel broker       (same agent process; Redis pub/sub only when fan-out crosses nodes)
    │
    ▼
-WebSocket gateway    (same connection surface as broadcast/presence: wss://<ref>.corebase.co/realtime/v1)
+WebSocket gateway    (same connection surface as broadcast/presence: wss://<ref>.steadhold.app/realtime/v1)
    │
    ▼
 clients (subscribed to cdc:<schema>.<table> channels with optional filters)
@@ -56,7 +56,7 @@ One slot per project **with at least one active CDC subscriber**, not one per pr
 
 **Layer 1 — hard cap: `max_slot_wal_keep_size`.** Set per project to `min(4 GB, 20% of the project's disk quota)` (per-plan values owned by OQ-109). When retained WAL exceeds the cap, Postgres **invalidates the slot** instead of filling the disk. The tradeoff is explicit: subscribers lose their position and must resync from a fresh snapshot of current state. **That is the right trade.** A resync is an inconvenience inside an optional feature; a full disk is an outage of the product's core. We choose losing the cursor over losing the database, always.
 
-**Layer 2 — lag monitoring.** The agent samples `pg_replication_slots` every 15 s and exports `corebase_realtime_slot_lag_bytes` (computed via `pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)`). Alert thresholds as fractions of the Layer-1 cap: **25% warn** (ticket), **50% page**, **75% kill-switch armed**. Also alert on `active = false` for > 5 min while subscribers exist (consumer died but slot remains).
+**Layer 2 — lag monitoring.** The agent samples `pg_replication_slots` every 15 s and exports `steadhold_realtime_slot_lag_bytes` (computed via `pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)`). Alert thresholds as fractions of the Layer-1 cap: **25% warn** (ticket), **50% page**, **75% kill-switch armed**. Also alert on `active = false` for > 5 min while subscribers exist (consumer died but slot remains).
 
 **Layer 3 — kill switch.** At **90% of the cap**, or on any disk-usage alarm for the project volume regardless of slot lag, the agent (or an operator, via a one-command runbook) executes `pg_drop_replication_slot()` — outranking Postgres's own invalidation because it frees WAL *before* the cap is fully consumed and works even if Layer 1 was misconfigured. Dropping a slot is always safe for the *database*; it is only ever unsafe for the *feature*.
 
@@ -98,7 +98,7 @@ RLS applies to *queries*; WAL has no notion of a reader. A change event must be 
 | **Policy-evaluation replication** (Supabase's *walrus*: evaluate the relevant policies against the change row once per event for the subscriber set, via prepared statements) | Close (policies referencing *other* rows are evaluated at delivery time, not commit time — a known, documented skew) | Per-event DB work, bounded; significant engineering | The roadmap (OQ-108) |
 | **Explicit opt-in tables + publication config + a simple visibility rule** | Coarse | ~zero per event | **Picked for CDC v1 (D-127)** |
 
-**The pick, with its limits stated honestly (D-127):** a table emits events only if the developer runs `ALTER PUBLICATION corebase_realtime ADD TABLE ...` (surfaced as a dashboard toggle / CLI command). The visibility rule is: **an event from an opted-in table is delivered to any subscriber who was authorized to join that channel** (channel auth per [02-channels-broadcast-presence.md](02-channels-broadcast-presence.md) and proposal §24's project binding). Filters are a *convenience, not a security boundary* — a subscriber to `cdc:public.messages` with `room_id=eq.42` could equally have subscribed with `room_id=eq.43`. Documentation must say, in exactly these words: **do not opt a table into CDC if any of its rows must be hidden from some user who can join its channel.** Per-subscriber RLS-faithful delivery (walrus-style) is the explicit successor, tracked as OQ-108; the wire protocol reserves nothing that blocks it.
+**The pick, with its limits stated honestly (D-127):** a table emits events only if the developer runs `ALTER PUBLICATION steadhold_realtime ADD TABLE ...` (surfaced as a dashboard toggle / CLI command). The visibility rule is: **an event from an opted-in table is delivered to any subscriber who was authorized to join that channel** (channel auth per [02-channels-broadcast-presence.md](02-channels-broadcast-presence.md) and proposal §24's project binding). Filters are a *convenience, not a security boundary* — a subscriber to `cdc:public.messages` with `room_id=eq.42` could equally have subscribed with `room_id=eq.43`. Documentation must say, in exactly these words: **do not opt a table into CDC if any of its rows must be hidden from some user who can join its channel.** Per-subscriber RLS-faithful delivery (walrus-style) is the explicit successor, tracked as OQ-108; the wire protocol reserves nothing that blocks it.
 
 ### F. Delivery semantics
 
@@ -121,9 +121,9 @@ Realtime is **the first service to split from the modular monolith** (consistent
 
 ## Decisions
 
-- **D-125 — CDC pipeline: `wal_level=logical` + `max_wal_senders=4` + `max_replication_slots=2` are V1 fleet defaults; decoder plugin is `pgoutput` over a lazily-created per-project slot (`corebase_rt_<ref>`, publication `corebase_realtime`); the consumer is a per-node realtime agent colocated with the project containers, and realtime is the first service split from the monolith when built.** *(Rationale: defaulting `wal_level=logical` now costs low-single-digit % WAL volume; flipping it later costs a fleet-wide restart of every customer primary. pgoutput avoids adding an extension to the allowlist and keeps decode CPU off the customer's cgroup. Colocation keeps replication traffic on-node and the blast radius per-node.)*
+- **D-125 — CDC pipeline: `wal_level=logical` + `max_wal_senders=4` + `max_replication_slots=2` are V1 fleet defaults; decoder plugin is `pgoutput` over a lazily-created per-project slot (`steadhold_rt_<ref>`, publication `steadhold_realtime`); the consumer is a per-node realtime agent colocated with the project containers, and realtime is the first service split from the monolith when built.** *(Rationale: defaulting `wal_level=logical` now costs low-single-digit % WAL volume; flipping it later costs a fleet-wide restart of every customer primary. pgoutput avoids adding an extension to the allowlist and keeps decode CPU off the customer's cgroup. Colocation keeps replication traffic on-node and the blast radius per-node.)*
 - **D-126 — Slot-safety envelope: `max_slot_wal_keep_size = min(4 GB, 20% of project disk quota)` on every project (V1 included); slot-lag alerts at 25%/50%/75% of the cap; automatic kill-switch drops the slot at 90% or on any project disk alarm; auto-recreate then push `cdc_resync_required` to affected channels. Delivery is at-most-once with no replay in realtime v1; every event carries `commit_lsn` as the future replay cursor. Slow clients are disconnected at a 1 MiB / 1,000-message outbound buffer; the WAL reader is never backpressured.** *(Rationale: slot invalidation loses a stream position; a pinned slot loses a customer database. Under D-002 that choice is mechanical — say so in the design and make every layer assume the previous one failed.)*
-- **D-127 — CDC authorization v1: tables emit events only when explicitly opted into the `corebase_realtime` publication, and events are visible to any subscriber authorized to join that table's channel; server-side filters are a convenience, not a security boundary, and the docs must say so. Walrus-style per-subscriber policy evaluation is the designated successor; per-event re-query under subscriber RLS is rejected as a default path.** *(Rationale: the only approach whose per-event cost against the customer primary is ~zero; its coarseness is acceptable exactly because it is opt-in and honestly documented. The successor is scoped in OQ-108 rather than promised.)*
+- **D-127 — CDC authorization v1: tables emit events only when explicitly opted into the `steadhold_realtime` publication, and events are visible to any subscriber authorized to join that table's channel; server-side filters are a convenience, not a security boundary, and the docs must say so. Walrus-style per-subscriber policy evaluation is the designated successor; per-event re-query under subscriber RLS is rejected as a default path.** *(Rationale: the only approach whose per-event cost against the customer primary is ~zero; its coarseness is acceptable exactly because it is opt-in and honestly documented. The successor is scoped in OQ-108 rather than promised.)*
 
 ## Open Questions
 

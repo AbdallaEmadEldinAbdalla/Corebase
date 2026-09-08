@@ -1,4 +1,4 @@
-import { encodeId, type Project } from '@corebase/types';
+import { encodeId, type Project } from '@steadhold/types';
 import type { DatabaseInfo } from './store.ts';
 
 /**

@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { generateKeypair, toJwk, sign } from '@corebase/jwt';
+import { generateKeypair, toJwk, sign } from '@steadhold/jwt';
 import { createDocker, type Docker } from './docker.ts';
-import { buildApp } from '@corebase/api';
-import { createMemoryRateLimiter } from '@corebase/api/kernel/rate-limit.ts';
-import type { RouteEntry, RoutingTable } from '@corebase/api/modules/gateway/routing.ts';
+import { buildApp } from '@steadhold/api';
+import { createMemoryRateLimiter } from '@steadhold/api/kernel/rate-limit.ts';
+import type { RouteEntry, RoutingTable } from '@steadhold/api/modules/gateway/routing.ts';
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
 
@@ -29,20 +29,20 @@ const SRC = new URL('.', import.meta.url).pathname;
  * policy on `auth.uid()` giving a user exactly their own rows. That is the whole
  * identity→policy pipeline, and it is the phase's demo in three assertions.
  */
-const CERT_DIR = process.env.CB_DOCKER_CERT_DIR
+const CERT_DIR = process.env.SH_DOCKER_CERT_DIR
   ?? join(process.cwd(), '../../infra/docker/staging/certs');
-const HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
-const PG_IMAGE = process.env.CB_PG_IMAGE ?? 'corebase/postgres:17.5';
-const PGRST_IMAGE = process.env.CB_POSTGREST_IMAGE ?? 'corebase/postgrest:12.2';
+const HOST = process.env.SH_DOCKER_HOST ?? '127.0.0.1';
+const PORT = Number(process.env.SH_DOCKER_PORT ?? 2376);
+const PG_IMAGE = process.env.SH_PG_IMAGE ?? 'steadhold/postgres:17.5';
+const PGRST_IMAGE = process.env.SH_POSTGREST_IMAGE ?? 'steadhold/postgrest:12.2';
 
-const NET = 'cb-p5b-net';
-const PG = 'cb-p5b-pg';
-const PGRST = 'cb-p5b-pgrst';
+const NET = 'sh-p5b-net';
+const PG = 'sh-p5b-pg';
+const PGRST = 'sh-p5b-pgrst';
 // Inside the data node's published PostgREST range (P5b). A port outside it is
 // unreachable from the host, and the symptom is a readiness probe timing out
 // against a PostgREST that logged "Schema cache loaded" a second earlier.
-const PGRST_PORT = Number(process.env.CB_P5B_PORT ?? 7491);
+const PGRST_PORT = Number(process.env.SH_P5B_PORT ?? 7491);
 const ADMIN_PORT = PGRST_PORT + 1;
 
 let docker: Docker; let up = false; let reason = '';
@@ -75,7 +75,7 @@ beforeAll(async () => {
 
     await docker.createContainer(PG, {
       Image: PG_IMAGE, Env: ['POSTGRES_PASSWORD=p5bsmoke'],
-      Labels: { 'com.corebase.managed': 'true' },
+      Labels: { 'com.steadhold.managed': 'true' },
       HostConfig: {
         Memory: 512 * 1024 * 1024, MemorySwap: 512 * 1024 * 1024, NanoCpus: 1e9,
         RestartPolicy: { Name: 'no' }, Mounts: [], PortBindings: {},
@@ -135,7 +135,7 @@ beforeAll(async () => {
     // whatever the token says, so the API-key issuer is the one that has to line
     // up with the gateway's expectation (D-319).
     const tok = (role: 'anon' | 'authenticated' | 'service_role', sub?: string) => sign({
-      iss: `https://${gwRef}.corebase.test`, ref: gwRef, role,
+      iss: `https://${gwRef}.steadhold.test`, ref: gwRef, role,
       ...(sub ? { sub, aud: 'authenticated' } : {}),
       iat: now, exp: now + 3600,
     }, { privateKeyPem: pair.privateKeyPem, kid: pair.kid });
@@ -145,12 +145,12 @@ beforeAll(async () => {
     await docker.createContainer(PGRST, {
       Image: PGRST_IMAGE,
       Env: [
-        'COREBASE_REF=p5b',
-        `COREBASE_PG_HOST=${PG}`,
+        'STEADHOLD_REF=p5b',
+        `STEADHOLD_PG_HOST=${PG}`,
         `PGRST_DB_URI=postgres://authenticator:p5bauth@${PG}:5432/postgres`,
-        `COREBASE_JWKS=${JSON.stringify({ keys: [toJwk(pair.publicKeyPem, pair.kid)] })}`,
+        `STEADHOLD_JWKS=${JSON.stringify({ keys: [toJwk(pair.publicKeyPem, pair.kid)] })}`,
       ],
-      Labels: { 'com.corebase.managed': 'true' },
+      Labels: { 'com.steadhold.managed': 'true' },
       HostConfig: {
         Memory: 256 * 1024 * 1024, MemorySwap: 256 * 1024 * 1024, NanoCpus: 5e8,
         RestartPolicy: { Name: 'no' }, Mounts: [],
@@ -205,7 +205,7 @@ const t = (n: string, fn: () => Promise<void>, ms = 90_000) =>
  * headers that must and must not be forwarded — and every one of those is a
  * property of the hop rather than of the handler.
  */
-const DOMAIN = 'corebase.test';
+const DOMAIN = 'steadhold.test';
 let gwPair: ReturnType<typeof generateKeypair>;
 let gwRef: string;
 
@@ -305,7 +305,7 @@ describe('P5b — PostgREST serves a project', () => {
   t('EXIT CRITERION: DDL reloads the schema cache with no restart (D-100)', async () => {
     // The classic embedded-PostgREST failure is "I created the table and the API
     // 404s". The event trigger in the project image is what makes the reload
-    // source-agnostic: this DDL arrives over psql, not through any Corebase code
+    // source-agnostic: this DDL arrives over psql, not through any Steadhold code
     // path, and the API picks it up anyway.
     expect((await api('/widgets', keys.service)).status).toBe(404);
     await sql(`CREATE TABLE public.widgets (id serial primary key, name text);
@@ -409,7 +409,7 @@ describe('P5c — the gateway proxies to a real PostgREST', () => {
     const app = gateway();
     try {
       // End to end for D-105: the gateway forwards its id, PostgREST maps it to a
-      // GUC, and `corebase.pre_request` stamps it. This is the chain that lets a
+      // GUC, and `steadhold.pre_request` stamps it. This is the chain that lets a
       // slow query be traced back to an HTTP request.
       const res = await app.inject({
         method: 'POST', url: '/rest/v1/rpc/whoami',

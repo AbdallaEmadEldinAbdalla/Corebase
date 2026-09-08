@@ -8,15 +8,15 @@
 -- identical for every project, and initdb is the one moment when no client can
 -- observe a half-created schema. It also means a project's users exist in the
 -- project's own database from its first second — customers' users are their data
--- (D-004), so `corebase export` carries them out with a plain `pg_dump` and
+-- (D-004), so `steadhold export` carries them out with a plain `pg_dump` and
 -- nothing about a project's end-users is ever stored in the control plane.
 
 -- The platform's own auth identity. Passwordless here; the control plane sets its
 -- password at provision (the same pattern as pgbouncer_auth, D-074).
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'corebase_auth') THEN
-    CREATE ROLE corebase_auth NOINHERIT LOGIN PASSWORD NULL;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'steadhold_auth') THEN
+    CREATE ROLE steadhold_auth NOINHERIT LOGIN PASSWORD NULL;
   END IF;
 END
 $$;
@@ -28,7 +28,7 @@ $$;
 -- customer's API traffic can arrive as, including service_role, which bypasses RLS
 -- and would therefore be limited by nothing else.
 REVOKE ALL ON SCHEMA auth FROM PUBLIC;
-GRANT USAGE ON SCHEMA auth TO corebase_auth;
+GRANT USAGE ON SCHEMA auth TO steadhold_auth;
 
 CREATE TABLE IF NOT EXISTS auth.users (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -106,7 +106,7 @@ CREATE TABLE IF NOT EXISTS auth.one_time_tokens (
 
 -- Created in V1, populated from V1.1 (OAuth). Present now because the shape
 -- mirrors GoTrue's deliberately (the same portability argument as D-011): it eases
--- migration *to* Corebase, and a table added later is a migration every customer
+-- migration *to* Steadhold, and a table added later is a migration every customer
 -- has to run.
 CREATE TABLE IF NOT EXISTS auth.identities (
   id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -137,9 +137,9 @@ CREATE INDEX IF NOT EXISTS audit_created_idx ON auth.audit_log_entries (created_
 -- default privileges are altered for this schema, so a table added to `auth`
 -- later is unreadable by the API roles until somebody says otherwise — the same
 -- fail-closed asymmetry D-108 chose for `public`.
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA auth TO corebase_auth;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA auth TO corebase_auth;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA auth TO steadhold_auth;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA auth TO steadhold_auth;
 ALTER DEFAULT PRIVILEGES IN SCHEMA auth
-  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO corebase_auth;
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO steadhold_auth;
 ALTER DEFAULT PRIVILEGES IN SCHEMA auth
-  GRANT USAGE, SELECT ON SEQUENCES TO corebase_auth;
+  GRANT USAGE, SELECT ON SEQUENCES TO steadhold_auth;

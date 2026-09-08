@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { createEnvelope } from '@corebase/crypto';
-import { createSecretStore, SECRET_NAMES } from '@corebase/secrets';
+import { createEnvelope } from '@steadhold/crypto';
+import { createSecretStore, SECRET_NAMES } from '@steadhold/secrets';
 import { createDocker, type Docker } from './docker.ts';
 import { buildSagas } from './jobs/sagas.ts';
 import { registerNode } from './placement.ts';
@@ -29,12 +29,12 @@ import type { SagaStep, SagaContext } from './jobs/runner.ts';
  * test deletes the project, waits out the window, and then reads the repo through a
  * container that has nothing to do with the deleted project.
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
-const CERT_DIR = process.env.CB_DOCKER_CERT_DIR
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
+const CERT_DIR = process.env.SH_DOCKER_CERT_DIR
   ?? join(process.cwd(), '../../infra/docker/staging/certs');
-const HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
+const HOST = process.env.SH_DOCKER_HOST ?? '127.0.0.1';
+const PORT = Number(process.env.SH_DOCKER_PORT ?? 2376);
 const SECRET = 'test-bootstrap-secret-0123456789';
 
 function loadBackupEnv(): void {
@@ -53,7 +53,7 @@ let up = false; let reason = '';
 beforeAll(async () => {
   loadBackupEnv();
   pool = new Pool({ connectionString: DB, max: 6, connectionTimeoutMillis: 1500 });
-  kekDir = mkdtempSync(join(tmpdir(), 'cb-kek-p3f-'));
+  kekDir = mkdtempSync(join(tmpdir(), 'sh-kek-p3f-'));
   writeFileSync(join(kekDir, 'kek_2026_09.key'), randomBytes(32));
   try {
     await pool.query('select 1');
@@ -212,11 +212,11 @@ async function provisionWithData(rowCount = 500) {
  * prove nothing, because the point is that it no longer exists.
  */
 async function readRepoFromElsewhere(projectId: string, plan: string): Promise<string[]> {
-  const probe = `cb-p3f-reader-${Date.now().toString(36)}`;
+  const probe = `sh-p3f-reader-${Date.now().toString(36)}`;
   await docker.removeContainer(probe, true, true).catch(() => {});
   try {
     const id = await docker.createContainer(probe, {
-      Image: IMAGE, Env: [], Labels: { 'com.corebase.role': 'repo-reader' },
+      Image: IMAGE, Env: [], Labels: { 'com.steadhold.role': 'repo-reader' },
       Cmd: ['sleep', '300'],
       HostConfig: {
         Memory: 256 * 1024 * 1024, MemorySwap: 256 * 1024 * 1024, NanoCpus: 5e8,
@@ -285,7 +285,7 @@ describe('P3f — EXIT CRITERION: deleting a project leaves a retrievable backup
     const cipherPass = (await secrets.get(p.id, SECRET_NAMES.backupCipherPass))!;
     await writeConf(docker, container, renderPgbackrestConf({
       projectId: p.id, plan: 'free', cipherPass,
-      repo: { ...repoTargetFromEnv()!, bucket: 'corebase-backups-nonexistent' },
+      repo: { ...repoTargetFromEnv()!, bucket: 'steadhold-backups-nonexistent' },
     }));
 
     const job = await mkJob(p.id, 'delete_project', 'p3f-fail-' + p.ref);
@@ -364,7 +364,7 @@ describe('P3f — the pause interlock (D-077)', () => {
     const cipherPass = (await secrets.get(p.id, SECRET_NAMES.backupCipherPass))!;
     await writeConf(docker, container, renderPgbackrestConf({
       projectId: p.id, plan: 'free', cipherPass,
-      repo: { ...repoTargetFromEnv()!, bucket: 'corebase-backups-nonexistent' },
+      repo: { ...repoTargetFromEnv()!, bucket: 'steadhold-backups-nonexistent' },
     }));
 
     await expect(runSteps('pause_project', p.id,

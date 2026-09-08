@@ -57,10 +57,10 @@ function storeEndpoint(): { store: string; port: number } {
     new URL('../../../', import.meta.url).pathname,
     'infra/docker/staging/backup-store.env');
   const text = readFileSync(path, 'utf8');
-  const store = /^CB_BACKUP_S3_ENDPOINT=(.+)$/m.exec(text)?.[1]?.trim();
-  const port = /^CB_BACKUP_S3_PORT=(.+)$/m.exec(text)?.[1]?.trim();
+  const store = /^SH_BACKUP_S3_ENDPOINT=(.+)$/m.exec(text)?.[1]?.trim();
+  const port = /^SH_BACKUP_S3_PORT=(.+)$/m.exec(text)?.[1]?.trim();
   if (!store) {
-    throw new Error(`no CB_BACKUP_S3_ENDPOINT in ${path} — `
+    throw new Error(`no SH_BACKUP_S3_ENDPOINT in ${path} — `
       + 'run ./scripts/staging.sh backup-store, then harden-egress.');
   }
   return { store, port: Number(port ?? 9000) };

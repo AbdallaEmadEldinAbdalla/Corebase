@@ -8,7 +8,7 @@ Every V1 auth flow as a numbered sequence — client ↔ auth module ↔ email �
 
 ### Shared conventions
 
-- All endpoints: `https://<ref>.corebase.co/auth/v1/…`, `apikey` header required (anon key unless noted), error envelope `{error: {code, message, request_id}}` (D-032).
+- All endpoints: `https://<ref>.steadhold.app/auth/v1/…`, `apikey` header required (anon key unless noted), error envelope `{error: {code, message, request_id}}` (D-032).
 - **Enumeration resistance is a response-shape contract**: where marked "same-shape", the 2xx status, body, and header set are byte-identical whether or not the account exists; latency is equalized with a dummy hash verify ([checklist item 1](01-auth-architecture.md)).
 - **Redirects**: any `redirect_to` is validated against the project's `site_url` + additional-redirects allowlist; unlisted values are silently replaced with `site_url` ([checklist item 6](01-auth-architecture.md)).
 - Every flow writes an `auth.audit_log_entries` row (success and failure).
@@ -46,7 +46,7 @@ Exceeding any bucket → `429 over_rate_limit` + `Retry-After`. Limits are per p
    - **New email** → `INSERT auth.users` (argon2id hash, `email_confirmed_at = NULL`); insert `auth.one_time_tokens (token_type='confirmation', expires_at = now()+24h)`; enqueue verification email.
    - **Existing confirmed email** → no insert; enqueue "you already have an account" notice email (or nothing, config); **response identical**.
    - **Existing unconfirmed email** → refresh the confirmation token, re-enqueue verification (subject to email caps).
-4. Auth → email provider: verification mail with link `https://<ref>.corebase.co/auth/v1/verify?token=<one-time>&type=signup&redirect_to=<allowlisted>` ([email infrastructure](04-email-infrastructure.md)).
+4. Auth → email provider: verification mail with link `https://<ref>.steadhold.app/auth/v1/verify?token=<one-time>&type=signup&redirect_to=<allowlisted>` ([email infrastructure](04-email-infrastructure.md)).
 5. Auth → client: **200 with the SAME response shape in all three cases** — `{id?, email, confirmation_sent_at}` where `id` for the already-exists case is a freshly generated decoy uuid. No signal that the email was taken. *(Security note: signup is the classic enumeration oracle; the decoy response is what closes it.)*
 6. **Autoconfirm option** (per-project config, meant for development): skip 3b's token + email, set `email_confirmed_at = now()`, return a full session (access + refresh) immediately. Dashboard shows a persistent warning when autoconfirm is on.
 
@@ -178,7 +178,7 @@ data API it stays valid until `exp` (D-339).
 
 **Built in P4c.** The `redirect_to` is validated *before* it goes into the mailed
 link, not only when the link is followed (**D-325**) — the first version of this
-endpoint passed it straight through, which would have had Corebase mailing an
+endpoint passed it straight through, which would have had Steadhold mailing an
 attacker-chosen destination from its own domain. `/resend` is built alongside it
 and replaces the outstanding token rather than adding one (**D-329**), and sends
 nothing at all to an address that is already confirmed or does not exist.
@@ -256,7 +256,7 @@ logged in. Step 3's revocation is *every* session, including the requesting one
 
 1. Developer/service → auth admin endpoint with service_role key (gateway verifies key class per D-029).
 2. Auth: set `users.deleted_at = now()`, scrub `email` → tombstone (`deleted+<id>@invalid`), null `encrypted_password` and metadata, revoke all sessions, delete outstanding one-time tokens; audit `user_deleted`.
-3. Rows in the customer's app tables referencing `auth.users(id)` are the **developer's** responsibility (their FK semantics; the docs recommend `ON DELETE` behavior explicitly). Corebase does not cascade into app schemas.
+3. Rows in the customer's app tables referencing `auth.users(id)` are the **developer's** responsibility (their FK semantics; the docs recommend `ON DELETE` behavior explicitly). Steadhold does not cascade into app schemas.
 4. `200 {}`.
 
 Self-serve deletion (`DELETE /auth/v1/user`, the end-user deleting their own account, with re-auth and grace period) is **V1.x** — it needs product-level choices (grace window, data export) that don't gate V1.

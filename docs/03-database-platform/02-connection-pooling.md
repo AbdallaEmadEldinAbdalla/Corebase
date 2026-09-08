@@ -73,15 +73,15 @@ PostgREST wraps every HTTP request in one transaction and injects request contex
 
 ```sql
 CREATE ROLE pgbouncer_auth LOGIN PASSWORD '<generated>';  -- internal, never customer-visible
-CREATE FUNCTION corebase.pgbouncer_lookup(p_user text)
+CREATE FUNCTION steadhold.pgbouncer_lookup(p_user text)
   RETURNS TABLE (usename name, passwd text)
   LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog AS $$
     SELECT usename, passwd FROM pg_shadow
     WHERE usename = p_user
       AND usename IN ('developer');           -- only pooled, customer-facing roles
 $$;
-REVOKE ALL ON FUNCTION corebase.pgbouncer_lookup(text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION corebase.pgbouncer_lookup(text) TO pgbouncer_auth;
+REVOKE ALL ON FUNCTION steadhold.pgbouncer_lookup(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION steadhold.pgbouncer_lookup(text) TO pgbouncer_auth;
 ```
 
 The allowlist inside the function is a defense-in-depth boundary: the pooler can never resolve credentials for `postgres`, `authenticator`, or other internal roles, so the pooled port cannot become a path to elevated roles even if PgBouncer is compromised.
@@ -107,7 +107,7 @@ listen_port = 6432
 pool_mode = transaction
 auth_type = scram-sha-256
 auth_user = pgbouncer_auth
-auth_query = SELECT usename, passwd FROM corebase.pgbouncer_lookup($1)
+auth_query = SELECT usename, passwd FROM steadhold.pgbouncer_lookup($1)
 
 max_client_conn = 200          ; client side is cheap; this is the serverless-burst absorber
 default_pool_size = 6          ; per (user, database) pair — one real pair per project
@@ -133,7 +133,7 @@ SET LOCAL request.jwt.claims = '{"sub":"<user-uuid>","role":"authenticated", ...
 COMMIT;  -- SET LOCAL evaporates with the transaction, before the conn returns to the pool
 ```
 
-`SET LOCAL` cannot outlive the transaction, so no identity can ever leak onto a server connection handed to another client — the property that makes transaction pooling *safe* for a multi-user API, not merely tolerable. PostgREST does exactly this internally per request (§3); customers building custom servers against `DATABASE_URL` get the same pattern documented with copy-paste snippets. A bare `SET`-based context helper will never appear in Corebase docs or SDKs.
+`SET LOCAL` cannot outlive the transaction, so no identity can ever leak onto a server connection handed to another client — the property that makes transaction pooling *safe* for a multi-user API, not merely tolerable. PostgREST does exactly this internally per request (§3); customers building custom servers against `DATABASE_URL` get the same pattern documented with copy-paste snippets. A bare `SET`-based context helper will never appear in Steadhold docs or SDKs.
 
 ### 7. Future path: multi-tenant pooler (pgcat-class)
 

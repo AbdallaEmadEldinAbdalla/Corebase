@@ -16,10 +16,10 @@ import {
   poolerName, IMAGE, POOLER_IMAGE, LABEL_MANAGED, LABEL_REF,
   postgrestName, buildPostgrestSpec, POSTGREST_IMAGE,
 } from '../container-spec.ts';
-import type { SecretStore } from '@corebase/secrets';
-import { SECRET_NAMES } from '@corebase/secrets';
+import type { SecretStore } from '@steadhold/secrets';
+import { SECRET_NAMES } from '@steadhold/secrets';
 import { createHash } from 'node:crypto';
-import { generateKeypair, sign as signJwt, projectKeyClaims, toJwk } from '@corebase/jwt';
+import { generateKeypair, sign as signJwt, projectKeyClaims, toJwk } from '@steadhold/jwt';
 import {
   auditImageRoles, connectAsSuperuser, ensureDeveloperRole, ensureStorageOwnership,
   setRolePassword,
@@ -112,7 +112,7 @@ async function projectJwks(
 
 function requireSecrets(deps: SagaDeps): SecretStore {
   if (!deps.secrets) {
-    throw new Error('no secret store configured — the control plane needs its KEK (CB_KEK_DIR)');
+    throw new Error('no secret store configured — the control plane needs its KEK (SH_KEK_DIR)');
   }
   return deps.secrets;
 }
@@ -144,7 +144,7 @@ function poolerEndpoint(
 }
 
 function requireDocker(deps: SagaDeps): Docker {
-  if (!deps.docker) throw new Error('no Docker client configured (set CB_DOCKER_HOST/CB_DOCKER_CERT_DIR)');
+  if (!deps.docker) throw new Error('no Docker client configured (set SH_DOCKER_HOST/SH_DOCKER_CERT_DIR)');
   return deps.docker;
 }
 
@@ -244,7 +244,7 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
    * `start_container` checks for an existing container — and `start_container`
    * briefly broke that pattern by depending on a precondition it did not verify.
    * The symptom was a Docker 404 from deep inside container start ("network
-   * cb-…-net not found"), which reads as an infrastructure fault rather than as a
+   * sh-…-net not found"), which reads as an infrastructure fault rather than as a
    * missing step, and which is exactly what an operator would waste an hour on.
    */
   async function ensureNetwork(ctx: SagaContext, ref: string): Promise<string> {
@@ -675,7 +675,7 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
     async run(ctx) {
       const projectId = ctx.job.project_id!;
       const project = await loadProject(deps.pool, projectId);
-      const host = `${project.ref}.${deps.projectDomain ?? 'corebase.co'}`;
+      const host = `${project.ref}.${deps.projectDomain ?? 'steadhold.app'}`;
       const { rows } = await deps.pool.query<{ connection_host: string | null }>(
         `UPDATE project_databases
             SET connection_host = COALESCE(connection_host, $2)
@@ -751,7 +751,7 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
    * The probe connects as `developer` *through* the pooler and runs a query, which
    * is the only check that exercises the whole chain: PgBouncer accepted the
    * client, authenticated itself to Postgres as `pgbouncer_auth`, resolved the
-   * customer's verifier through `corebase.pgbouncer_lookup`, and proxied a real
+   * customer's verifier through `steadhold.pgbouncer_lookup`, and proxied a real
    * transaction. A TCP check on 6432 would pass for a pooler that can do none of
    * that, and "listening" is the least interesting half of working.
    */
@@ -931,8 +931,8 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
         // and the log line is the thing that stops that being invisible.
         if (deps.requireBackups) {
           throw new Error(
-            'backups are required (CB_REQUIRE_BACKUPS) but no repo is configured — ' +
-            'set CB_BACKUP_S3_ENDPOINT/_BUCKET/_KEY/_SECRET (./scripts/staging.sh backup-store)');
+            'backups are required (SH_REQUIRE_BACKUPS) but no repo is configured — ' +
+            'set SH_BACKUP_S3_ENDPOINT/_BUCKET/_KEY/_SECRET (./scripts/staging.sh backup-store)');
         }
         ctx.log('NO BACKUP REPO CONFIGURED — this project has no PITR and its WAL ' +
           'will accumulate on the node until archiving works', { project: project.ref });
@@ -1176,7 +1176,7 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       // Already restored? A `PG_VERSION` in the data directory means a previous
       // attempt got this far, and re-running the restore would throw away whatever
       // recovery has already replayed.
-      const probe = `cb-restore-${project.ref}`;
+      const probe = `sh-restore-${project.ref}`;
 
       await docker.removeContainer(probe, true, true).catch(() => {});
       const spec = buildContainerSpec({
@@ -1555,7 +1555,7 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
         if (deps.requireFinalBackup) {
           throw new Error(
             'a verified final backup is required before deletion (D-066) but no repo ' +
-            'is configured — set CB_BACKUP_S3_* or unset CB_REQUIRE_FINAL_BACKUP to ' +
+            'is configured — set SH_BACKUP_S3_* or unset SH_REQUIRE_FINAL_BACKUP to ' +
             'delete without one, knowingly');
         }
         ctx.log('FINAL BACKUP SKIPPED — no repo configured, so this project\'s ' +
@@ -1923,7 +1923,7 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
         ctx.log('signing keypair generated', { kid });
       }
 
-      const issuer = deps.jwtIssuer ?? `https://${project.ref}.${deps.projectDomain ?? 'corebase.co'}`;
+      const issuer = deps.jwtIssuer ?? `https://${project.ref}.${deps.projectDomain ?? 'steadhold.app'}`;
       for (const role of ['anon', 'service_role'] as const) {
         if (existing.some((r) => r.kind === role)) continue;
         const token = signJwt(

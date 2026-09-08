@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
-import { STORAGE_ERROR_CODES as E } from '@corebase/types';
-import { SECRET_NAMES, type SecretStore } from '@corebase/secrets';
+import { STORAGE_ERROR_CODES as E } from '@steadhold/types';
+import { SECRET_NAMES, type SecretStore } from '@steadhold/secrets';
 import { ApiError } from '../../kernel/errors.ts';
 import type { RateLimiter } from '../../kernel/rate-limit.ts';
 import { rateLimitKey } from '../../kernel/rate-limit.ts';

@@ -208,7 +208,7 @@ export function CommandPalette({ open, onClose, orgSlug, projectRef }: {
                 && window.matchMedia('(prefers-color-scheme: dark)').matches);
           const next = isDark ? 'light' : 'dark';
           root.setAttribute('data-theme', next);
-          try { localStorage.setItem('cb-theme', next); } catch { /* private mode */ }
+          try { localStorage.setItem('sh-theme', next); } catch { /* private mode */ }
           onClose();
         } },
       { id: 'shortcuts', group: 'Actions', label: 'Keyboard shortcuts',

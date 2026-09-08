@@ -40,20 +40,20 @@ export interface RepoTarget {
 }
 
 export function repoTargetFromEnv(env = process.env): RepoTarget | undefined {
-  const endpoint = env['CB_BACKUP_S3_ENDPOINT'];
-  const bucket = env['CB_BACKUP_S3_BUCKET'];
-  const key = env['CB_BACKUP_S3_KEY'];
-  const secret = env['CB_BACKUP_S3_SECRET'];
+  const endpoint = env['SH_BACKUP_S3_ENDPOINT'];
+  const bucket = env['SH_BACKUP_S3_BUCKET'];
+  const key = env['SH_BACKUP_S3_KEY'];
+  const secret = env['SH_BACKUP_S3_SECRET'];
   // All four or nothing. A partial configuration is how a fleet ends up with
   // projects whose archiving has been failing since they were created, because
   // `archive_command` retries forever and nothing else notices.
   if (!endpoint || !bucket || !key || !secret) return undefined;
   return {
     endpoint, bucket, key, secret,
-    port: Number(env['CB_BACKUP_S3_PORT'] ?? 443),
-    region: env['CB_BACKUP_S3_REGION'] ?? 'auto',
-    uriStyle: env['CB_BACKUP_S3_URI_STYLE'] === 'host' ? 'host' : 'path',
-    verifyTls: env['CB_BACKUP_S3_VERIFY_TLS'] !== 'n',
+    port: Number(env['SH_BACKUP_S3_PORT'] ?? 443),
+    region: env['SH_BACKUP_S3_REGION'] ?? 'auto',
+    uriStyle: env['SH_BACKUP_S3_URI_STYLE'] === 'host' ? 'host' : 'path',
+    verifyTls: env['SH_BACKUP_S3_VERIFY_TLS'] !== 'n',
   };
 }
 

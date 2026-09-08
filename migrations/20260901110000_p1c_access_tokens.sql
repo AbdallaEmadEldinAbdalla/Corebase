@@ -31,4 +31,4 @@ CREATE INDEX idx_access_tokens_user ON user_access_tokens(user_id)
 CREATE INDEX idx_access_tokens_live ON user_access_tokens(token_hash)
   WHERE revoked_at IS NULL;
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON user_access_tokens TO corebase_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON user_access_tokens TO steadhold_app;

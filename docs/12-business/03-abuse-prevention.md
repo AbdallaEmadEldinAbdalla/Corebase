@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Deepens proposal §50 from a checklist into an operating design. Corebase hands strangers a Postgres instance, an email-sending signup endpoint, public file URLs, and a subdomain — for free. Every one of those is an abuse product with an existing criminal market. This doc enumerates the taxonomy, layers the controls, and defines the enforcement ladder — sized for the reality that a ~3-person team (proposal §117) runs the abuse desk in the margins of their week.
+Deepens proposal §50 from a checklist into an operating design. Steadhold hands strangers a Postgres instance, an email-sending signup endpoint, public file URLs, and a subdomain — for free. Every one of those is an abuse product with an existing criminal market. This doc enumerates the taxonomy, layers the controls, and defines the enforcement ladder — sized for the reality that a ~3-person team (proposal §117) runs the abuse desk in the margins of their week.
 
 Design tension to hold: lane 1 ([competitive analysis](../00-foundation/02-competitive-analysis.md)) demands frictionless free signup; abuse control wants friction. The resolution is a **friction ladder**: everyone starts frictionless, friction escalates only on risk signals.
 
@@ -10,9 +10,9 @@ Design tension to hold: lane 1 ([competitive analysis](../00-foundation/02-compe
 
 ### A. Abuse taxonomy — what attackers actually do with a free BaaS
 
-| # | Abuse | Mechanism on Corebase | Who gets hurt | Severity |
+| # | Abuse | Mechanism on Steadhold | Who gets hurt | Severity |
 |---|---|---|---|---|
-| A1 | **Phishing hosting** | fake bank/login pages served from storage public URLs and `<project>.corebase.co` subdomains | victims + **our domain reputation** (Safe-Browsing listing of `corebase.co` breaks *every* customer) | Critical |
+| A1 | **Phishing hosting** | fake bank/login pages served from storage public URLs and `<project>.steadhold.app` subdomains | victims + **our domain reputation** (Safe-Browsing listing of `steadhold.app` breaks *every* customer) | Critical |
 | A2 | **Spam via auth email — the big one** | attacker builds nothing: they script signups against *their own project's* auth endpoint with victim addresses; **our** email infra delivers "verification" spam from our IPs/domain | victims + shared email IP/domain reputation → everyone's verification emails hit spam | Critical |
 | A3 | Crypto-mining in SQL | CPU burn via recursive CTEs, plv8/PL functions, `generate_series` loops | node CPU, co-tenants | Medium (bounded, see C2) |
 | A4 | File-host abuse | free tier as a CDN for pirated/large files; hot-linking | storage + bandwidth cost, legal exposure | Medium |
@@ -56,7 +56,7 @@ The most reliable abuse control is the one that needs no detection: **the per-pr
 | C7: API rate limiting IP→key→project (D-033) | scripted everything | [platform security](../06-security/04-platform-security.md) |
 | C8: 2 free projects/account + friction ladder | A7 farming (bounds per-account damage; ladder bounds account count) | this doc |
 
-Shared-IP email reputation deserves emphasis: **all tenants share Corebase's sending domain and IPs.** One spamming project degrades deliverability for every project. Per-project caps (C4), per-recipient dedup, bounce/complaint feedback loops, and instant email-suspension on complaint spikes are specified in [email infrastructure](../05-auth/04-email-infrastructure.md); this doc owns the policy that email caps are **non-negotiable at every plan level** (paid raises the numbers, never removes the cap).
+Shared-IP email reputation deserves emphasis: **all tenants share Steadhold's sending domain and IPs.** One spamming project degrades deliverability for every project. Per-project caps (C4), per-recipient dedup, bounce/complaint feedback loops, and instant email-suspension on complaint spikes are specified in [email infrastructure](../05-auth/04-email-infrastructure.md); this doc owns the policy that email caps are **non-negotiable at every plan level** (paid raises the numbers, never removes the cap).
 
 ### D. Control layer 3 — automated detection
 
@@ -69,7 +69,7 @@ Detection catches what caps can't (A1, A5, and cap-adjacent behavior). All of it
 | Subdomain phishing scan | daily crawl of public storage URLs + project subdomains serving HTML: brand-keyword/logo heuristics, Safe-Browsing API lookups of our own subdomains | flag high-confidence → auto-suspend URL serving → review |
 | Email feedback | bounce rate > 10% or any complaint spike per project | auto-suspend project email sending (not the project) |
 | Fleet-farming linkage | shared device fingerprint / IP subnet / card across accounts | review queue |
-| External abuse reports | `abuse@corebase.com` + a report-abuse form on every public storage URL page | triaged queue; phishing reports fast-tracked |
+| External abuse reports | `abuse@steadhold.dev` + a report-abuse form on every public storage URL page | triaged queue; phishing reports fast-tracked |
 
 Everything lands in **one review queue** in the admin dashboard with the evidence attached. Detectors that prove >95% precise get promoted from "flag" to "auto-act."
 

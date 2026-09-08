@@ -63,7 +63,7 @@ export function useProjects(orgId: string | undefined) {
  * returns false once the state is terminal, so a ready project costs nothing.
  *
  * The set of settling states comes from ProjectState.tsx, which derives it from
- * the enum in @corebase/types. A second hand-written copy here is how the first
+ * the enum in @steadhold/types. A second hand-written copy here is how the first
  * version missed `creating` and stopped polling a project that had just been
  * created.
  */

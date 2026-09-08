@@ -64,7 +64,7 @@ export function Menu({ trigger, children, align = 'left', label }: {
       {open ? (
         <div className={`pop__menu${align === 'right' ? ' pop__menu--right' : ''}`}
              ref={list} id={id}>
-          <div className="cb-menu" role="menu" aria-label={label}>
+          <div className="sh-menu" role="menu" aria-label={label}>
             {children(() => close())}
           </div>
         </div>
@@ -82,8 +82,8 @@ export function MenuItem({ children, onSelect, active, tone }: {
 }) {
   return (
     <button type="button" role="menuitem"
-            className={`cb-menu__item${active ? ' is-active' : ''}`}
-            style={tone === 'danger' ? { color: 'var(--cb-danger)' } : undefined}
+            className={`sh-menu__item${active ? ' is-active' : ''}`}
+            style={tone === 'danger' ? { color: 'var(--sh-danger)' } : undefined}
             onClick={onSelect}>
       {children}
     </button>

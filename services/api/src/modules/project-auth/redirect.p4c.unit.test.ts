@@ -101,7 +101,7 @@ describe('P4c — resolveRedirect', () => {
 describe('P4c — withTokenFragment', () => {
   it('puts tokens after the # so they never reach a server', () => {
     const url = withTokenFragment('https://app.example.com/cb?a=1',
-      { access_token: 'aa.bb.cc', refresh_token: 'cb_rt_x', expires_in: 3600 });
+      { access_token: 'aa.bb.cc', refresh_token: 'sh_rt_x', expires_in: 3600 });
     expect(url.startsWith('https://app.example.com/cb?a=1#')).toBe(true);
     const frag = new URLSearchParams(url.split('#')[1]);
     expect(frag.get('access_token')).toBe('aa.bb.cc');

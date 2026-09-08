@@ -297,7 +297,7 @@ export function createDocker(cfg: DockerConfig) {
 
     /**
      * Remove a container. `v=0` — anonymous volumes are kept — is the default and
-     * is not negotiable for project containers: `corebase/postgres` declares
+     * is not negotiable for project containers: `steadhold/postgres` declares
      * `VOLUME /var/lib/postgresql/data`, so `v=1` on a project would delete a
      * customer's database along with the container.
      *

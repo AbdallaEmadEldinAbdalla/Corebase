@@ -1,4 +1,4 @@
-# Corebase — working rules
+# Steadhold — working rules
 
 Read [STATUS.md](STATUS.md) first: it is the handover document and states what is
 built, how to run it, and what is deliberately not built yet.
@@ -38,7 +38,7 @@ gap with its reason.
 The visual layer is fixed and is not up for reinvention per screen: role tokens
 from `apps/dashboard/src/styles/tokens.css`, components from `components.css`,
 both rendered from the Pencil boards in `design-exports/`. **A stylesheet that
-names a ramp step (`--cb-ink-700`) instead of a role token is a bug** (D-178), and
+names a ramp step (`--sh-ink-700`) instead of a role token is a bug** (D-178), and
 there are no drop shadows (D-179) — tests enforce both.
 
 ## Things this codebase will bite you with

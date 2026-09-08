@@ -1,6 +1,6 @@
 import type { Pool } from 'pg';
 import type { Docker } from './docker.ts';
-import { createSecretStore, SECRET_NAMES } from '@corebase/secrets';
+import { createSecretStore, SECRET_NAMES } from '@steadhold/secrets';
 import { createVerifier, floorFor, type VerifyOutcome } from './verify-restore.ts';
 import { restoreVerificationsTotal, projectsVerifiedRatio } from './metrics.ts';
 

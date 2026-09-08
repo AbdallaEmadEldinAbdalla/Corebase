@@ -1,14 +1,14 @@
 import { Client } from 'pg';
 import type { Pool } from 'pg';
-import { decodeUnverified, verify as verifyJwt, JwtError } from '@corebase/jwt';
-import { SECRET_NAMES, type SecretStore } from '@corebase/secrets';
+import { decodeUnverified, verify as verifyJwt, JwtError } from '@steadhold/jwt';
+import { SECRET_NAMES, type SecretStore } from '@steadhold/secrets';
 
 /**
  * Which project a data-plane auth request belongs to, and how to reach it.
  *
  * ## Why the `apikey` and not the Host header
  *
- * The design has the **gateway** extract the ref from `<ref>.corebase.co` and hand
+ * The design has the **gateway** extract the ref from `<ref>.steadhold.app` and hand
  * the auth module a resolved project context (D-051, D-110). There is no gateway
  * until Phase 5, so this resolves the project from the `apikey` header instead —
  * the project's own anon JWT, which carries `ref` in its claims and is **signed by
@@ -78,7 +78,7 @@ export interface ProjectContext {
    * breaks every deployed frontend at the same moment.
    */
   publicKeys: ReadonlyArray<{ kid: string; publicKeyPem: string }>;
-  /** `corebase_auth`'s password in this project's database. */
+  /** `steadhold_auth`'s password in this project's database. */
   dbPassword: string;
   /**
    * `authenticator`'s password — the role that switches into an API role.
@@ -88,10 +88,10 @@ export interface ProjectContext {
    * unavailable rather than that it silently runs as something else.
    */
   authenticatorPassword?: string;
-  /** `https://<ref>.corebase.co/auth/v1` — the `iss` every *access token* carries. */
+  /** `https://<ref>.steadhold.app/auth/v1` — the `iss` every *access token* carries. */
   issuer: string;
   /**
-   * `https://<ref>.corebase.co` — the `iss` the project's **API keys** carry.
+   * `https://<ref>.steadhold.app` — the `iss` the project's **API keys** carry.
    *
    * A second issuer, and not an oversight: the anon key is minted by the
    * provisioning saga with the project's bare origin, while an access token's
@@ -120,7 +120,7 @@ export interface ResolveDeps {
   traffic?: { seen(projectId: string): void } | undefined;
   /**
    * Pins the issuer that API keys must carry. Only needed where the saga was run
-   * with `CB_JWT_ISSUER` set to something other than the project's own origin —
+   * with `SH_JWT_ISSUER` set to something other than the project's own origin —
    * which is how the staging stack mints keys.
    */
   keyIssuer?: string | undefined;
@@ -155,7 +155,7 @@ export async function resolveProject(
     claimedRef = String(decoded.claims['ref'] ?? '');
     claimedRole = String(decoded.claims['role'] ?? '');
   } catch {
-    throw new AuthContextError(401, 'The `apikey` header is not a Corebase API key.');
+    throw new AuthContextError(401, 'The `apikey` header is not a Steadhold API key.');
   }
   if (!claimedRef) {
     throw new AuthContextError(401, 'That API key names no project.');
@@ -209,7 +209,7 @@ export async function resolveProject(
       'This project has no signing key yet. It is probably still being created.');
   }
 
-  const domain = deps.projectDomain ?? process.env['CB_PROJECT_DOMAIN'] ?? 'corebase.co';
+  const domain = deps.projectDomain ?? process.env['SH_PROJECT_DOMAIN'] ?? 'steadhold.app';
   const issuer = issuerFor(row.ref, domain);
   const keyIssuer = deps.keyIssuer ?? keyIssuerFor(row.ref, domain);
   const publicKeys = [
@@ -258,7 +258,7 @@ export async function resolveProject(
 
   // Two credentials, for two different jobs.
   //
-  // `corebase_auth` is the auth module's own role: it reads and writes the `auth`
+  // `steadhold_auth` is the auth module's own role: it reads and writes the `auth`
   // schema as itself and never impersonates anyone. `authenticator` is the
   // *switching* role — NOINHERIT, able to do nothing as itself, and granted
   // `anon`/`authenticated`/`service_role` so a request can drop into whichever
@@ -323,7 +323,7 @@ export async function withProjectDb<T>(
   ctx: ProjectContext, fn: (client: Client) => Promise<T>,
 ): Promise<T> {
   const client = new Client({
-    host: ctx.host, port: ctx.port, user: 'corebase_auth', database: 'postgres',
+    host: ctx.host, port: ctx.port, user: 'steadhold_auth', database: 'postgres',
     password: ctx.dbPassword, connectionTimeoutMillis: 5000,
     // The auth module's statements are all small and indexed. A request that
     // cannot finish in two seconds is a request to give up on rather than one to

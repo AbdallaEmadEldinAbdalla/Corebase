@@ -39,7 +39,7 @@ const ROLE_TOKENS = [
 describe('design tokens', () => {
   it('defines every role token the design system names', () => {
     for (const name of ROLE_TOKENS) {
-      expect(TOKENS, `--cb-${name} is missing`).toContain(`--cb-${name}:`);
+      expect(TOKENS, `--sh-${name} is missing`).toContain(`--sh-${name}:`);
     }
   });
 
@@ -88,14 +88,14 @@ describe('design tokens', () => {
 /**
  * The guard I did not have, and the bug that proves it was needed.
  *
- * `shell.css` referenced `--cb-space-5` in five places. There is no such token —
+ * `shell.css` referenced `--sh-space-5` in five places. There is no such token —
  * the 4-point scale is 4/8/12/16/24/32/48, named space-1/2/3/4/6/8/12 — and an
  * undefined custom property with no fallback makes the *entire declaration*
  * invalid rather than falling back to something. So five paddings silently became
  * zero, which is how the command palette's input ended up with its text jammed
  * against the edge. Nothing failed; it just looked wrong, and only to a human.
  *
- * A reference with an explicit fallback is fine — `var(--cb-space-5, 20px)` is what
+ * A reference with an explicit fallback is fine — `var(--sh-space-5, 20px)` is what
  * the exported components.css does, and it renders correctly — so the test only
  * flags references that would collapse.
  */
@@ -103,11 +103,11 @@ describe('every token a stylesheet uses is defined', () => {
   for (const { file, css } of CONSUMERS) {
     it(`${file} references no undefined token without a fallback`, () => {
       const defined = new Set(
-        Array.from(TOKENS.matchAll(/(--cb-[a-z0-9-]+)\s*:/g)).map((m) => m[1]!));
+        Array.from(TOKENS.matchAll(/(--sh-[a-z0-9-]+)\s*:/g)).map((m) => m[1]!));
       const missing = new Set<string>();
       // The capture group after the name tells us whether a fallback follows: a
       // comma means `var(--x, fallback)`, a paren means bare.
-      for (const m of css.matchAll(/var\(\s*(--cb-[a-z0-9-]+)\s*([,)])/g)) {
+      for (const m of css.matchAll(/var\(\s*(--sh-[a-z0-9-]+)\s*([,)])/g)) {
         if (m[2] === ')' && !defined.has(m[1]!)) missing.add(m[1]!);
       }
       expect([...missing],
@@ -120,7 +120,7 @@ describe('every token a stylesheet uses is defined', () => {
 describe('D-178 — no stylesheet reaches past a role token to a ramp step', () => {
   for (const { file, css } of CONSUMERS) {
     it(`${file} names no ramp step`, () => {
-      const ramps = css.match(/--cb-(ink|violet)-\d+/g) ?? [];
+      const ramps = css.match(/--sh-(ink|violet)-\d+/g) ?? [];
       expect(
         [...new Set(ramps)],
         `${file} uses ramp steps directly; use a role token instead`,

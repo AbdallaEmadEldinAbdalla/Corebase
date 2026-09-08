@@ -89,13 +89,13 @@ describe('redaction by value shape', () => {
   });
 
   it('catches a connection string carrying a password', () => {
-    const url = 'postgres://developer:s3cret@abc.corebase.co:5432/postgres';
+    const url = 'postgres://developer:s3cret@abc.steadhold.app:5432/postgres';
     expect(redact({ url })['url']).toBe(`${REDACTED}:connection-string-with-password`);
   });
 
   it('leaves a connection string with no password alone', () => {
     // Over-redaction hides the useful half of an audit row.
-    const url = 'postgres://abc.corebase.co:5432/postgres';
+    const url = 'postgres://abc.steadhold.app:5432/postgres';
     expect(redact({ url })['url']).toBe(url);
   });
 

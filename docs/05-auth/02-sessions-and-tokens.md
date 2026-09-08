@@ -20,7 +20,7 @@ Per D-014: each project gets an ES256 (ECDSA P-256 + SHA-256) keypair generated 
 
 | Claim | Value | Notes |
 |---|---|---|
-| `iss` | `https://<ref>.corebase.co/auth/v1` | Verifiers pin this per project |
+| `iss` | `https://<ref>.steadhold.app/auth/v1` | Verifiers pin this per project |
 | `sub` | `auth.users.id` (uuid) | What `auth.uid()` reads for RLS |
 | `aud` | `"authenticated"` | Audience check enforced by PostgREST |
 | `role` | `"authenticated"` | Mapped to the Postgres role of the same name (D-029); `anon`/`service_role` appear only in API-key JWTs, never in user tokens |
@@ -42,7 +42,7 @@ still unemitted.*
 
 **Verification** (PostgREST, storage-api, and customer backends): signature against the project JWKS, `exp`/`iat` with **±60 s clock-skew leeway**, `aud = authenticated`, `iss` exact match. The gateway does *not* verify user JWTs on the REST path — that is PostgREST's job (one verification, not two); the gateway verifies only the `apikey` project key ([request pipeline](../04-data-api/02-request-pipeline.md)).
 
-### JWKS: `https://<ref>.corebase.co/auth/v1/.well-known/jwks.json`
+### JWKS: `https://<ref>.steadhold.app/auth/v1/.well-known/jwks.json`
 
 ```json
 { "keys": [ { "kty": "EC", "crv": "P-256", "x": "…", "y": "…",
@@ -51,12 +51,12 @@ still unemitted.*
 
 - Served by the auth module from the routing-table's cached public key(s); no control-plane query on the hot path (D-051).
 - `Cache-Control: public, max-age=600` — verifiers may cache 10 minutes; during key rotation both keys are published (runbook below), so a stale cache stays valid.
-- Customer backends verifying Corebase JWTs themselves (a supported, portability-friendly pattern) should use a JWKS client honoring `kid` and cache headers.
+- Customer backends verifying Steadhold JWTs themselves (a supported, portability-friendly pattern) should use a JWKS client honoring `kid` and cache headers.
 - PostgREST in V1 is *configured* with the project's public JWK at provision (it does not fetch the JWKS URL); a rotation therefore includes a config-reload step (runbook step 3, OQ-112).
 
 ### Refresh tokens: rotation with reuse detection — the precise protocol
 
-Refresh tokens are **opaque 256-bit values** from a CSPRNG, base64url-encoded with prefix `cb_rt_` (prefixes make leaked tokens greppable by secret scanners). The database stores only `sha256(token)` in `auth.refresh_tokens.token_hash` ([schema](01-auth-architecture.md)). A refresh token belongs to exactly one session and one lineage:
+Refresh tokens are **opaque 256-bit values** from a CSPRNG, base64url-encoded with prefix `sh_rt_` (prefixes make leaked tokens greppable by secret scanners). The database stores only `sha256(token)` in `auth.refresh_tokens.token_hash` ([schema](01-auth-architecture.md)). A refresh token belongs to exactly one session and one lineage:
 
 **On login** (any grant that creates a session):
 
@@ -194,7 +194,7 @@ separately.*
 
 ## Decisions
 
-- **D-112 — Refresh-token protocol: opaque 256-bit CSPRNG tokens (`cb_rt_` prefix), SHA-256 hash stored only; strict rotation (each use marks the token spent and issues one child in the same session lineage); replay of a spent token within a 10-second grace window idempotently returns the already-issued child; replay beyond it is a theft signal that revokes the entire session family and audits `token_reuse_detected`. Session idle expiry 30 days (refresh extends); no absolute session cap in V1.** *(Rationale: rotation with family revocation converts token theft from a silent long-lived breach into a detectable, self-limiting event — the precise property the critical review §2.3 demanded; the 10 s grace absorbs real mobile/multi-tab races without giving an attacker a useful window.)*
+- **D-112 — Refresh-token protocol: opaque 256-bit CSPRNG tokens (`sh_rt_` prefix), SHA-256 hash stored only; strict rotation (each use marks the token spent and issues one child in the same session lineage); replay of a spent token within a 10-second grace window idempotently returns the already-issued child; replay beyond it is a theft signal that revokes the entire session family and audits `token_reuse_detected`. Session idle expiry 30 days (refresh extends); no absolute session cap in V1.** *(Rationale: rotation with family revocation converts token theft from a silent long-lived breach into a detectable, self-limiting event — the precise property the critical review §2.3 demanded; the 10 s grace absorbs real mobile/multi-tab races without giving an attacker a useful window.)*
 - **D-113 — Revocation stance for V1: access JWTs are stateless and are never checked against session state on the data-plane hot path; revocation kills refresh immediately and access tokens within `exp` (default 3600 s, per-project configurable 300–86400 s); clock-skew leeway is ±60 s. Strict per-request session validation is deferred to V1.x behind a benchmark.** *(Rationale: per-request session lookup couples data-API latency and availability to auth state and violates the DB-free hot path (D-051); a bounded ≤1 h residual window, shrinkable per project via `exp`, is the industry-standard tradeoff and we state it instead of hiding it.)*
 
 ## Open Questions

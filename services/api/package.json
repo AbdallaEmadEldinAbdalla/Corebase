@@ -1,5 +1,5 @@
 {
-  "name": "@corebase/api",
+  "name": "@steadhold/api",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -11,21 +11,21 @@
     "test:unit": "vitest run --exclude '**/*.e2e.test.ts' --passWithNoTests"
   },
   "dependencies": {
-    "@corebase/types": "workspace:*",
+    "@steadhold/types": "workspace:*",
     "fastify": "^5.0.0",
     "zod": "^3.23.8",
     "pg": "^8.13.1",
-    "@corebase/queue": "workspace:*",
-    "@corebase/secrets": "workspace:*",
-    "@corebase/crypto": "workspace:*",
-    "@corebase/email": "workspace:*",
-    "@corebase/metrics": "workspace:*",
-    "@corebase/audit": "workspace:*",
-    "@corebase/jwt": "workspace:*",
-    "@corebase/s3": "workspace:*"
+    "@steadhold/queue": "workspace:*",
+    "@steadhold/secrets": "workspace:*",
+    "@steadhold/crypto": "workspace:*",
+    "@steadhold/email": "workspace:*",
+    "@steadhold/metrics": "workspace:*",
+    "@steadhold/audit": "workspace:*",
+    "@steadhold/jwt": "workspace:*",
+    "@steadhold/s3": "workspace:*"
   },
   "devDependencies": {
-    "@corebase/config": "workspace:*",
+    "@steadhold/config": "workspace:*",
     "@types/node": "^22.7.5",
     "typescript": "^5.6.3",
     "vitest": "^2.1.3",

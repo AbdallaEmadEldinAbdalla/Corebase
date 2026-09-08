@@ -127,7 +127,7 @@ Note what these margins exclude: salaries, support time, Stripe fees (~3%), mark
 |---|---|---|
 | Smallest cloud VM per project (e.g. €4/mo instance) | **~€4.00** — VMs can't be "paused" free of charge; stopped instances still bill for reserved resources on most clouds | ASSUMPTION |
 | Container-per-project, no pausing | ~€0.45 | 150/node on €64 hardware |
-| **Container-per-project + pause/resume (Corebase, D-008/D-009)** | **~€0.06–0.13** | 1,000/node effective |
+| **Container-per-project + pause/resume (Steadhold, D-008/D-009)** | **~€0.06–0.13** | 1,000/node effective |
 | Neon-style storage/compute split | comparable per-project (~cents idle) | but requires a custom storage engine — a 20-engineer problem ([competitive analysis](../00-foundation/02-competitive-analysis.md)) |
 
 The pause/resume + container model captures **most of Neon's idle economics with none of the storage-engine engineering**. The cost: a cold-start on resume (target seconds, handled in [postgres provisioning](../03-database-platform/01-postgres-provisioning.md)) — acceptable for a free tier, unacceptable for paid, which is why Pro projects never pause ([pricing](02-pricing-and-plans.md)).

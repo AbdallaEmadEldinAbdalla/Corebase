@@ -75,28 +75,28 @@ export default function NewOrgPage() {
         </div>
 
         {create.error ? (
-          <div style={{ marginBottom: 'var(--cb-space-4)' }}>
+          <div style={{ marginBottom: 'var(--sh-space-4)' }}>
             <ErrorSurface error={create.error} />
           </div>
         ) : null}
 
         <form onSubmit={submit} className="card">
           <div className="card__body">
-            <div className="cb-field">
-              <label className="cb-label" htmlFor="org-name">Name</label>
-              <input className="cb-input" id="org-name" value={name} autoFocus
+            <div className="sh-field">
+              <label className="sh-label" htmlFor="org-name">Name</label>
+              <input className="sh-input" id="org-name" value={name} autoFocus
                      placeholder="Greenbull" autoComplete="organization"
                      onChange={(e) => setName(e.target.value)} />
-              <span className="cb-help">What people in your team will see.</span>
+              <span className="sh-help">What people in your team will see.</span>
             </div>
 
-            <div className="cb-field" style={{ marginTop: 'var(--cb-space-4)' }}>
-              <label className="cb-label" htmlFor="org-slug">
+            <div className="sh-field" style={{ marginTop: 'var(--sh-space-4)' }}>
+              <label className="sh-label" htmlFor="org-slug">
                 URL <span className="muted">· appears in every link</span>
               </label>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span className="mono muted" style={{ flex: 'none' }}>/org/</span>
-                <input className={`cb-input${(slugTaken || (effectiveSlug && !slugOk)) ? ' cb-input--error' : ''}`}
+                <input className={`sh-input${(slugTaken || (effectiveSlug && !slugOk)) ? ' sh-input--error' : ''}`}
                        id="org-slug" value={effectiveSlug} spellCheck={false}
                        aria-invalid={slugTaken || Boolean(effectiveSlug) && !slugOk}
                        onChange={(e) => { setSlugEdited(true); setSlug(e.target.value); }} />
@@ -108,16 +108,16 @@ export default function NewOrgPage() {
                       Lowercase letters, numbers and dashes, starting and ending with a
                       letter or number.
                     </FieldError>
-                  : <span className="cb-help">
+                  : <span className="sh-help">
                       {slugEdited ? 'Edited — it no longer follows the name.' : 'Derived from the name. You can change it.'}
                     </span>}
             </div>
           </div>
 
           <div className="card__foot" style={{ justifyContent: 'flex-end' }}>
-            <button type="button" className="cb-btn cb-btn--secondary"
+            <button type="button" className="sh-btn sh-btn--secondary"
                     onClick={() => router.back()}>Cancel</button>
-            <button type="submit" className="cb-btn" disabled={!valid || create.isPending}>
+            <button type="submit" className="sh-btn" disabled={!valid || create.isPending}>
               {create.isPending ? 'Creating…' : 'Create organization'}
             </button>
           </div>

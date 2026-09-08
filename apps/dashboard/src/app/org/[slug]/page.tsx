@@ -74,15 +74,15 @@ export default function ProjectsPage({ params }: { params: Promise<{ slug: strin
               <button type="button" aria-pressed={view === 'cards'} onClick={() => choose('cards')}>Cards</button>
             </div>
           ) : null}
-          <Link className="cb-btn" href={`/org/${slug}/new`}>New project</Link>
+          <Link className="sh-btn" href={`/org/${slug}/new`}>New project</Link>
         </div>
       </div>
 
       {orgError ? <ErrorSurface error={orgError} /> : null}
       {!orgLoading && !org && !orgError ? (
-        <div className="emptywrap"><div className="cb-empty">
-          <div className="cb-empty__title">No such organization</div>
-          <div className="cb-empty__text">
+        <div className="emptywrap"><div className="sh-empty">
+          <div className="sh-empty__title">No such organization</div>
+          <div className="sh-empty__text">
             Either it does not exist or you are not a member. The API does not distinguish
             the two, and neither does this page.
           </div>
@@ -96,14 +96,14 @@ export default function ProjectsPage({ params }: { params: Promise<{ slug: strin
       {projects.isLoading ? <ListSkeleton view={view} /> : null}
 
       {!projects.isLoading && !projects.error && live.length === 0 && org ? (
-        <div className="emptywrap"><div className="cb-empty">
-          <div className="cb-empty__icon" aria-hidden="true">+</div>
-          <div className="cb-empty__title">No projects yet</div>
-          <div className="cb-empty__text">
+        <div className="emptywrap"><div className="sh-empty">
+          <div className="sh-empty__icon" aria-hidden="true">+</div>
+          <div className="sh-empty__title">No projects yet</div>
+          <div className="sh-empty__text">
             A project is a PostgreSQL database with its own credentials and API keys.
             It takes a few seconds to create.
           </div>
-          <Link className="cb-btn" href={`/org/${slug}/new`}>New project</Link>
+          <Link className="sh-btn" href={`/org/${slug}/new`}>New project</Link>
         </div></div>
       ) : null}
 
@@ -117,8 +117,8 @@ export default function ProjectsPage({ params }: { params: Promise<{ slug: strin
             <>
               <div className="cards">{live.map((p) => <ProjectCard key={p.id} project={p} />)}</div>
               {projects.hasNextPage ? (
-                <div className="row" style={{ justifyContent: 'center', marginTop: 'var(--cb-space-4)' }}>
-                  <button type="button" className="cb-btn cb-btn--secondary"
+                <div className="row" style={{ justifyContent: 'center', marginTop: 'var(--sh-space-4)' }}>
+                  <button type="button" className="sh-btn sh-btn--secondary"
                           disabled={projects.isFetchingNextPage}
                           onClick={() => void projects.fetchNextPage()}>
                     {projects.isFetchingNextPage ? 'Loading…' : 'Load more'}
@@ -130,7 +130,7 @@ export default function ProjectsPage({ params }: { params: Promise<{ slug: strin
       ) : null}
 
       {recoverable.length > 0 ? (
-        <section className="section" style={{ marginTop: 'var(--cb-space-8)' }}>
+        <section className="section" style={{ marginTop: 'var(--sh-space-8)' }}>
           <div className="section__head">
             <h2 className="section__title">Recently deleted</h2>
             <p className="section__note">
@@ -154,7 +154,7 @@ function ProjectTable({ projects, deleted, hasMore, loadingMore, onLoadMore }: {
   const router = useRouter();
   return (
     <div className="tablewrap">
-      <table className="cb-table">
+      <table className="sh-table">
         <thead>
           <tr>
             <th scope="col">Project</th>
@@ -162,14 +162,14 @@ function ProjectTable({ projects, deleted, hasMore, loadingMore, onLoadMore }: {
             <th scope="col">Status</th>
             <th scope="col">Region</th>
             <th scope="col">{deleted ? 'Recoverable until' : 'Created'}</th>
-            <th scope="col"><span className="cb-sr">Actions</span></th>
+            <th scope="col"><span className="sh-sr">Actions</span></th>
           </tr>
         </thead>
         <tbody>
           {projects.map((p) => (
             <tr key={p.id}
                 onClick={() => { if (!deleted) router.push(`/project/${p.ref}`); }}>
-              <td className="cb-table__name">
+              <td className="sh-table__name">
                 {deleted ? p.name : (
                   // A real link, so the row is keyboard-reachable and
                   // middle-click/⌘-click open a new tab like anywhere else.
@@ -177,7 +177,7 @@ function ProjectTable({ projects, deleted, hasMore, loadingMore, onLoadMore }: {
                         style={{ textDecoration: 'none', color: 'inherit' }}>{p.name}</Link>
                 )}
               </td>
-              <td className="cb-mono">{p.ref}</td>
+              <td className="sh-mono">{p.ref}</td>
               <td><ProjectStateBadge status={p.status} /></td>
               <td>{p.region}</td>
               <td>
@@ -203,7 +203,7 @@ function ProjectTable({ projects, deleted, hasMore, loadingMore, onLoadMore }: {
             : `${projects.length} ${projects.length === 1 ? 'project' : 'projects'}`}
         </span>
         {hasMore ? (
-          <button type="button" className="cb-btn cb-btn--secondary cb-btn--sm"
+          <button type="button" className="sh-btn sh-btn--secondary sh-btn--sm"
                   disabled={loadingMore} onClick={onLoadMore}>
             {loadingMore ? 'Loading…' : 'Load more'}
           </button>
@@ -277,16 +277,16 @@ function RowActions({ project }: { project: Project }) {
 function ProjectCard({ project }: { project: Project }) {
   const failed = project.status === 'failed';
   return (
-    <div className={`cb-card${failed ? ' cb-card--error' : ''}`}>
-      <div className="cb-card__title">{project.name}</div>
-      <div className="cb-card__ref">{project.ref}</div>
+    <div className={`sh-card${failed ? ' sh-card--error' : ''}`}>
+      <div className="sh-card__title">{project.name}</div>
+      <div className="sh-card__ref">{project.ref}</div>
       <ProjectStateBadge status={project.status} />
-      <div className="cb-card__meta">{project.region} · {project.plan}</div>
-      <div className="cb-card__footer">
-        <span style={{ color: 'var(--cb-text-muted)' }}>
+      <div className="sh-card__meta">{project.region} · {project.plan}</div>
+      <div className="sh-card__footer">
+        <span style={{ color: 'var(--sh-text-muted)' }}>
           {new Date(project.created_at).toLocaleDateString()}
         </span>
-        <Link className="cb-card__link" href={`/project/${project.ref}`}>Open</Link>
+        <Link className="sh-card__link" href={`/project/${project.ref}`}>Open</Link>
       </div>
     </div>
   );
@@ -303,10 +303,10 @@ function ListSkeleton({ view }: { view: View }) {
     return (
       <div className="cards" aria-busy="true">
         {[0, 1, 2].map((i) => (
-          <div className="cb-card" key={i}>
-            <div className="cb-skeleton" style={{ width: '58%', height: 20 }} />
-            <div className="cb-skeleton" style={{ width: '42%', height: 13, marginTop: 8 }} />
-            <div className="cb-skeleton" style={{ width: 86, height: 22, marginTop: 12, borderRadius: 999 }} />
+          <div className="sh-card" key={i}>
+            <div className="sh-skeleton" style={{ width: '58%', height: 20 }} />
+            <div className="sh-skeleton" style={{ width: '42%', height: 13, marginTop: 8 }} />
+            <div className="sh-skeleton" style={{ width: 86, height: 22, marginTop: 12, borderRadius: 999 }} />
           </div>
         ))}
       </div>
@@ -314,7 +314,7 @@ function ListSkeleton({ view }: { view: View }) {
   }
   return (
     <div className="tablewrap" aria-busy="true">
-      <table className="cb-table">
+      <table className="sh-table">
         <thead>
           <tr>
             <th>Project</th><th>Ref</th><th>Status</th><th>Region</th><th>Created</th><th />
@@ -323,11 +323,11 @@ function ListSkeleton({ view }: { view: View }) {
         <tbody>
           {[0, 1, 2, 3].map((i) => (
             <tr key={i}>
-              <td><div className="cb-skeleton" style={{ width: 110, height: 14 }} /></td>
-              <td><div className="cb-skeleton" style={{ width: 150, height: 12 }} /></td>
-              <td><div className="cb-skeleton" style={{ width: 78, height: 22, borderRadius: 999 }} /></td>
-              <td><div className="cb-skeleton" style={{ width: 70, height: 14 }} /></td>
-              <td><div className="cb-skeleton" style={{ width: 80, height: 14 }} /></td>
+              <td><div className="sh-skeleton" style={{ width: 110, height: 14 }} /></td>
+              <td><div className="sh-skeleton" style={{ width: 150, height: 12 }} /></td>
+              <td><div className="sh-skeleton" style={{ width: 78, height: 22, borderRadius: 999 }} /></td>
+              <td><div className="sh-skeleton" style={{ width: 70, height: 14 }} /></td>
+              <td><div className="sh-skeleton" style={{ width: 80, height: 14 }} /></td>
               <td />
             </tr>
           ))}

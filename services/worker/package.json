@@ -1,5 +1,5 @@
 {
-  "name": "@corebase/worker",
+  "name": "@steadhold/worker",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -18,20 +18,20 @@
     "load": "node --experimental-strip-types bench/load.mts"
   },
   "dependencies": {
-    "@corebase/types": "workspace:*",
-    "@corebase/queue": "workspace:*",
+    "@steadhold/types": "workspace:*",
+    "@steadhold/queue": "workspace:*",
     "pg": "^8.13.1",
-    "@corebase/crypto": "workspace:*",
-    "@corebase/email": "workspace:*",
-    "@corebase/secrets": "workspace:*",
-    "@corebase/metrics": "workspace:*",
-    "@corebase/audit": "workspace:*",
-    "@corebase/jwt": "workspace:*",
-    "@corebase/s3": "workspace:*"
+    "@steadhold/crypto": "workspace:*",
+    "@steadhold/email": "workspace:*",
+    "@steadhold/secrets": "workspace:*",
+    "@steadhold/metrics": "workspace:*",
+    "@steadhold/audit": "workspace:*",
+    "@steadhold/jwt": "workspace:*",
+    "@steadhold/s3": "workspace:*"
   },
   "devDependencies": {
-    "@corebase/config": "workspace:*",
-    "@corebase/api": "workspace:*",
+    "@steadhold/config": "workspace:*",
+    "@steadhold/api": "workspace:*",
     "@types/node": "^22.7.5",
     "typescript": "^5.6.3",
     "vitest": "^2.1.3",

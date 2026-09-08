@@ -14,12 +14,13 @@ The complete V1 system picture: every process that runs, where it runs, and how 
                      ┌────────────────┴────────────────┐
                      │        Cloudflare edge          │
                      │  DNS · DDoS · WAF basics        │
-                     │  TLS: corebase.com, *.corebase.com,
-                     │       *.corebase.co (wildcard)  │
+                     │  TLS: steadhold.dev,            │
+                     │       *.steadhold.dev,          │
+                     │       *.steadhold.app (wildcard)│
                      └───┬──────────────┬──────────────┘
-        corebase.com     │              │  app.corebase.com
-        (marketing,      │              │  api.corebase.com
-         CF Pages)       │              │  <ref>.corebase.co
+        steadhold.dev    │              │  app.steadhold.dev
+        (marketing,      │              │  api.steadhold.dev
+         CF Pages)       │              │  <ref>.steadhold.app
                          │              ▼
                          │   ┌─────────────────────────────────────────┐
                          │   │  APP NODE (Hetzner, eu-central)         │
@@ -74,8 +75,8 @@ Private traffic (gateway → data nodes, worker → Docker API, pgBackRest → R
 
 | Unit | Process/container | Runs on | Deploy cadence | Notes |
 |---|---|---|---|---|
-| Marketing site | Cloudflare Pages | edge | ad hoc | `corebase.com` |
-| Dashboard | Next.js (`apps/dashboard`) | app node (or CF Pages) | with monolith | `app.corebase.com`; talks only to `api.corebase.com` |
+| Marketing site | Cloudflare Pages | edge | ad hoc | `steadhold.dev` |
+| Dashboard | Next.js (`apps/dashboard`) | app node (or CF Pages) | with monolith | `app.steadhold.dev`; talks only to `api.steadhold.dev` |
 | Caddy | systemd + container | app node | rare | origin TLS termination (D-050), Cloudflare Origin CA cert, authenticated origin pulls |
 | **services/api** | one Node process | app node | continuous | the modular monolith: gateway, control-plane, auth, storage-api modules (D-010, D-020) |
 | **services/worker** | one Node process | app node | independent of api | the ONE separate process from day one (D-020): BullMQ jobs + reconciliation loop |
@@ -87,10 +88,10 @@ Private traffic (gateway → data nodes, worker → Docker API, pgBackRest → R
 
 Everything above is Docker Compose under systemd per node, provisioned by Terraform + cloud-init (D-022). No Kubernetes.
 
-### How `<project-ref>.corebase.co` reaches the right container
+### How `<project-ref>.steadhold.app` reaches the right container
 
-1. **DNS**: a single wildcard record `*.corebase.co` points at Cloudflare-proxied origin IPs (the app node's Caddy). No per-project DNS records ever exist — the ref is only meaningful to the gateway.
-2. **Edge**: Cloudflare terminates client TLS with the `*.corebase.co` wildcard cert and opens an origin connection to Caddy carrying the original `Host` header (see [domain & region model](04-domain-and-region-model.md) for the TLS chain).
+1. **DNS**: a single wildcard record `*.steadhold.app` points at Cloudflare-proxied origin IPs (the app node's Caddy). No per-project DNS records ever exist — the ref is only meaningful to the gateway.
+2. **Edge**: Cloudflare terminates client TLS with the `*.steadhold.app` wildcard cert and opens an origin connection to Caddy carrying the original `Host` header (see [domain & region model](04-domain-and-region-model.md) for the TLS chain).
 3. **Gateway**: the gateway module extracts the ref from `Host`, and looks it up in its **in-memory routing table** — `ref → {project_id, node private IP, postgrest_port, pooler_port, status, public JWT key, rate-limit tier}` — which is hydrated from the control plane at boot and kept fresh via Redis pub/sub invalidation plus a periodic full refresh (D-051). The hot path never queries control-plane Postgres ([control vs data plane](02-control-vs-data-plane.md)).
 4. **Dispatch by path prefix**: `/rest/v1/*` proxies over the private network to that project's PostgREST container port; `/auth/v1/*` dispatches in-process to the auth module (which connects to the project's pooler); `/storage/v1/*` dispatches to the storage-api module. Unknown ref → 404; `PAUSED` project → resume trigger (D-008, see [multi-tenancy](03-multi-tenancy-and-isolation.md), OQ-050); `SUSPENDED/DELETING` → 403/410.
 
@@ -99,7 +100,7 @@ Port allocation is per node: each project triplet gets stable host ports recorde
 ### Request lifecycle A — control plane: "create project"
 
 ```text
-dashboard ── POST api.corebase.com/v1/projects {name, region, plan}
+dashboard ── POST api.steadhold.dev/v1/projects {name, region, plan}
   1. Cloudflare → Caddy → monolith: control-plane module
   2. Session/authn check; org membership + plan quota check
   3. One transaction in control-plane PG:
@@ -117,7 +118,7 @@ dashboard ── POST api.corebase.com/v1/projects {name, region, plan}
        e. register pgBackRest stanza; take first base backup (D-019)
        f. mark project READY; publish routing-table update on Redis pub/sub
   6. dashboard polls GET /v1/projects/:id until READY; shows connection
-     strings, keys, <ref>.corebase.co endpoint
+     strings, keys, <ref>.steadhold.app endpoint
 ```
 
 Every worker step is idempotent (proposal §75–76): "create container" is "ensure container exists with this spec." Crash + retry converges instead of duplicating. Full state machine: [provisioning state machine](../02-control-plane/03-provisioning-state-machine.md).
@@ -125,7 +126,7 @@ Every worker step is idempotent (proposal §75–76): "create container" is "ens
 ### Request lifecycle B — data plane: REST query through PostgREST
 
 ```text
-client ── GET https://abck3xw7….corebase.co/rest/v1/todos?select=*&done=eq.false
+client ── GET https://abck3xw7….steadhold.app/rest/v1/todos?select=*&done=eq.false
           headers: apikey: <anon JWT>, Authorization: Bearer <user JWT>
   1. Cloudflare: TLS, DDoS scrub, forwards with Host intact
   2. Caddy → gateway module:
@@ -147,11 +148,11 @@ Note what the gateway did **not** do: no control-plane DB query, no session look
 ### Request lifecycle C — auth login
 
 ```text
-client ── POST https://<ref>.corebase.co/auth/v1/token?grant_type=password
+client ── POST https://<ref>.steadhold.app/auth/v1/token?grant_type=password
   1. Cloudflare → Caddy → gateway: ref resolution + per-identifier rate limit
   2. dispatch in-process to auth module (D-013 — in-house, in the monolith)
   3. auth module connects to the PROJECT's database via its pooler
-     (reserved corebase_auth role): SELECT from auth.users,
+     (reserved steadhold_auth role): SELECT from auth.users,
      timing-safe verify of password hash, enumeration-resistant errors
   4. issue tokens: ES256 access JWT signed with the project private key
      (decrypted via KMS, cached in memory), kid in header (D-014);
@@ -165,7 +166,7 @@ User records live in the **project's** database (`auth` schema), not the control
 ### Request lifecycle D — storage upload
 
 ```text
-client ── POST https://<ref>.corebase.co/storage/v1/object/avatars/me.png
+client ── POST https://<ref>.steadhold.app/storage/v1/object/avatars/me.png
           Authorization: Bearer <user JWT>   (body: file stream)
   1. Cloudflare → Caddy → gateway: ref resolution, key check, rate limit
   2. dispatch to storage-api module
@@ -173,7 +174,7 @@ client ── POST https://<ref>.corebase.co/storage/v1/object/avatars/me.png
   4. open txn in the project DB: INSERT INTO storage.objects (metadata row) —
      the INSERT runs as the user's role, so storage RLS policies decide
      authorization (D-017: metadata-in-PG is what makes files RLS-able)
-  5. stream body to R2 under key corebase-prod/<ref>/avatars/<object-id>
+  5. stream body to R2 under key steadhold-prod/<ref>/avatars/<object-id>
   6. commit metadata row only after R2 confirms; on R2 failure, rollback
      (orphan-object sweeps handle the reverse case —
       see storage architecture)
@@ -198,7 +199,7 @@ Uploads transit the app node in V1 (simple, one code path); presigned direct-to-
 
 ## Decisions
 
-- **D-050 — Origin TLS is terminated by Caddy on the app node using a Cloudflare Origin CA certificate for `*.corebase.co` (and `api./app.corebase.com`), with authenticated origin pulls enforced; Caddy forwards to the monolith over loopback.** *(Rationale: keeps TLS lifecycle out of application code, blocks direct-to-origin bypass of Cloudflare, and gives a zero-code path to later putting the gateway on more nodes; "don't build a gateway" (C-3) extends to "don't hand-roll TLS in Fastify".)*
+- **D-050 — Origin TLS is terminated by Caddy on the app node using a Cloudflare Origin CA certificate for `*.steadhold.app` (and `api./app.steadhold.dev`), with authenticated origin pulls enforced; Caddy forwards to the monolith over loopback.** *(Rationale: keeps TLS lifecycle out of application code, blocks direct-to-origin bypass of Cloudflare, and gives a zero-code path to later putting the gateway on more nodes; "don't build a gateway" (C-3) extends to "don't hand-roll TLS in Fastify".)*
 - **D-051 — The gateway routes from an in-memory routing table (`ref → node/ports/status/public key/limits`), hydrated from control-plane Postgres at boot, invalidated via Redis pub/sub, and fully refreshed on an interval; the data-plane hot path never queries control-plane Postgres.** *(Rationale: decouples data-plane availability and latency from the control plane — the failure-domain requirement of §121; a full table for even 100k projects is a few hundred MB, trivially memory-resident.)*
 - **D-052 — The worker manages data nodes over the Docker Engine API with mutual TLS on the private network; there is no custom per-node agent in V1.** *(Rationale: one fewer deployable to version and roll; the Engine API already exposes everything provisioning needs — create/start/stop/inspect containers and volumes — and idempotent "ensure" semantics are straightforward to build on `inspect`.)*
 

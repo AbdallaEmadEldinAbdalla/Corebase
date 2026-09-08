@@ -92,7 +92,7 @@ describe('P1g — CORS', () => {
   });
 
   it('is off when no origins are configured', async () => {
-    // An unset CB_DASHBOARD_ORIGINS must not fall back to localhost: the service
+    // An unset SH_DASHBOARD_ORIGINS must not fall back to localhost: the service
     // starts fine either way, so a permissive default would ship to production
     // the first time someone forgot the variable.
     const res = await app([]).inject({ method: 'GET', url: '/health', headers: { origin: DASH } });
@@ -107,8 +107,8 @@ describe('P1g — CORS', () => {
 
   describe('parseOrigins', () => {
     it('splits, trims and drops a trailing slash', () => {
-      expect(parseOrigins(' http://localhost:3000/ , https://app.corebase.com '))
-        .toEqual(['http://localhost:3000', 'https://app.corebase.com']);
+      expect(parseOrigins(' http://localhost:3000/ , https://app.steadhold.dev '))
+        .toEqual(['http://localhost:3000', 'https://app.steadhold.dev']);
     });
     it('treats unset and empty as no access', () => {
       expect(parseOrigins(undefined)).toEqual([]);

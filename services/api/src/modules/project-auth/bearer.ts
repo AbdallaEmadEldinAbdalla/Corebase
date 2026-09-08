@@ -1,7 +1,7 @@
 import type { FastifyRequest } from 'fastify';
 import type { Client } from 'pg';
-import { verify as verifyJwt, JwtError } from '@corebase/jwt';
-import { AUTH_ERROR_CODES } from '@corebase/types';
+import { verify as verifyJwt, JwtError } from '@steadhold/jwt';
+import { AUTH_ERROR_CODES } from '@steadhold/types';
 import { ApiError } from '../../kernel/errors.ts';
 import type { ProjectContext } from './context.ts';
 import { liveSession } from './store.ts';

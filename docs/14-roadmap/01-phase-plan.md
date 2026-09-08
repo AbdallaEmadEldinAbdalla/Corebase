@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The executable build order for Corebase V1: every phase with scope, key tasks, exit criteria, and the demoable flow that proves it. This corrects the v0.1 proposal's ordering (§83) in two ways: **RLS ships with the data API** (D-036 — never an API without policies), and **backups move up** (durability outranks dashboard polish per the priority stack D-002). Realtime is out of V1 entirely (D-030).
+The executable build order for Steadhold V1: every phase with scope, key tasks, exit criteria, and the demoable flow that proves it. This corrects the v0.1 proposal's ordering (§83) in two ways: **RLS ships with the data API** (D-036 — never an API without policies), and **backups move up** (durability outranks dashboard polish per the priority stack D-002). Realtime is out of V1 entirely (D-030).
 
 Phases are sequential milestones, not calendar estimates. Each ends in something demoable; nothing starts before the previous phase's exit criteria hold. Team-size assumptions per proposal §117 (1–3 engineers).
 
@@ -11,7 +11,7 @@ Phases are sequential milestones, not calendar estimates. Each ends in something
 ### Phase overview
 
 ```text
-P0  Walking skeleton        "corebase project → running Postgres → first query"
+P0  Walking skeleton        "steadhold project → running Postgres → first query"
 P1  Control plane           orgs, projects, keys, platform API, dashboard shell
 P2  Database platform       pooling, credentials, pause/resume, disk quotas
 P3  Backups                 pgBackRest, WAL archiving, restore-to-new, verification
@@ -19,7 +19,7 @@ P4  Auth                    email/password, JWT, refresh rotation, email infra
 P5  Data API + RLS          gateway pipeline, PostgREST, policies, isolation suite
 P6  Storage                 buckets, upload/download, signed URLs, RLS on objects
 P7  Dashboard               table editor, SQL editor, auth/storage/keys UI
-P8  CLI + local dev + SDK   corebase dev, db push/pull, export, @corebase/core
+P8  CLI + local dev + SDK   steadhold dev, db push/pull, export, @steadhold/core
 P9  Hardening & launch      load, chaos-lite, docs, pricing wiring, private beta
 ```
 
@@ -141,15 +141,15 @@ The proposal's §122 first milestone. Full task-level detail lives in [milestone
 
 ### Phase 8 — CLI + local dev + SDK
 
-**Scope:** per [10-cli-and-sdk](../10-cli-and-sdk/01-cli-spec.md): `login/init/link/dev/db push|pull|reset/migration new/export/projects/secrets/logs`; the Docker Compose local stack with prod-parity paths; `@corebase/core` SDK (database builder, auth, storage) + `gen types`; **`corebase export`** (D-004).
+**Scope:** per [10-cli-and-sdk](../10-cli-and-sdk/01-cli-spec.md): `login/init/link/dev/db push|pull|reset/migration new/export/projects/secrets/logs`; the Docker Compose local stack with prod-parity paths; `@steadhold/core` SDK (database builder, auth, storage) + `gen types`; **`steadhold export`** (D-004).
 
 **Exit criteria:**
-- `corebase dev` cold-starts the full local stack; the same SDK code runs locally and against prod by swapping the URL.
+- `steadhold dev` cold-starts the full local stack; the same SDK code runs locally and against prod by swapping the URL.
 - `db push/pull` round-trips a real schema including policies.
 - `export` tarball restores into a vanilla Postgres + MinIO setup, documented (the portability proof).
 - SDK published to npm (scoped, beta tag) with generated types working.
 
-**Demo:** scaffold an app locally with `corebase dev`, push migrations to prod project, deploy nothing else — the app works against prod.
+**Demo:** scaffold an app locally with `steadhold dev`, push migrations to prod project, deploy nothing else — the app works against prod.
 
 ---
 

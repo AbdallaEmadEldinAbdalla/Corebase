@@ -143,19 +143,19 @@ export function createVerifier(opts: VerifyOptions) {
 
       // Named for the verification, not the project: this container is scratch and
       // must never be mistaken for the project's own by a reconciliation sweep.
-      // No `com.corebase.project.ref` label, for the same reason (D-235's lesson:
+      // No `com.steadhold.project.ref` label, for the same reason (D-235's lesson:
       // the reconciler keys on that label, and an unexpected container carrying it
       // is drift).
-      const name = `cb-verify-${args.ref}-${Date.now().toString(36)}`;
+      const name = `sh-verify-${args.ref}-${Date.now().toString(36)}`;
       const volume = `${name}-data`;
       let restoreMs: number | undefined;
 
       try {
-        await opts.docker.createVolume(volume, { 'com.corebase.role': 'verify-scratch' });
+        await opts.docker.createVolume(volume, { 'com.steadhold.role': 'verify-scratch' });
         const id = await opts.docker.createContainer(name, {
           Image: IMAGE,
           Env: ['PGDATA=/var/lib/postgresql/data/pgdata'],
-          Labels: { 'com.corebase.role': 'verify-scratch' },
+          Labels: { 'com.steadhold.role': 'verify-scratch' },
           // No entrypoint run: the volume has to be filled before Postgres ever
           // starts on it, exactly as in the real restore (D-284).
           Cmd: ['sleep', '1800'],
@@ -200,7 +200,7 @@ export function createVerifier(opts: VerifyOptions) {
         // to initdb around it.
         const startPg = await opts.docker.execCapture(name, ['sh', '-c',
           'pg_ctl -D /var/lib/postgresql/data/pgdata -l /tmp/pg.log ' +
-          '-o "-c config_file=/etc/corebase/postgresql.base.conf -c archive_mode=off ' +
+          '-o "-c config_file=/etc/steadhold/postgresql.base.conf -c archive_mode=off ' +
           '-c listen_addresses=127.0.0.1" -w -t 120 start 2>&1 || cat /tmp/pg.log']);
 
         // ── 2. recovery reached consistency ──────────────────────────────────

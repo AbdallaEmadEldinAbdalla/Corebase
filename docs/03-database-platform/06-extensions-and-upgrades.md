@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Two subjects the proposal underweighted. Extensions (§11 lists them as a feature word): which Postgres extensions Corebase offers, and the threat model behind refusing the rest — on shared nodes, an extension is code execution inside the tenant boundary. Upgrades (missing entirely, flagged in the [critical review](../00-foundation/03-critical-review.md) §3): the standing playbook D-037 demands for moving a fleet of thousands of single-version databases from PostgreSQL 17 to 18+, plus the routine of minor-version bumps.
+Two subjects the proposal underweighted. Extensions (§11 lists them as a feature word): which Postgres extensions Steadhold offers, and the threat model behind refusing the rest — on shared nodes, an extension is code execution inside the tenant boundary. Upgrades (missing entirely, flagged in the [critical review](../00-foundation/03-critical-review.md) §3): the standing playbook D-037 demands for moving a fleet of thousands of single-version databases from PostgreSQL 17 to 18+, plus the routine of minor-version bumps.
 
 ## Design
 
@@ -14,7 +14,7 @@ Under container-per-project (D-009) the container is the isolation boundary, and
 - **Filesystem/network-reach extensions break the request-path security model even without an escape**: `dblink`/`postgres_fdw` turn the database into an SSRF client that can probe the node network and other services from a trusted network position; `file_fdw`/`adminpack` read/write the server filesystem; any of them can exfiltrate across boundaries RLS never sees.
 - **Server-program execution**: `COPY TO/FROM PROGRAM` and server-file COPY are superuser/role-gated by Postgres itself; customer roles (`developer` and below, [credentials §1](03-credentials-and-secrets.md)) are **never** granted `pg_execute_server_program`, `pg_read_server_files`, or `pg_write_server_files`, and never superuser — so these are closed by role design, restated here because they are the classic SQL-level escape ([tenant isolation tests](../06-security/03-tenant-isolation-tests.md) includes probes for all three).
 
-**Enforcement is by absence, not by policy**: the `postgres:17-corebase` image ships *only* the allowlisted extensions' `.so`/control files. There is nothing to misconfigure — `CREATE EXTENSION dblink` fails because dblink does not exist in the image. Trusted extensions on the list can be created by the `developer` role directly (PG13+ trusted mechanism); non-trusted listed ones are installed via the dashboard/API, executed by the internal admin role, recorded as a migration ([migrations §5](04-migrations.md)).
+**Enforcement is by absence, not by policy**: the `postgres:17-steadhold` image ships *only* the allowlisted extensions' `.so`/control files. There is nothing to misconfigure — `CREATE EXTENSION dblink` fails because dblink does not exist in the image. Trusted extensions on the list can be created by the `developer` role directly (PG13+ trusted mechanism); non-trusted listed ones are installed via the dashboard/API, executed by the internal admin role, recorded as a migration ([migrations §5](04-migrations.md)).
 
 ### 2. The V1 allowlist
 
@@ -27,7 +27,7 @@ Under container-per-project (D-009) the container is the isolation boundary, and
 | `btree_gin`, `btree_gist` | **V1** | Composite/exclusion-constraint support; tiny, standard | Trusted |
 | `citext` | **V1** | Case-insensitive text (emails); common migration blocker if absent | Trusted |
 | `pgvector` | **V1** | AI-era table stakes; a top-3 reason developers pick a Postgres BaaS today. Pure type + index AM: no filesystem/network reach, widely deployed and reviewed. Worth one exception to "no C extensions beyond contrib" | C code (accepted); HNSW index builds are memory-hungry → bounded by `maintenance_work_mem` (64 MB template) and the container cgroup — build failures are the tenant's, not the node's (OQ-030) |
-| `postgis` | **V1.1** | Real demand but: ~10× image-size growth (GEOS/GDAL/PROJ), large attack/patch surface, and its own upgrade coupling with major versions. Ship as a *variant image* (`postgres:17-corebase-gis`) chosen at project create, so the base fleet doesn't carry it | Large C dependency tree; variant-image isolation keeps the blast radius to projects that opted in |
+| `postgis` | **V1.1** | Real demand but: ~10× image-size growth (GEOS/GDAL/PROJ), large attack/patch surface, and its own upgrade coupling with major versions. Ship as a *variant image* (`postgres:17-steadhold-gis`) chosen at project create, so the base fleet doesn't carry it | Large C dependency tree; variant-image isolation keeps the blast radius to projects that opted in |
 | `pg_cron` | **V1.1** | Wanted for scheduled jobs, but runs in-server with `shared_preload_libraries` and per-DB config; defer until the functions/cron product story exists (§109 V1.3) | Executes stored SQL on schedule — fine inside the tenant boundary; needs quota thought |
 | `dblink`, `postgres_fdw`, `file_fdw`, `adminpack`, `pg_prewarm`(server-wide), any `plpython`/`plperlu`, `pg_net`-class HTTP | **Denied** | Filesystem/network/untrusted-language reach per §1 | Not in the image; revisit only per-extension with a written isolation argument |
 
@@ -37,7 +37,7 @@ Requests for unlisted extensions become a labeled feedback queue; the bar for ad
 
 Minor releases (17.x → 17.x+1) are security patches; the fleet takes them **monthly, or within 72 h for an actively-exploited CVE**:
 
-1. New `postgres:17-corebase` image built, scanned, soak-tested on a canary node (internal projects + volunteers) for 48 h.
+1. New `postgres:17-steadhold` image built, scanned, soak-tested on a canary node (internal projects + volunteers) for 48 h.
 2. Control plane records target image digest; **paused projects are done for free** — they simply resume onto the current image (containers are recreated from the current image at resume, [provisioning §5](01-postgres-provisioning.md)); this is the pause-aware scheduling dividend, and at healthy pause ratios it's most of the fleet.
 3. Active projects: rolling per node, batched (e.g., 10 projects at a time), inside a per-region off-peak window. Cost per project = clean stop + start on the kept volume ≈ **2–5 s of unavailability**; pooler `max_client_conn` buffering + SDK retries absorb most of it. Dashboard shows the maintenance event; no customer action.
 4. PgBouncer/PostgREST image bumps ride the same mechanism, usually with zero Postgres restart (independent containers — the D-070 bridge-network dividend).
@@ -64,7 +64,7 @@ One fleet version (PG17 at launch, D-037) means the whole fleet must cross to 18
 1. `pg_restore` completed with zero errors (warnings triaged against an allowlist, e.g. ownership no-ops);
 2. object-count parity per schema (tables, indexes, functions, policies) between old and new via the same introspection engine as `db pull` ([migrations §3](04-migrations.md));
 3. row-count parity on every user table (exact — the write-freeze makes this a stable comparison);
-4. `corebase_migrations.schema_migrations` identical on both sides;
+4. `steadhold_migrations.schema_migrations` identical on both sides;
 5. `ALTER EXTENSION ... UPDATE` applied and every §2 extension reports the expected version;
 6. PostgREST schema cache loads and a synthetic authenticated request round-trips with RLS enforced ([tenant isolation tests](../06-security/03-tenant-isolation-tests.md) smoke subset).
 
@@ -75,7 +75,7 @@ Any failure aborts before promote: the old instance never stopped being live, so
 | When | Action |
 |---|---|
 | T−90 d | Internal projects + monitoring stack move to PG-new; extension-compatibility gate evaluated (a new major is not offered until every §2 extension has a compatible release in the new image) |
-| T−45 d | Volunteer/canary customer projects (opt-in flag); local dev stack (`corebase dev`, D-027) offers PG-new so customers can test before their window |
+| T−45 d | Volunteer/canary customer projects (opt-in flag); local dev stack (`steadhold dev`, D-027) offers PG-new so customers can test before their window |
 | T−30 d | Season announced: email + dashboard + status page; **self-serve "upgrade now" button** live (agencies upgrade their dev/staging projects first — free canaries); default per-project windows published, customer-adjustable within the season |
 | T 0 | Rolling default windows begin, smallest projects first (fastest, safest path exercises the machinery before the big ones) |
 | T+60 d | > 10 GB `pg_upgrade` cohort scheduled windows run |
@@ -83,7 +83,7 @@ Any failure aborts before promote: the old instance never stopped being live, so
 
 **Version bookkeeping:** the control plane records per project the running image digest, Postgres major/minor, and per-extension versions (scraped, not assumed) — the upgrade season is driven off this table, and "fleet is one version" (D-037) is a monitored invariant with an alert, not a hope.
 
-**Cadence stance:** Corebase adopts a new major within ~12 months of its release (skipping majors is allowed — e.g., 17 → 19 — as long as the fleet stays on a version with ≥ 2 years of upstream support remaining); the trigger is upstream support horizon and extension readiness, not novelty (OQ-031).
+**Cadence stance:** Steadhold adopts a new major within ~12 months of its release (skipping majors is allowed — e.g., 17 → 19 — as long as the fleet stays on a version with ≥ 2 years of upstream support remaining); the trigger is upstream support horizon and extension readiness, not novelty (OQ-031).
 
 ## Decisions
 

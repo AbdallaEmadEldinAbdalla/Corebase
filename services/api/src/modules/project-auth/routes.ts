@@ -1,13 +1,13 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { Client } from 'pg';
 import { z } from 'zod';
-import { AUTH_ERROR_CODES } from '@corebase/types';
-import { toJwk } from '@corebase/jwt';
+import { AUTH_ERROR_CODES } from '@steadhold/types';
+import { toJwk } from '@steadhold/jwt';
 import {
   hashPassword, verifyPassword, burnVerify, validatePassword,
   PasswordFormatError, MIN_END_USER_PASSWORD_LENGTH,
-} from '@corebase/crypto';
-import { SECRET_NAMES } from '@corebase/secrets';
+} from '@steadhold/crypto';
+import { SECRET_NAMES } from '@steadhold/secrets';
 import { parsePageRequest, toPage } from '../../kernel/pagination.ts';
 import { ApiError } from '../../kernel/errors.ts';
 import { rateLimitKey, type RateLimiter } from '../../kernel/rate-limit.ts';
@@ -164,7 +164,7 @@ export function registerProjectAuth(app: FastifyInstance, deps: ProjectAuthDeps)
    *
    * The ref comes from the Host subdomain when there is one and from `?ref=`
    * otherwise. The shipped design has the gateway supply it from
-   * `<ref>.corebase.co` (D-051); there is no gateway before Phase 5 and a Docker
+   * `<ref>.steadhold.app` (D-051); there is no gateway before Phase 5 and a Docker
    * stack answers on one host, so the query parameter is the stand-in. It leaks
    * nothing: the response is public by design and the control plane already
    * serves the same document at a ref-keyed path.
@@ -674,7 +674,7 @@ export function registerProjectAuth(app: FastifyInstance, deps: ProjectAuthDeps)
       // Validated *before* it goes into the link, not only when the link is
       // followed. The first version of this passed `parsed.data.redirect_to`
       // straight through, which would have put an attacker-chosen destination
-      // into a mail Corebase sends from its own domain — the one thing D-116's
+      // into a mail Steadhold sends from its own domain — the one thing D-116's
       // fixed templates exist to make impossible.
       const { url: dest, substituted } = resolveRedirect(ctx.config, parsed.data.redirect_to);
       if (substituted) {
@@ -1568,7 +1568,7 @@ const notSuchUser = () =>
  *
  * Built here, from the project's issuer and an already-**validated** redirect —
  * never from anything the client sent. D-116 is the reason: the whole point of
- * fixed templates with variable interpolation is that Corebase cannot be made to
+ * fixed templates with variable interpolation is that Steadhold cannot be made to
  * send an arbitrary link from a reputable domain, and a client-supplied
  * `action_url` would hand that capability straight back.
  */
@@ -1598,7 +1598,7 @@ export function refFromRequest(
 ): string | undefined {
   const q = (req.query as { ref?: unknown } | undefined)?.ref;
   const host = String(req.headers['host'] ?? '').split(':')[0] ?? '';
-  const suffix = `.${domain ?? process.env['CB_PROJECT_DOMAIN'] ?? 'corebase.co'}`;
+  const suffix = `.${domain ?? process.env['SH_PROJECT_DOMAIN'] ?? 'steadhold.app'}`;
   if (host.endsWith(suffix)) {
     const sub = host.slice(0, -suffix.length);
     if (/^[a-z0-9]{8,32}$/.test(sub)) return sub;

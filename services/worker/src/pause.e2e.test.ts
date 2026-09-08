@@ -4,11 +4,11 @@ import { join } from 'node:path';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { createEnvelope } from '@corebase/crypto';
-import { createSecretStore } from '@corebase/secrets';
-import { SECRET_NAMES } from '@corebase/secrets';
+import { createEnvelope } from '@steadhold/crypto';
+import { createSecretStore } from '@steadhold/secrets';
+import { SECRET_NAMES } from '@steadhold/secrets';
 import { createDocker, type Docker } from './docker.ts';
-import { createRedis, createQueue, type Redis, type Queue, type ProvisioningJobData } from '@corebase/queue';
+import { createRedis, createQueue, type Redis, type Queue, type ProvisioningJobData } from '@steadhold/queue';
 import { buildSagas } from './jobs/sagas.ts';
 import { createIdleScan } from './idle-scan.ts';
 import { registerNode } from './placement.ts';
@@ -26,15 +26,15 @@ import type { SagaStep, SagaContext } from './jobs/runner.ts';
  * are about the whole promise: the rows come back, and they come back at the same
  * address with the same credentials.
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
-const CERT_DIR = process.env.CB_DOCKER_CERT_DIR
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
+const CERT_DIR = process.env.SH_DOCKER_CERT_DIR
   ?? new URL('../../../infra/docker/staging/certs', import.meta.url).pathname;
-const HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
+const HOST = process.env.SH_DOCKER_HOST ?? '127.0.0.1';
+const PORT = Number(process.env.SH_DOCKER_PORT ?? 2376);
 const SECRET = 'test-bootstrap-secret-0123456789';
 /** Kept low: this file runs the full provisioning saga several times. */
-const CYCLES = Number(process.env.CB_PAUSE_CYCLES ?? 3);
+const CYCLES = Number(process.env.SH_PAUSE_CYCLES ?? 3);
 
 let pool: Pool; let docker: Docker; let secrets: ReturnType<typeof createSecretStore>;
 let redis: Redis; let queue: Queue<ProvisioningJobData>;
@@ -43,7 +43,7 @@ let kekDir: string; let orgId: string; let up = false; let seq = 0;
 const mkRef = () => 'q' + String(Date.now() % 100000) + String(++seq).padStart(14, 'x');
 
 beforeAll(async () => {
-  kekDir = mkdtempSync(join(tmpdir(), 'cb-p2c-'));
+  kekDir = mkdtempSync(join(tmpdir(), 'sh-p2c-'));
   writeFileSync(join(kekDir, 'k1.key'), randomBytes(32));
   try {
     pool = new Pool({ connectionString: DB, max: 6, connectionTimeoutMillis: 2000 });
@@ -51,7 +51,7 @@ beforeAll(async () => {
     docker = createDocker({ host: HOST, port: PORT, certDir: CERT_DIR, timeoutMs: 20_000 });
     await docker.ping();
     secrets = createSecretStore(pool, createEnvelope({ kekDir, kekId: 'k1' }));
-    redis = createRedis(process.env.CB_REDIS_URL ?? 'redis://127.0.0.1:56379');
+    redis = createRedis(process.env.SH_REDIS_URL ?? 'redis://127.0.0.1:56379');
     await redis.ping();
     queue = createQueue(redis);
     const { rows } = await pool.query<{ id: string }>(
@@ -113,7 +113,7 @@ beforeEach(async () => {
 function sagas() {
   return buildSagas({
     pool, docker, secrets, bootstrapSecret: SECRET,
-    healthTimeoutMs: 60_000, projectDomain: 'corebase.test',
+    healthTimeoutMs: 60_000, projectDomain: 'steadhold.test',
   });
 }
 
@@ -282,8 +282,8 @@ describe('P2c — pause and resume on a real node', () => {
       // Three containers, all running and all labelled with the ref — which is
       // what `verify_gone` lists by, so a container missing the label is one the
       // purge would leave behind.
-      const running = await docker.listContainers(`com.corebase.project.ref=${p.ref}`);
-      const roles = running.map((c) => c.Labels?.['com.corebase.role']).sort();
+      const running = await docker.listContainers(`com.steadhold.project.ref=${p.ref}`);
+      const roles = running.map((c) => c.Labels?.['com.steadhold.role']).sort();
       expect(roles).toEqual(['database', 'pooler', 'postgrest']);
 
       // And the data API actually answers. `/ready` rather than `/live`: the
@@ -315,7 +315,7 @@ describe('P2c — pause and resume on a real node', () => {
       await runSaga('pause_project', p.id);
       // Gone, not merely stopped: a paused project gives its RAM back, and a
       // stopped-but-present container is a booking nobody credited.
-      expect(await docker.listContainers(`com.corebase.project.ref=${p.ref}`)).toHaveLength(0);
+      expect(await docker.listContainers(`com.steadhold.project.ref=${p.ref}`)).toHaveLength(0);
       const paused = await pool.query<{ postgrest_container_id: string | null }>(
         `select postgrest_container_id from project_databases where project_id = $1`, [p.id]);
       expect(paused.rows[0]!.postgrest_container_id).toBeNull();
@@ -324,8 +324,8 @@ describe('P2c — pause and resume on a real node', () => {
       // Without the resume steps a resumed project would have a database and a
       // pooler and **no data API** — fully recovered in the dashboard and
       // answering nothing on /rest/v1.
-      const roles = (await docker.listContainers(`com.corebase.project.ref=${p.ref}`))
-        .map((c) => c.Labels?.['com.corebase.role']).sort();
+      const roles = (await docker.listContainers(`com.steadhold.project.ref=${p.ref}`))
+        .map((c) => c.Labels?.['com.steadhold.role']).sort();
       expect(roles).toEqual(['database', 'pooler', 'postgrest']);
       const node = (await pool.query<{ address: string }>(
         `select n.address from nodes n
@@ -373,9 +373,9 @@ describe('P2c — pause and resume on a real node', () => {
       // Exactly what `resolveProject` does on every data-plane request. Before
       // P5a nothing did this, and a project whose users only signed up and logged
       // in was paused under them: the auth module's connections open as
-      // `corebase_auth`, and the scan counts `developer` alone.
+      // `steadhold_auth`, and the scan counts `developer` alone.
       const { createTrafficMeter } = await import(
-        '@corebase/api/modules/project-auth/traffic.ts');
+        '@steadhold/api/modules/project-auth/traffic.ts');
       createTrafficMeter(pool).seen(used.id);
       await new Promise((r) => setTimeout(r, 250));
 

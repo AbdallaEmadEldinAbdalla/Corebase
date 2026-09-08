@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { createEnvelope } from '@corebase/crypto';
-import { createSecretStore, SECRET_NAMES } from '@corebase/secrets';
+import { createEnvelope } from '@steadhold/crypto';
+import { createSecretStore, SECRET_NAMES } from '@steadhold/secrets';
 import { createDocker, type Docker } from './docker.ts';
 import { buildSagas } from './jobs/sagas.ts';
 import { registerNode } from './placement.ts';
@@ -25,12 +25,12 @@ import type { SagaStep, SagaContext } from './jobs/runner.ts';
  * constrains it, and the *only* thing standing between it and every end-user's
  * password hash is the absence of a table grant.
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
-const CERT_DIR = process.env.CB_DOCKER_CERT_DIR
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
+const CERT_DIR = process.env.SH_DOCKER_CERT_DIR
   ?? join(process.cwd(), '../../infra/docker/staging/certs');
-const HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
+const HOST = process.env.SH_DOCKER_HOST ?? '127.0.0.1';
+const PORT = Number(process.env.SH_DOCKER_PORT ?? 2376);
 const SECRET = 'test-bootstrap-secret-0123456789';
 
 let pool: Pool; let docker: Docker; let orgId: string; let kekDir: string;
@@ -39,7 +39,7 @@ let up = false; let reason = '';
 
 beforeAll(async () => {
   pool = new Pool({ connectionString: DB, max: 6, connectionTimeoutMillis: 1500 });
-  kekDir = mkdtempSync(join(tmpdir(), 'cb-kek-p4a-'));
+  kekDir = mkdtempSync(join(tmpdir(), 'sh-kek-p4a-'));
   writeFileSync(join(kekDir, 'kek_2026_09.key'), randomBytes(32));
   try {
     await pool.query('select 1');
@@ -145,7 +145,7 @@ describe('P4a — the schema is there and shaped as designed', () => {
       const names = rows.map((r) => r.table_name);
       // The doc's six. `identities` is present though unpopulated until OAuth
       // (V1.1) on purpose: a table added later is a migration every customer has
-      // to run, and the shape mirrors GoTrue's to ease migration *to* Corebase.
+      // to run, and the shape mirrors GoTrue's to ease migration *to* Steadhold.
       expect(names).toEqual([
         'audit_log_entries', 'identities', 'one_time_tokens',
         'refresh_tokens', 'sessions', 'users',
@@ -256,7 +256,7 @@ describe('P4a — only the auth role can reach the password hashes', () => {
     } finally { await dev.end(); }
   });
 
-  t('corebase_auth can log in and own its rows', async () => {
+  t('steadhold_auth can log in and own its rows', async () => {
     const p = await provision();
     const pw = await secrets.get(p.id, SECRET_NAMES.authRole);
     expect(pw, 'the auth role needs a password stored at provision').toBeTruthy();
@@ -308,7 +308,7 @@ describe('P4a — only the auth role can reach the password hashes', () => {
     } finally { await su.end(); }
   });
 
-  t('the image audit now requires corebase_auth, so an old image fails loudly',
+  t('the image audit now requires steadhold_auth, so an old image fails loudly',
     async () => {
       // The same guard that catches an image predating the role model (D-108's
       // lesson): a project provisioned against an image without this role would

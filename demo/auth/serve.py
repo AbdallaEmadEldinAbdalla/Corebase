@@ -18,7 +18,7 @@ import urllib.request
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
-MAILPIT = os.environ.get("CB_MAILPIT_API", "http://127.0.0.1:58025").rstrip("/")
+MAILPIT = os.environ.get("SH_MAILPIT_API", "http://127.0.0.1:58025").rstrip("/")
 ALLOWED = ("/api/v1/messages", "/api/v1/message/")
 
 

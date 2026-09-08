@@ -23,7 +23,7 @@ pool_mode = transaction
 auth_type = scram-sha-256
 auth_user = pgbouncer_auth
 auth_dbname = postgres
-auth_query = SELECT usename, passwd FROM corebase.pgbouncer_lookup($1)
+auth_query = SELECT usename, passwd FROM steadhold.pgbouncer_lookup($1)
 auth_file = /etc/pgbouncer/userlist.txt
 
 ; The asymmetry is the whole point: 200 client connections against 8 server slots.

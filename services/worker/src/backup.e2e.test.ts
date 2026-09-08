@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { createEnvelope } from '@corebase/crypto';
-import { createSecretStore, SECRET_NAMES } from '@corebase/secrets';
+import { createEnvelope } from '@steadhold/crypto';
+import { createSecretStore, SECRET_NAMES } from '@steadhold/secrets';
 import { createDocker, type Docker } from './docker.ts';
 import { buildSagas } from './jobs/sagas.ts';
 import { registerNode } from './placement.ts';
@@ -27,12 +27,12 @@ import { loadBackupEnv } from './staging-env.ts';
  * is reachable from inside the project's own private network, WAL actually lands
  * in it, and what lands is encrypted.
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
-const CERT_DIR = process.env.CB_DOCKER_CERT_DIR
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
+const CERT_DIR = process.env.SH_DOCKER_CERT_DIR
   ?? join(process.cwd(), '../../infra/docker/staging/certs');
-const HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
+const HOST = process.env.SH_DOCKER_HOST ?? '127.0.0.1';
+const PORT = Number(process.env.SH_DOCKER_PORT ?? 2376);
 const SECRET = 'test-bootstrap-secret-0123456789';
 
 /**
@@ -49,7 +49,7 @@ let up = false; let reason = '';
 beforeAll(async () => {
   loadBackupEnv();
   pool = new Pool({ connectionString: DB, max: 6, connectionTimeoutMillis: 1500 });
-  kekDir = mkdtempSync(join(tmpdir(), 'cb-kek-p3a-'));
+  kekDir = mkdtempSync(join(tmpdir(), 'sh-kek-p3a-'));
   writeFileSync(join(kekDir, 'kek_2026_09.key'), randomBytes(32));
   try {
     await pool.query('select 1');
@@ -146,14 +146,14 @@ const placement = async (projectId: string) => (await pool.query<{
 
 /** What the object store actually holds under a prefix, via mc inside MinIO. */
 async function objectsUnder(prefix: string): Promise<string[]> {
-  const bucket = process.env['CB_BACKUP_S3_BUCKET']!;
+  const bucket = process.env['SH_BACKUP_S3_BUCKET']!;
   const { execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const run = promisify(execFile);
   // `--insecure`: the store serves TLS with a self-signed certificate, and mc
   // without this flag fails silently into an empty listing — which reads as "the
   // backup did not land" rather than "the listing could not be made".
-  const { stdout } = await run('docker', ['exec', 'cb-object-store',
+  const { stdout } = await run('docker', ['exec', 'sh-object-store',
     'mc', '--insecure', 'ls', '--recursive', `local/${bucket}${prefix}`])
     .catch((e: Error) => { throw new Error(`mc ls failed: ${e.message.slice(0, 300)}`); });
   return stdout.split('\n').map((l) => l.trim()).filter(Boolean);
@@ -270,8 +270,8 @@ describe('P3a — the repo exists and is the project\'s own', () => {
 
   t('a project with no repo configured provisions, loudly, unless backups are required', async () => {
     await registerNode(pool, { hostname: 'data-node-local', ramTotalMb: 8192, diskTotalGb: 200, address: '127.0.0.1' });
-    const saved = process.env['CB_BACKUP_S3_ENDPOINT'];
-    delete process.env['CB_BACKUP_S3_ENDPOINT'];
+    const saved = process.env['SH_BACKUP_S3_ENDPOINT'];
+    delete process.env['SH_BACKUP_S3_ENDPOINT'];
     try {
       const p = await mkProject('free');
       const logs = await runSteps(p.id, UP_TO_BACKUPS);
@@ -283,7 +283,7 @@ describe('P3a — the repo exists and is the project\'s own', () => {
       await expect(runSteps(p.id, ['configure_backups'], { requireBackups: true }))
         .rejects.toThrow(/backups are required/);
     } finally {
-      if (saved) process.env['CB_BACKUP_S3_ENDPOINT'] = saved;
+      if (saved) process.env['SH_BACKUP_S3_ENDPOINT'] = saved;
     }
   });
 });

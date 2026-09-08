@@ -2,9 +2,9 @@
 import { Client } from 'pg';
 import { runMigrations } from './index.ts';
 
-const url = process.env.CB_CONTROL_DATABASE_URL;
+const url = process.env.SH_CONTROL_DATABASE_URL;
 if (!url) {
-  console.error('CB_CONTROL_DATABASE_URL is not set.');
+  console.error('SH_CONTROL_DATABASE_URL is not set.');
   process.exit(2);
 }
 const dir = process.argv[2] ?? 'migrations';

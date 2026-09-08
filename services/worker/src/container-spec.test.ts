@@ -6,7 +6,7 @@ import {
 
 const base = {
   ref: 'kxqwrtplmzensfba2345', projectId: '11111111-1111-4111-8111-111111111111',
-  volumeName: 'cb-kxqwrtplmzensfba2345-pgdata', hostPort: 5433, ramLimitMb: 512,
+  volumeName: 'sh-kxqwrtplmzensfba2345-pgdata', hostPort: 5433, ramLimitMb: 512,
   bootstrapSecret: 'a-long-enough-dev-secret',
 };
 
@@ -59,7 +59,7 @@ describe('buildContainerSpec', () => {
       .HostConfig.RestartPolicy.Name).toBe('unless-stopped');
   });
   it('names containers by ref', () => {
-    expect(containerName(base.ref)).toBe('cb-kxqwrtplmzensfba2345');
+    expect(containerName(base.ref)).toBe('sh-kxqwrtplmzensfba2345');
   });
   it('puts PGDATA in a subdirectory so the volume root is not the data dir', () => {
     // initdb refuses a non-empty directory; volume roots carry lost+found
@@ -82,7 +82,7 @@ describe('noisy-neighbour walls (D-055)', () => {
 
   it('caps the pooler processes too, lower — it is one single-threaded process', () => {
     const pooler = buildPoolerSpec({
-      ref: base.ref, networkName: 'cb-x-net', hostPort: 6433, authPassword: 'pw',
+      ref: base.ref, networkName: 'sh-x-net', hostPort: 6433, authPassword: 'pw',
     });
     expect(pooler.HostConfig.PidsLimit).toBe(64);
   });
@@ -96,7 +96,7 @@ describe('noisy-neighbour walls (D-055)', () => {
     // restarted its own database.
     expect(buildContainerSpec(base).HostConfig.Init).toBe(true);
     expect(buildPoolerSpec({
-      ref: base.ref, networkName: 'cb-x-net', hostPort: 6433, authPassword: 'pw',
+      ref: base.ref, networkName: 'sh-x-net', hostPort: 6433, authPassword: 'pw',
     }).HostConfig.Init).toBe(true);
   });
 

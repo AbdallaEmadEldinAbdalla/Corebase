@@ -1,8 +1,8 @@
-# SDK Spec (`@corebase/core`)
+# SDK Spec (`@steadhold/core`)
 
 ## Purpose
 
-The API surface of `@corebase/core` (proposal §46, §79, §108): the TypeScript-first client library for the data plane — database queries, auth, storage, and a reserved realtime namespace. Defines the `{ data, error }` contract, token persistence and refresh behavior, the generated-types story, and the compatibility policy. The REST semantics the query builder maps onto are owned by [REST API design](../04-data-api/01-rest-api-design.md); the key/role model by [API keys & roles](../04-data-api/03-api-keys-and-roles.md).
+The API surface of `@steadhold/core` (proposal §46, §79, §108): the TypeScript-first client library for the data plane — database queries, auth, storage, and a reserved realtime namespace. Defines the `{ data, error }` contract, token persistence and refresh behavior, the generated-types story, and the compatibility policy. The REST semantics the query builder maps onto are owned by [REST API design](../04-data-api/01-rest-api-design.md); the key/role model by [API keys & roles](../04-data-api/03-api-keys-and-roles.md).
 
 ## Design
 
@@ -16,11 +16,11 @@ The API surface of `@corebase/core` (proposal §46, §79, §108): the TypeScript
 ### `createClient(url, key, options?)`
 
 ```ts
-import { createClient } from "@corebase/core";
+import { createClient } from "@steadhold/core";
 
-const corebase = createClient<Database>(
-  "https://kxqwrtplmzensfba.corebase.co",   // or http://localhost:54321 — nothing else changes
-  process.env.COREBASE_ANON_KEY!,
+const steadhold = createClient<Database>(
+  "https://kxqwrtplmzensfba.steadhold.app",   // or http://localhost:54321 — nothing else changes
+  process.env.STEADHOLD_ANON_KEY!,
   {
     auth: {
       persist: "localStorage",   // "localStorage" | "memory" | StorageAdapter
@@ -72,7 +72,7 @@ A PostgREST-compatible fluent builder (D-011) — each chain compiles to one RES
 | `.rpc(fn, args?)` | `POST /rest/v1/rpc/<fn>` | Postgres functions; read-only fns may use GET per the REST doc |
 
 ```ts
-const { data, error, count } = await corebase
+const { data, error, count } = await steadhold
   .from("posts")
   .select("id, title, author:users(name)", { count: "exact" })
   .eq("published", true)
@@ -85,7 +85,7 @@ const { data, error, count } = await corebase
 Every terminal call resolves to `{ data, error }` (plus `count`/`status` where meaningful). **API errors never throw.**
 
 ```ts
-type CorebaseError = {
+type SteadholdError = {
   code: string;      // PostgREST/PG code ("PGRST116", "23505") or platform code (D-032)
   message: string;
   details: string | null;
@@ -94,7 +94,7 @@ type CorebaseError = {
                               // null when a PostgREST pass-through body lacks it
 };
 // exactly one of the two is non-null:
-{ data: T, error: null } | { data: null, error: CorebaseError }
+{ data: T, error: null } | { data: null, error: SteadholdError }
 ```
 
 - `request_id` exists as the support handle: it is what a user pastes into a ticket and what joins a client-side error to the platform's logs (D-032).
@@ -102,10 +102,10 @@ type CorebaseError = {
 - Network failures resolve as `error` with `code: "NETWORK_ERROR"` — a runtime condition, not a bug.
 - Rationale: forces error handling into the visible control flow, matches the incumbent's contract (migration ergonomics), and keeps `await` chains safe in UI code.
 
-### Generated types — `corebase gen types`
+### Generated types — `steadhold gen types`
 
 ```
-corebase gen types [--local] [--schema public] > src/corebase.types.ts
+steadhold gen types [--local] [--schema public] > src/steadhold.types.ts
 ```
 
 The CLI introspects the linked project's database (or the local stack with `--local`) and emits a `Database` type; `createClient<Database>()` then types every table, column, filter, insert/update payload, and RPC end-to-end. Generated shape, briefly:
@@ -149,7 +149,7 @@ Wraps `/auth/v1/*` ([flows](../05-auth/03-flows.md), [sessions & tokens](../05-a
 
 **Token persistence & auto-refresh (specified):**
 
-- Sessions persist through the configured adapter under a project-scoped key (`cb-<ref>-auth`).
+- Sessions persist through the configured adapter under a project-scoped key (`sh-<ref>-auth`).
 - With `autoRefresh: true`, a refresh is scheduled at **`exp − 60s`**. Failure → retries with exponential backoff (1s, 2s, 4s… capped 30s, jittered) until success or a terminal auth error (revoked/reused refresh token → `SIGNED_OUT` event, session cleared).
 - Timers are coarse (one timer per client, re-armed on refresh), and a refresh is also attempted lazily if a request finds the access token already expired (laptop-asleep case) — the request waits for the refresh, then proceeds; concurrent requests share one in-flight refresh.
 - **Multi-tab sync:** with the `localStorage` adapter, the SDK listens to `storage` events; a refresh or sign-out in one tab updates every tab's in-memory session and fires `onAuthStateChange` — and tabs race-protect refresh with a short-lived storage lock so only one tab refreshes per rotation (rotation + reuse detection makes double-refresh a security event, not just waste).
@@ -174,9 +174,9 @@ All storage access rides the same two headers, so RLS-on-objects (D-017) applies
 Realtime is post-V1 (D-030). The SDK **ships the namespace as a typed stub** rather than omitting it:
 
 ```ts
-corebase.channel("room-1");
-// throws CorebaseNotImplementedError:
-// "Realtime ships post-V1 (see roadmap). corebase.channel() is reserved and will keep this signature."
+steadhold.channel("room-1");
+// throws SteadholdNotImplementedError:
+// "Realtime ships post-V1 (see roadmap). steadhold.channel() is reserved and will keep this signature."
 ```
 
 `channel(name).on(event, filter, cb)` / `.subscribe()` signatures are declared (matching [channels, broadcast, presence](../08-realtime/02-channels-broadcast-presence.md)) so app code and types written today survive the feature landing. The stub throws immediately and synchronously — a loud programmer-error, consistent with the contract above (it is not an API error, so it does not return `{ error }`). Cost: ~0.2 kB. Alternative considered — omitting the namespace — rejected: it makes the post-V1 landing a breaking-feeling minor release and invites third-party polyfills squatting on the name.
@@ -184,23 +184,23 @@ corebase.channel("room-1");
 ### Versioning & compatibility
 
 - **SDK follows semver.** Breaking changes to any documented type or method → major. The `{ data, error }` shape and builder method names are the frozen core surface.
-- Every request sends `X-Client-Info: corebase-js/<version>`. The gateway may respond `X-Corebase-Min-Client: <version>`; an older SDK logs **one** console warning per session (never a failure — the server stays compatible per the [release & versioning policy](../13-quality/02-release-and-versioning.md); the header is the deprecation nudge, not an enforcement gate).
+- Every request sends `X-Client-Info: steadhold-js/<version>`. The gateway may respond `X-Steadhold-Min-Client: <version>`; an older SDK logs **one** console warning per session (never a failure — the server stays compatible per the [release & versioning policy](../13-quality/02-release-and-versioning.md); the header is the deprecation nudge, not an enforcement gate).
 - Data-plane path versions (`/rest/v1` etc.) are pinned per SDK major.
 
 ### Supabase-migration ergonomics (one honest paragraph)
 
-The surface is deliberately similar to `supabase-js` — same mental model, near-identical method names, same `{ data, error }` idiom. That is a considered position, not an accident: D-011 already embeds PostgREST, so the query semantics are shared anyway, and a familiar surface lowers switching cost *toward* Corebase in exactly the lane the [competitive analysis](../00-foundation/02-competitive-analysis.md) says we compete in (portability, D-006 — which cuts both ways, and we accept that). It is a compatible-feeling surface, not a compatibility promise: we do not track their API changes, we omit what V1 doesn't have instead of stubbing it silently (realtime being the one explicit, loudly-throwing exception above), and where their ergonomics have known warts we are free to diverge in a major version.
+The surface is deliberately similar to `supabase-js` — same mental model, near-identical method names, same `{ data, error }` idiom. That is a considered position, not an accident: D-011 already embeds PostgREST, so the query semantics are shared anyway, and a familiar surface lowers switching cost *toward* Steadhold in exactly the lane the [competitive analysis](../00-foundation/02-competitive-analysis.md) says we compete in (portability, D-006 — which cuts both ways, and we accept that). It is a compatible-feeling surface, not a compatibility promise: we do not track their API changes, we omit what V1 doesn't have instead of stubbing it silently (realtime being the one explicit, loudly-throwing exception above), and where their ergonomics have known warts we are free to diverge in a major version.
 
 ## Decisions
 
-- **D-139 — The SDK ships the realtime namespace as a typed, reserved stub (`channel()`/`.on()`/`.subscribe()` signatures declared) that throws `CorebaseNotImplementedError` synchronously until realtime ships post-V1 (D-030); API errors otherwise never throw — every terminal call resolves `{ data, error }` with `CorebaseError { code, message, details, hint }`, and throwing is reserved for programmer errors (including unfiltered update/delete, rejected client-side).** *(Rationale: reserving the namespace makes realtime's later arrival additive instead of surface-breaking and keeps types stable for early adopters; the never-throw-for-API-errors contract keeps error handling in visible control flow and matches the ecosystem contract migrating developers already know.)*
+- **D-139 — The SDK ships the realtime namespace as a typed, reserved stub (`channel()`/`.on()`/`.subscribe()` signatures declared) that throws `SteadholdNotImplementedError` synchronously until realtime ships post-V1 (D-030); API errors otherwise never throw — every terminal call resolves `{ data, error }` with `SteadholdError { code, message, details, hint }`, and throwing is reserved for programmer errors (including unfiltered update/delete, rejected client-side).** *(Rationale: reserving the namespace makes realtime's later arrival additive instead of surface-breaking and keeps types stable for early adopters; the never-throw-for-API-errors contract keeps error handling in visible control flow and matches the ecosystem contract migrating developers already know.)*
 
 (Packaging, the 15 kB budget, and the dual-header scheme are spec details implementing D-026/D-029/D-034, not new decisions.)
 
 ## Open Questions
 
 - **OQ-139** — Multi-tab session sync via `storage` events works everywhere but is lossy on same-tab writes; adopt `BroadcastChannel` (with storage-event fallback) once browser-support review confirms the matrix, or keep storage-events-only for V1?
-- **OQ-039** — `corebase gen types` output as a committed file is the V1 story; is a published-per-project types package (registry-hosted, auto-regenerated on `db push`) worth the infrastructure post-V1?
+- **OQ-039** — `steadhold gen types` output as a committed file is the V1 story; is a published-per-project types package (registry-hosted, auto-regenerated on `db push`) worth the infrastructure post-V1?
 
 ## Dependencies
 

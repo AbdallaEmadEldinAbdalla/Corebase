@@ -1,4 +1,4 @@
-import { ERROR_CODES } from '@corebase/types';
+import { ERROR_CODES } from '@steadhold/types';
 import { ApiError } from './errors.ts';
 
 /**

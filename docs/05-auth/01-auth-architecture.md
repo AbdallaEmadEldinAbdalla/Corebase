@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The build-vs-adopt decision for Corebase Auth (D-013) with its honest tradeoffs, the deployment shape of the auth service, the per-project `auth` schema, and the V1 API surface. This is **customer-app auth**: every Corebase project gets an auth service for *its* end-users, the way Supabase Auth (GoTrue) serves a Supabase project. Dashboard login to Corebase itself is control-plane auth — session cookies and PATs against platform accounts — and is specified in [platform API](../02-control-plane/02-platform-api.md), not here. The two share nothing: no tables, no tokens, no keys.
+The build-vs-adopt decision for Steadhold Auth (D-013) with its honest tradeoffs, the deployment shape of the auth service, the per-project `auth` schema, and the V1 API surface. This is **customer-app auth**: every Steadhold project gets an auth service for *its* end-users, the way Supabase Auth (GoTrue) serves a Supabase project. Dashboard login to Steadhold itself is control-plane auth — session cookies and PATs against platform accounts — and is specified in [platform API](../02-control-plane/02-platform-api.md), not here. The two share nothing: no tables, no tokens, no keys.
 
 The critical review was blunt that auth "is also an entire product" ([critical review §2.3](../00-foundation/03-critical-review.md)) — the proposal's §16–18 list of features hides refresh rotation, reuse detection, JWKS, enumeration resistance, and an entire email subsystem. This doc and its four siblings ([sessions & tokens](02-sessions-and-tokens.md), [flows](03-flows.md), [email infrastructure](04-email-infrastructure.md), [OAuth & future](05-oauth-and-future.md)) are the correction.
 
@@ -16,7 +16,7 @@ Two credible options existed. D-013 locked the second; the reasoning deserves a 
 |---|---|---|
 | Security maturity | **Battle-tested flows**: a decade of production hardening, CVEs found and fixed by someone else, enumeration/timing/rotation edge cases already handled | Every security mistake is **ours** — no inherited hardening |
 | Language & stack | Go service in an otherwise-TS monolith (D-010): second toolchain, second deploy artifact, second set of reviewers | One language across API/auth/CLI/SDK; auth is a module of the monolith (D-020) |
-| Schema control | GoTrue brings **its own schema and migration history**; forking means tracking upstream migrations or diverging forever | Full control of the `auth` schema — it can be designed for `corebase export` (D-004) from day one |
+| Schema control | GoTrue brings **its own schema and migration history**; forking means tracking upstream migrations or diverging forever | Full control of the `auth` schema — it can be designed for `steadhold export` (D-004) from day one |
 | Ops surface | Separate process per deployment, its own config surface, health checks, version upgrades; multi-tenant GoTrue is not its native mode | Zero additional process; rides the monolith's deploy, logging, OTel |
 | Scope pressure | Ships ~15 providers, SAML, phone, MFA — features V1 must **not** expose but must still patch | Frozen V1 scope: email/password, verification, reset, JWT + rotating refresh tokens with reuse detection. Nothing else (see the scope-freeze rule in [OAuth & future](05-oauth-and-future.md)) |
 | Effort | Days to first boot, weeks to make it multi-tenant and fit our key model (D-014/D-029) | Weeks to build, but every line is in-scope |
@@ -40,10 +40,10 @@ Every item below is a hard requirement on the V1 implementation. Each is enforce
 
 ### Deployment shape: one multi-tenant auth module
 
-Auth is a **module of the modular monolith** (D-020) on the app node — but it serves **data-plane** traffic at `https://<ref>.corebase.co/auth/v1/*` (request lifecycle C in [system architecture](../01-architecture/01-system-architecture.md)). One process serves all projects:
+Auth is a **module of the modular monolith** (D-020) on the app node — but it serves **data-plane** traffic at `https://<ref>.steadhold.app/auth/v1/*` (request lifecycle C in [system architecture](../01-architecture/01-system-architecture.md)). One process serves all projects:
 
 ```text
-client ── https://<ref>.corebase.co/auth/v1/token?grant_type=password
+client ── https://<ref>.steadhold.app/auth/v1/token?grant_type=password
   1. Cloudflare → Caddy → gateway module: extract ref from Host,
      routing-table lookup (D-051), auth-tier rate limits (D-033)
   2. in-process dispatch to the auth module with the resolved
@@ -53,7 +53,7 @@ client ── https://<ref>.corebase.co/auth/v1/token?grant_type=password
        - auth config: site_url, redirect allowlist, email templates,
          autoconfirm flag, token lifetimes (control-plane `project_settings`)
   4. auth module connects to the PROJECT's database through its
-     PgBouncer (reserved `corebase_auth` role) and operates on the
+     PgBouncer (reserved `steadhold_auth` role) and operates on the
      project's `auth` schema
   5. tokens issued with the project's key; response to client
 ```
@@ -66,7 +66,7 @@ What we give up: per-project crash/upgrade isolation for auth, and the option of
 
 ### The `auth` schema — lives in each project's database
 
-Customers' users are **their** data. The schema below is created in every project's Postgres at provision time (step 5d of lifecycle A in [system architecture](../01-architecture/01-system-architecture.md)), so `corebase export` (D-004) carries users, sessions, and identities out with a plain `pg_dump`. Nothing about a project's end-users is stored in the control plane.
+Customers' users are **their** data. The schema below is created in every project's Postgres at provision time (step 5d of lifecycle A in [system architecture](../01-architecture/01-system-architecture.md)), so `steadhold export` (D-004) carries users, sessions, and identities out with a plain `pg_dump`. Nothing about a project's end-users is stored in the control plane.
 
 ```sql
 CREATE SCHEMA auth;
@@ -74,7 +74,7 @@ CREATE SCHEMA auth;
 -- Only the platform's reserved role may touch auth tables directly.
 -- anon/authenticated get EXECUTE on helper functions only.
 REVOKE ALL ON SCHEMA auth FROM PUBLIC;
-GRANT USAGE ON SCHEMA auth TO corebase_auth;
+GRANT USAGE ON SCHEMA auth TO steadhold_auth;
 
 CREATE TABLE auth.users (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -157,20 +157,20 @@ Notes:
 
 - **`auth.uid()`** — the RLS helper (`SELECT (current_setting('request.jwt.claims', true)::jsonb ->> 'sub')::uuid`) is created alongside this schema; it is plain SQL any Postgres can run, which is what keeps the portability claim honest (contradiction C-1 resolution). Detail: [RLS design](../06-security/02-rls-design.md).
 - **`raw_user_meta_data` is user-writable** (via `PUT /auth/v1/user`); RLS policies and application authorization must never trust it. Privileged flags belong in `raw_app_meta_data` or app tables. Guidance in [sessions & tokens](02-sessions-and-tokens.md).
-- Row schema mirrors GoTrue's shape where reasonable (`raw_user_meta_data`, `identities`) deliberately: it eases migration *to* Corebase from Supabase, the same argument as D-011.
+- Row schema mirrors GoTrue's shape where reasonable (`raw_user_meta_data`, `identities`) deliberately: it eases migration *to* Steadhold from Supabase, the same argument as D-011.
 - Soft delete (`deleted_at`) frees the email for re-registration via the partial unique index while preserving FK integrity for the app's rows.
 
 ### Password hashing (D-111)
 
 **scrypt**, not argon2id (**D-313**, extending D-211): argon2id needs a native module, and this module absorbs every project's login load in one process (D-110) — so the compiled dependency would sit on the hottest auth path on the platform. Parameters live in the hash and a weaker hash is upgraded on the next successful verify, which are D-111's properties and the ones that matter. The argon2id profile below is kept for the record of what was intended and what a native toolchain would buy: `memory = 19456 KiB (19 MiB), iterations = 2, parallelism = 1` (OWASP first-recommendation profile), salt 16 bytes, tag 32 bytes, PHC-encoded in `encrypted_password`. Rationale: memory-hardness is the point — GPU/ASIC resistance per dollar — and the 19 MiB/t2 profile keeps a verify under ~50 ms on app-node cores, which matters because the multi-tenant auth module absorbs every project's login load; parameters are stored per-hash (PHC), so they can be raised later and old hashes **upgraded transparently on next successful login** (verify with old params → rehash with current → update row).
 
-**bcrypt compatibility for imports** *(not yet built — D-313)*: `$2a$/$2b$/$2y$` hashes are to be accepted at verify time so customers can migrate user tables from bcrypt-based systems (Supabase/GoTrue included) without password resets; on the first successful login the hash is upgraded to argon2id. Corebase never *writes* bcrypt.
+**bcrypt compatibility for imports** *(not yet built — D-313)*: `$2a$/$2b$/$2y$` hashes are to be accepted at verify time so customers can migrate user tables from bcrypt-based systems (Supabase/GoTrue included) without password resets; on the first successful login the hash is upgraded to argon2id. Steadhold never *writes* bcrypt.
 
 Password policy V1: minimum 8 characters, maximum 72 bytes rejected only for bcrypt-imported logins (argon2 has no 72-byte limit; we cap at 1024 bytes to bound hashing cost), no composition rules (NIST 800-63B), optional project-configured minimum length up to 32.
 
 ### V1 API surface
 
-All endpoints under `https://<ref>.corebase.co/auth/v1`. `apikey: <anon JWT>` header required (gateway-enforced, D-029); `Authorization: Bearer <access JWT>` where noted. Uniform error envelope with `request_id` (D-032).
+All endpoints under `https://<ref>.steadhold.app/auth/v1`. `apikey: <anon JWT>` header required (gateway-enforced, D-029); `Authorization: Bearer <access JWT>` where noted. Uniform error envelope with `request_id` (D-032).
 
 | Endpoint | Method | Auth | Purpose |
 |---|---|---|---|
@@ -192,14 +192,14 @@ Everything not in this table is not in V1 — see the scope-freeze rule ([OAuth 
 
 ## Decisions
 
-- **D-110 — Auth is one multi-tenant module of the monolith serving all projects at `<ref>.corebase.co/auth/v1/*`; per-project auth containers are rejected. Project context (database, signing key handle, auth config: `site_url`, redirect allowlist, email templates, lifetimes) is resolved by the gateway routing table per request; per-project state in the module is limited to caches of config and KMS-decrypted signing keys.** *(Rationale: an auth container per project re-creates the idle-RAM problem D-008 exists to kill (~80–120 MB × N idle projects) for the lightest per-project workload on the platform; tenant separation is preserved structurally because user data lives in physically separate per-project databases (D-009) and signing uses per-project keys (D-014).)*
-- **D-111 — Password hashing is argon2id (m=19456 KiB, t=2, p=1, salt 16 B, tag 32 B, PHC-encoded), with parameter upgrades applied transparently on next successful verify; bcrypt (`$2a/$2b/$2y`) is accepted verify-only for imported users and rehashed to argon2id on first login.** *(Rationale: memory-hard hashing is the current best practice and the OWASP baseline profile bounds per-login CPU/RAM cost on the shared auth module; verify-time bcrypt compatibility makes user-table migration to Corebase possible without a mass password reset — portability cuts both ways (D-004).)*
+- **D-110 — Auth is one multi-tenant module of the monolith serving all projects at `<ref>.steadhold.app/auth/v1/*`; per-project auth containers are rejected. Project context (database, signing key handle, auth config: `site_url`, redirect allowlist, email templates, lifetimes) is resolved by the gateway routing table per request; per-project state in the module is limited to caches of config and KMS-decrypted signing keys.** *(Rationale: an auth container per project re-creates the idle-RAM problem D-008 exists to kill (~80–120 MB × N idle projects) for the lightest per-project workload on the platform; tenant separation is preserved structurally because user data lives in physically separate per-project databases (D-009) and signing uses per-project keys (D-014).)*
+- **D-111 — Password hashing is argon2id (m=19456 KiB, t=2, p=1, salt 16 B, tag 32 B, PHC-encoded), with parameter upgrades applied transparently on next successful verify; bcrypt (`$2a/$2b/$2y`) is accepted verify-only for imported users and rehashed to argon2id on first login.** *(Rationale: memory-hard hashing is the current best practice and the OWASP baseline profile bounds per-login CPU/RAM cost on the shared auth module; verify-time bcrypt compatibility makes user-table migration to Steadhold possible without a mass password reset — portability cuts both ways (D-004).)*
 
 ### Decided while building (Phase 4)
 
 - **D-317 — The `/auth/v1/*` error codes are lowercase and GoTrue-compatible (`invalid_credentials`, `email_not_confirmed`, `weak_password`, `over_rate_limit`, `invalid_token`, `invalid_grant`), unlike the control plane's `UPPER_SNAKE`.** *(Rationale: these codes are matched by client code — a supabase-js app branches on `error.code === 'invalid_credentials'`. Renaming them to fit our style makes every ported app's error handling fall through to its generic branch. The uniformity within the set is what matters: one code covers a wrong password, an unknown email and a banned user, because distinguishing them is an enumeration oracle.)*
 - **D-318 — Until the gateway exists (Phase 5), the module resolves the project from the signed `apikey` rather than the Host header; `/.well-known/jwks.json`, being unauthenticated, takes the ref from the Host subdomain or `?ref=`.** *(Rationale: a Host header is an assertion the caller wrote; the anon key arrives signed by the project's own key, so resolving it is one signature check rather than a lookup plus a trust decision. `apikey` is required on every endpoint anyway (D-029). The gateway will add routing and rate-limit placement, not identity.)*
-- **D-319 — A project API key and an access token carry different `iss`, and each is pinned separately: `https://<ref>.corebase.co` for keys, `https://<ref>.corebase.co/auth/v1` for tokens.** *(Rationale: the provisioning saga signs keys with the bare origin and the token spec gives tokens the module's base URL. Pinning one string for both 401'd every request on the first live wiring, with a valid signature — the check was comparing an API key against an endpoint URL.)*
+- **D-319 — A project API key and an access token carry different `iss`, and each is pinned separately: `https://<ref>.steadhold.app` for keys, `https://<ref>.steadhold.app/auth/v1` for tokens.** *(Rationale: the provisioning saga signs keys with the bare origin and the token spec gives tokens the module's base URL. Pinning one string for both 401'd every request on the first live wiring, with a valid signature — the check was comparing an API key against an endpoint URL.)*
 - **D-320 — A user access token is refused in the `apikey` slot, though it is signed by the same project key and names the same ref.** *(Rationale: letting a user's own credential select the project is a different trust decision from a project key doing so — the key is published deliberately and is project-scoped, while an access token's `role` claim maps to a Postgres role. Accepting it blurs the two identities exactly where the module chooses a database.)*
 - **D-321 — Per-project auth config is a dedicated control-plane table (`project_auth_config`); a project with no row gets the column defaults, and `autoconfirm` defaults off.** *(Settles OQ-111. Rationale: D-110 requires the config outside the module, since there is one process and thousands of projects. A missing row meaning "all defaults" is what lets projects created before the table serve auth with no backfill. `autoconfirm` off is a security default: on, anybody can create an account on somebody else's address and use it.)*
 - **D-322 — Signup spends a full scrypt hash on a taken address, and login spends a decoy verify on an unknown email.** *(Rationale: both are mechanically wasted and both are the endpoints' actual security content — skipping either moves the enumeration oracle from the response body into the clock. Affordable only because the endpoint is rate-limited *before* the hash (D-241).)*
@@ -208,7 +208,7 @@ Everything not in this table is not in V1 — see the scope-freeze rule ([OAuth 
 ### Decided while building (P4c)
 
 - **D-324 — One-time tokens are consumed in a single UPDATE whose predicate includes `used_at IS NULL`; never select-then-update.** *(Rationale: concurrent clicks on one link are common — prefetch, double-click, mail scanners — and a check-then-act lets both pass and both issue a session. Proven by removing the predicate: two simultaneous verifies both returned 200 and left two sessions. The predicate also excludes soft-deleted users, so a tombstone cannot be confirmed back into a session.)*
-- **D-325 — A `redirect_to` is validated where the link is built, not only where it is followed; an unlisted value is replaced by `site_url` and the substitution is audited.** *(Rationale: the first `/recover` put `redirect_to` straight into the mailed link, which would have made Corebase send an attacker-chosen destination from its own domain — the capability D-116's fixed templates exist to withhold. Replacement rather than rejection keeps a mistyped client config from killing valid links; the audit row is the only signal a developer or a responder gets.)*
+- **D-325 — A `redirect_to` is validated where the link is built, not only where it is followed; an unlisted value is replaced by `site_url` and the substitution is audited.** *(Rationale: the first `/recover` put `redirect_to` straight into the mailed link, which would have made Steadhold send an attacker-chosen destination from its own domain — the capability D-116's fixed templates exist to withhold. Replacement rather than rejection keeps a mistyped client config from killing valid links; the audit row is the only signal a developer or a responder gets.)*
 - **D-326 — A project with no `site_url` permits no redirect, and `GET /verify` then answers in JSON rather than guessing.** *(Rationale: "configured nothing" must not read as "allowed everything", and inventing a destination is the open redirect the allowlist exists to prevent.)*
 - **D-327 — Session tokens ride in the fragment of a verification redirect, never the query string.** *(Rationale: a fragment is never sent to a server, so the tokens stay out of the destination's access logs, out of intermediate proxies, and out of `Referer`.)*
 - **D-328 — Every successful `/verify` confirms the address, not only `type=signup`.** *(Rationale: a recovery link proves mailbox control as well as a confirmation link. Otherwise a successful reset ends at a login refused for `email_not_confirmed` — a dead end reachable only by the users who most need the reset.)*
@@ -226,7 +226,7 @@ Everything not in this table is not in V1 — see the scope-freeze rule ([OAuth 
 
 ## Open Questions
 
-- **OQ-110** — Auth module → project database connectivity: through the project's PgBouncer (transaction mode, shared with PostgREST) vs a direct connection with a tiny dedicated pool per active project. Pooler keeps one path but auth's short transactions could compete with API traffic under load; direct connections cost Postgres slots. Needs load numbers from [connection pooling](../03-database-platform/02-connection-pooling.md). Current lean: through the pooler with a reserved `corebase_auth` role. **Still open** — P4b deliberately took the third option, a fresh connection per request (D-323), because credential rotation makes a cached pool a trap. A pooler decision needs load numbers *and* a change to the pooler's `auth_query` allowlist, which is its own step.
+- **OQ-110** — Auth module → project database connectivity: through the project's PgBouncer (transaction mode, shared with PostgREST) vs a direct connection with a tiny dedicated pool per active project. Pooler keeps one path but auth's short transactions could compete with API traffic under load; direct connections cost Postgres slots. Needs load numbers from [connection pooling](../03-database-platform/02-connection-pooling.md). Current lean: through the pooler with a reserved `steadhold_auth` role. **Still open** — P4b deliberately took the third option, a fresh connection per request (D-323), because credential rotation makes a cached pool a trap. A pooler decision needs load numbers *and* a change to the pooler's `auth_query` allowlist, which is its own step.
 - **OQ-111** — *Settled by D-321 (P4b)*: a dedicated `project_auth_config` table, with the column defaults standing in for a missing row. It currently carries only what is built (`autoconfirm`, `disable_signup`, `access_token_ttl_seconds`, `password_min_length`); `site_url`, the redirect allowlist and templates join it with the flows that need them (P4c/P4d).
 
 ## Dependencies

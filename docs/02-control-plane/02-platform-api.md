@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The REST contract of the control plane (D-039, proposal §104–106): the API the dashboard and the CLI call to manage orgs, projects, keys, and secrets. This is **not** the data-plane API customers' apps call (that is [REST API design](../04-data-api/01-rest-api-design.md)); it never touches customer data. Served by the modular monolith (D-010) at `api.corebase.com/v1`.
+The REST contract of the control plane (D-039, proposal §104–106): the API the dashboard and the CLI call to manage orgs, projects, keys, and secrets. This is **not** the data-plane API customers' apps call (that is [REST API design](../04-data-api/01-rest-api-design.md)); it never touches customer data. Served by the modular monolith (D-010) at `api.steadhold.dev/v1`.
 
 ## Design
 
@@ -13,7 +13,7 @@ Two principals, one permission model:
 | Client | Mechanism | Notes |
 |---|---|---|
 | Dashboard (browser) | **Session cookie** — httpOnly, Secure, SameSite=Lax, opaque session id backed by Redis; CSRF via double-submit token on mutating requests | Sessions expire after 7 days idle, 30 days absolute |
-| CLI / CI / scripts | **Personal Access Token (PAT)** — `Authorization: Bearer cbp_<40 chars>`; created in dashboard or via `corebase login` device flow | Stored hash-only per D-060; optional expiry; scoped (see D-062) |
+| CLI / CI / scripts | **Personal Access Token (PAT)** — `Authorization: Bearer cbp_<40 chars>`; created in dashboard or via `steadhold login` device flow | Stored hash-only per D-060; optional expiry; scoped (see D-062) |
 
 Both resolve to a `user_id`; every request is then authorized against `organization_members.role`. Rules the API enforces (not the schema — see [data model](01-data-model.md)):
 
@@ -115,7 +115,7 @@ Operator (staff) access is a separate surface — see [audit & admin access](05-
 POST /v1/projects
 Content-Type: application/json
 Idempotency-Key: 7f9c2e1a-6b0d-4e5f-9a3c-d21b84e7c901
-Cookie: cb_session=...
+Cookie: sh_session=...
 
 {
   "org_id": "org_a1b2c3d4-...",
@@ -153,11 +153,11 @@ The client polls `GET /v1/projects/kxqwrtplmzensfba` (or subscribes to dashboard
 {
   "project": { "ref": "kxqwrtplmzensfba", "status": "ready", "...": "..." },
   "database": {
-    "host": "kxqwrtplmzensfba.corebase.co",
+    "host": "kxqwrtplmzensfba.steadhold.app",
     "port": 5432, "pooler_port": 6543, "pg_version": "17",
     "connection_strings": {
-      "pooled": "postgres://...@kxqwrtplmzensfba.corebase.co:6543/postgres",
-      "direct": "postgres://...@kxqwrtplmzensfba.corebase.co:5432/postgres"
+      "pooled": "postgres://...@kxqwrtplmzensfba.steadhold.app:6543/postgres",
+      "direct": "postgres://...@kxqwrtplmzensfba.steadhold.app:5432/postgres"
     }
   },
   "api_keys": [
@@ -219,7 +219,7 @@ Design rule without its own D number: not-found and no-permission collapse to `4
 - OQ-043: Ready-notification transport for the dashboard — poll `GET /v1/projects/:ref` vs an SSE `/v1/events` stream. Polling ships first; decide SSE before the dashboard's project-creation UX is finalized ([dashboard IA](../09-dashboard/01-dashboard-ia.md)).
 - OQ-044: Exact rate-limit numbers per plan tier (table above is a placeholder) — settle with [pricing & plans](../12-business/02-pricing-and-plans.md) and load testing.
 - ~~OQ-175: **Response-envelope alignment.**~~ **Closed in P1b.** Every endpoint now returns the documented envelope: `POST` answers `202` with a `Location` header and `{ project, job }`, the list returns `{ projects, pagination }` with real keyset pagination, and ids are `prj_`/`org_`/`job_`-prefixed in transport. Done as one breaking change as the question asked, so it cost one break rather than four. The `api_keys` block is still absent because keys are P1e — that is a missing field in an otherwise correct shape, not a divergent shape.
-- OQ-065: PAT lifetime policy — indefinite-by-default with revocation, or forced expiry (90 days) with refresh via `corebase login`? Security prefers expiry; CI ergonomics prefer indefinite.
+- OQ-065: PAT lifetime policy — indefinite-by-default with revocation, or forced expiry (90 days) with refresh via `steadhold login`? Security prefers expiry; CI ergonomics prefer indefinite.
 
 ## Dependencies
 

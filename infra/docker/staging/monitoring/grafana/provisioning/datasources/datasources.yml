@@ -5,9 +5,9 @@ datasources:
     access: proxy
     url: http://prometheus:9090
     isDefault: true
-    uid: corebase-prom
+    uid: steadhold-prom
   - name: Loki
     type: loki
     access: proxy
     url: http://loki:3100
-    uid: corebase-loki
+    uid: steadhold-loki

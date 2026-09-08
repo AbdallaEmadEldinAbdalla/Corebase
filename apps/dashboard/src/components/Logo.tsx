@@ -1,5 +1,5 @@
 /**
- * The Corebase mark — a core held within a structural base.
+ * The Steadhold mark — a core held within a structural base.
  *
  * The geometry is the supplied artwork, used verbatim: a rounded-square container
  * (480 inset in 512, r=128) holding a diamond with its centre punched out by
@@ -28,12 +28,12 @@ export function Logo({ size = 22, badge = true }: {
 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 512 512" fill="none"
-      role="img" aria-label="Corebase">
+      role="img" aria-label="Steadhold">
       {badge ? (
-        <rect x="16" y="16" width="480" height="480" rx="128" fill="var(--cb-accent)" />
+        <rect x="16" y="16" width="480" height="480" rx="128" fill="var(--sh-accent)" />
       ) : null}
       <path d={MARK} fillRule="evenodd" clipRule="evenodd"
-        fill={badge ? 'var(--cb-on-accent)' : 'var(--cb-accent)'} />
+        fill={badge ? 'var(--sh-on-accent)' : 'var(--sh-accent)'} />
     </svg>
   );
 }
@@ -56,10 +56,10 @@ export function OrgAvatar({ name, size = 18 }: { name: string; size?: number }) 
       style={{
         width: size, height: size, flex: 'none',
         display: 'grid', placeItems: 'center',
-        borderRadius: 'var(--cb-radius-sm)',
-        background: 'var(--cb-accent-subtle)',
-        color: 'var(--cb-accent)',
-        font: 'var(--cb-caption)', fontWeight: 700,
+        borderRadius: 'var(--sh-radius-sm)',
+        background: 'var(--sh-accent-subtle)',
+        color: 'var(--sh-accent)',
+        font: 'var(--sh-caption)', fontWeight: 700,
         fontSize: Math.max(9, Math.round(size * 0.55)),
         lineHeight: 1,
       }}>
@@ -84,7 +84,7 @@ const PATHS: Record<string, string> = {
 
 export function SectionIcon({ name }: { name: keyof typeof PATHS | string }) {
   const d = PATHS[name];
-  if (!d) return <span className="cb-nav-item__icon" aria-hidden="true" />;
+  if (!d) return <span className="sh-nav-item__icon" aria-hidden="true" />;
   const filled = name === 'projects' || name === 'keys';
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import {
   ERROR_CODES, type ErrorCode, type AuthErrorCode, type StorageErrorCode,
-} from '@corebase/types';
+} from '@steadhold/types';
 
 /** Thrown by modules; the kernel renders it into the D-032 envelope. */
 export class ApiError extends Error {

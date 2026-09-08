@@ -3,20 +3,20 @@ import { join } from 'node:path';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { createEnvelope } from '@corebase/crypto';
-import { createSecretStore, SECRET_NAMES } from '@corebase/secrets';
-import { createDocker, type Docker } from '@corebase/worker/docker.ts';
-import { buildSagas } from '@corebase/worker/jobs/sagas.ts';
-import { registerNode } from '@corebase/worker/placement.ts';
+import { createEnvelope } from '@steadhold/crypto';
+import { createSecretStore, SECRET_NAMES } from '@steadhold/secrets';
+import { createDocker, type Docker } from '@steadhold/worker/docker.ts';
+import { buildSagas } from '@steadhold/worker/jobs/sagas.ts';
+import { registerNode } from '@steadhold/worker/placement.ts';
 import {
   IMAGE, POOLER_IMAGE, POSTGREST_IMAGE, LABEL_MANAGED,
   containerName, poolerName, postgrestName,
-} from '@corebase/worker/container-spec.ts';
-import type { JobRecord } from '@corebase/worker/jobs/repo.ts';
-import type { SagaStep, SagaContext } from '@corebase/worker/jobs/runner.ts';
-import { DEVELOPER_ROLE } from '@corebase/worker/project-admin.ts';
-import { loadBackupEnv } from '@corebase/worker/staging-env.ts';
-import { createS3, s3FromEnv, type S3 } from '@corebase/s3';
+} from '@steadhold/worker/container-spec.ts';
+import type { JobRecord } from '@steadhold/worker/jobs/repo.ts';
+import type { SagaStep, SagaContext } from '@steadhold/worker/jobs/runner.ts';
+import { DEVELOPER_ROLE } from '@steadhold/worker/project-admin.ts';
+import { loadBackupEnv } from '@steadhold/worker/staging-env.ts';
+import { createS3, s3FromEnv, type S3 } from '@steadhold/s3';
 
 /**
  * The tenant-isolation harness (P5e) — the fixtures behind proposal §74.
@@ -43,15 +43,15 @@ import { createS3, s3FromEnv, type S3 } from '@corebase/s3';
  * than quietly skipped.
  */
 
-const DB = process.env['CB_CONTROL_DATABASE_URL']
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
-const CERT_DIR = process.env['CB_DOCKER_CERT_DIR']
+const DB = process.env['SH_CONTROL_DATABASE_URL']
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
+const CERT_DIR = process.env['SH_DOCKER_CERT_DIR']
   ?? join(process.cwd(), '../../infra/docker/staging/certs');
-const HOST = process.env['CB_DOCKER_HOST'] ?? '127.0.0.1';
-const PORT = Number(process.env['CB_DOCKER_PORT'] ?? 2376);
+const HOST = process.env['SH_DOCKER_HOST'] ?? '127.0.0.1';
+const PORT = Number(process.env['SH_DOCKER_PORT'] ?? 2376);
 const BOOTSTRAP = 'isolation-bootstrap-secret-0123456789';
 
-export const PROJECT_DOMAIN = 'corebase.test';
+export const PROJECT_DOMAIN = 'steadhold.test';
 
 /** Everything a test needs about one fixture, plus what only the seed may use. */
 export interface Fixture {
@@ -134,7 +134,7 @@ export async function setUp(): Promise<Harness> {
       + 'The storage isolation rows cannot run without it, and must not be skipped.');
   }
   const s3 = createS3(s3cfg);
-  kekDir = mkdtempSync(join(tmpdir(), 'cb-kek-iso-'));
+  kekDir = mkdtempSync(join(tmpdir(), 'sh-kek-iso-'));
   writeFileSync(join(kekDir, 'kek_2026_09.key'), randomBytes(32));
   const secrets = createSecretStore(pool, createEnvelope({ kekDir }));
 
@@ -358,10 +358,10 @@ async function seedCanary(docker: Docker, f: Fixture): Promise<void> {
 // that something is denied the way an attacker would — by being denied.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { buildApp } from '@corebase/api';
-import { createRoutingTable } from '@corebase/api/modules/gateway/routing.ts';
-import { createMemoryRateLimiter } from '@corebase/api/kernel/rate-limit.ts';
-import { sign as signJwt } from '@corebase/jwt';
+import { buildApp } from '@steadhold/api';
+import { createRoutingTable } from '@steadhold/api/modules/gateway/routing.ts';
+import { createMemoryRateLimiter } from '@steadhold/api/kernel/rate-limit.ts';
+import { sign as signJwt } from '@steadhold/jwt';
 import type { FastifyInstance } from 'fastify';
 
 /**

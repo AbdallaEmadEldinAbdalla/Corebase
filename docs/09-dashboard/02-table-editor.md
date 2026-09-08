@@ -59,13 +59,13 @@ Confirm executes all three statements as one run (one transaction) via the D-132
 
 ### Data grid and the execution path
 
-**Execution path (D-132):** dashboard → platform API (`POST /v1/projects/:ref/db/query`) → the project's Postgres over the platform's own connection, running as a dedicated **`corebase_admin`** role. Explicitly **not** the public data API with a `service_role` key, because:
+**Execution path (D-132):** dashboard → platform API (`POST /v1/projects/:ref/db/query`) → the project's Postgres over the platform's own connection, running as a dedicated **`steadhold_admin`** role. Explicitly **not** the public data API with a `service_role` key, because:
 
 1. `service_role` in a browser is a standing leak risk; the session-cookie platform API keeps customer-DB power server-side (D-062).
 2. PostgREST's surface can't express DDL, `USING` casts, or introspection — the editor needs raw SQL.
 3. Centralizing on the platform API gives every editor statement the standard envelope, `request_id` (D-032), rate limits (D-033), and an `audit_logs` entry (actor, project, statement hash) per [audit & admin access](../02-control-plane/05-audit-and-admin-access.md) — the data API has no concept of *which dashboard user* acted.
 
-`corebase_admin` is a per-project role: full DDL/DML on customer schemas, `BYPASSRLS` (it is the developer's own console over their own data — same trust level as their direct connection string), **not** superuser, no `pg_execute_server_program` (D-080). Tenant isolation never rests on this role; it rests on the container boundary (D-009, D-081) — the platform API resolves `:ref` to that project's container and can reach no other.
+`steadhold_admin` is a per-project role: full DDL/DML on customer schemas, `BYPASSRLS` (it is the developer's own console over their own data — same trust level as their direct connection string), **not** superuser, no `pg_execute_server_program` (D-080). Tenant isolation never rests on this role; it rests on the container boundary (D-009, D-081) — the platform API resolves `:ref` to that project's container and can reach no other.
 
 **Grid behavior:**
 
@@ -104,7 +104,7 @@ A permanent panel on every table's page — RLS status is not buried in settings
 
 ## Decisions
 
-- **D-132 — Dashboard database operations (table editor and SQL editor) execute via the platform API (`/v1/projects/:ref/db/query`) over the platform's own connection to the project database, as a dedicated per-project `corebase_admin` role (full DDL/DML + BYPASSRLS on customer schemas, never superuser), with every statement audited and rate-limited; the public data API and browser-held `service_role` keys are never used for dashboard operations.** *(Rationale: keeps god-mode credentials out of the browser, gives the editor the raw-SQL and introspection surface PostgREST cannot provide, and funnels every GUI action through one audited, request-id'd, rate-limited path.)*
+- **D-132 — Dashboard database operations (table editor and SQL editor) execute via the platform API (`/v1/projects/:ref/db/query`) over the platform's own connection to the project database, as a dedicated per-project `steadhold_admin` role (full DDL/DML + BYPASSRLS on customer schemas, never superuser), with every statement audited and rate-limited; the public data API and browser-held `service_role` keys are never used for dashboard operations.** *(Rationale: keeps god-mode credentials out of the browser, gives the editor the raw-SQL and introspection surface PostgREST cannot provide, and funnels every GUI action through one audited, request-id'd, rate-limited path.)*
 - **D-133 — Every table-editor operation compiles to visible, verbatim SQL shown in a preview panel before execution, is offered afterwards as a plain-SQL migration file per D-028, and RLS policy creation uses templates that expand to editable `CREATE POLICY` SQL — no black-box wizard in V1. Inline row editing is PK-guarded parameterized DML; tables without a primary key are read-only in the grid.** *(Rationale: §41's translate-to-SQL rule is what keeps the GUI honest and the schema portable (D-004) — users graduate from clicking to reading to writing SQL on the same screen; PK-guarded DML is the only UPDATE/DELETE shape that cannot silently hit more rows than the user sees.)*
 
 ## Open Questions

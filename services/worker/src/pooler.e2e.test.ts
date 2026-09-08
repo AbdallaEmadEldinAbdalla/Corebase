@@ -15,13 +15,13 @@ import {
  * without its allowlist works perfectly for `developer` and also hands out the
  * superuser's verifier, and nothing in a happy-path test would notice.
  */
-const CERT_DIR = process.env.CB_DOCKER_CERT_DIR
+const CERT_DIR = process.env.SH_DOCKER_CERT_DIR
   ?? new URL('../../../infra/docker/staging/certs', import.meta.url).pathname;
-const HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
+const HOST = process.env.SH_DOCKER_HOST ?? '127.0.0.1';
+const PORT = Number(process.env.SH_DOCKER_PORT ?? 2376);
 const REF = 'p2bpoolertestrefxxxx';
 const NET = networkName(REF);
-const PG = `cb-${REF}`;
+const PG = `sh-${REF}`;
 const POOL = poolerName(REF);
 const HOST_PORT = 6461;                  // inside the published pooler range
 const SUPER = 'p2b-superuser-password';
@@ -134,11 +134,11 @@ describe('P2b — the pooled path on a real node', () => {
   });
 
   t('the pooled port cannot reach any internal role', async () => {
-    // The allowlist inside corebase.pgbouncer_lookup is the boundary (D-074): even
+    // The allowlist inside steadhold.pgbouncer_lookup is the boundary (D-074): even
     // a fully compromised pooler cannot resolve credentials for these. Tested with
     // the *correct* superuser password, so a pass means the lookup refused rather
     // than the password being wrong.
-    for (const role of ['postgres', 'authenticator', 'corebase_admin', 'pgbouncer_auth']) {
+    for (const role of ['postgres', 'authenticator', 'steadhold_admin', 'pgbouncer_auth']) {
       await expect(throughPooler(role, SUPER),
         `${role} was reachable through the pooled port`).rejects.toThrow();
     }

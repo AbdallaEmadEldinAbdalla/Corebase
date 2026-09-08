@@ -41,5 +41,5 @@ CREATE INDEX IF NOT EXISTS nodes_placement_idx
 
 COMMENT ON COLUMN nodes.last_seen_at IS
   'Heartbeat, re-asserted on every reconcile pass. Placement refuses a node that '
-  'has gone quiet (CB_NODE_STALE_SECONDS): status stays active when a worker dies, '
+  'has gone quiet (SH_NODE_STALE_SECONDS): status stays active when a worker dies, '
   'and a project placed there hangs in creating rather than failing (P2f).';

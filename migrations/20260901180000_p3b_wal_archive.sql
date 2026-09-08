@@ -17,7 +17,7 @@ ALTER TABLE project_databases
     CHECK (wal_archive_pending >= 0);
 
 -- When a segment last landed in the repo, from pg_stat_archiver. Feeds
--- `corebase_backup_last_success_ts`, which the "last-success age > 26h" alert
+-- `steadhold_backup_last_success_ts`, which the "last-success age > 26h" alert
 -- reads.
 ALTER TABLE project_databases
   ADD COLUMN IF NOT EXISTS wal_last_archived_at timestamptz;

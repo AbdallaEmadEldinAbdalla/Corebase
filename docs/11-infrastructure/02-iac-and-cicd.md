@@ -15,7 +15,7 @@ infra/terraform/
 │   │                   #   allow: CF ranges→443 on cp-1, private-net node↔node ports)
 │   ├── node/           # one Hetzner server: model, role label, cloud-init render,
 │   │                   #   private-net attach, optional XFS volume (data nodes)
-│   ├── dns/            # Cloudflare zone records: api./app./*.corebase.co → cp-1,
+│   ├── dns/            # Cloudflare zone records: api./app./*.steadhold.app → cp-1,
 │   │                   #   db.* wildcard → data-node SNI router IPs; origin-pull config
 │   ├── r2/             # R2 buckets: storage objects, pgBackRest repos, TF state bucket itself
 │   │                   #   (imported, not created — see bootstrap note), lifecycle rules
@@ -52,12 +52,12 @@ write_files:
   - /etc/docker/daemon.json        # API on private-net IP:2376, tlsverify, live-restore: true,
                                    #   log-driver json-file with rotation (Alloy tails these)
   - /etc/ssh/sshd_config.d/hard.conf   # key-only, no root, no forwarding
-  - /etc/sysctl.d/99-corebase.conf     # vm.overcommit_memory=2 tuning deferred; somaxconn,
+  - /etc/sysctl.d/99-steadhold.conf     # vm.overcommit_memory=2 tuning deferred; somaxconn,
                                        #   inotify limits for many containers
-  - /etc/systemd/system/corebase-nodeinfra.service   # Compose stack: SNI router, node_exporter,
+  - /etc/systemd/system/steadhold-nodeinfra.service   # Compose stack: SNI router, node_exporter,
                                                      #   cAdvisor, postgres_exporter, Alloy
 runcmd:
-  - mkfs.xfs (attached volume) && mount -o prjquota /var/lib/corebase/projects   # D-070
+  - mkfs.xfs (attached volume) && mount -o prjquota /var/lib/steadhold/projects   # D-070
   - <join private network>            # Hetzner cloud-net attach is TF-side; WireGuard NOT used in V1 —
                                       #   all nodes share one Hetzner private net; wireguard-tools installed
                                       #   as the ready escape hatch for future dedicated/Robot nodes (OQ-144)
@@ -66,7 +66,7 @@ runcmd:
                                       #   + the worker's client CA, exporter scrape creds  — this replaces
                                       #   any persistent "agent" install (D-052)
   - docker pull <postgres:17|pgbouncer|postgrest pinned digests>   # pre-pull, D-071
-  - systemctl enable --now corebase-nodeinfra
+  - systemctl enable --now steadhold-nodeinfra
 final_message: node ready; worker reconciler takes over from here
 ```
 
@@ -84,7 +84,7 @@ Two, only two (D-031: project == environment is the *customer* story; this is ou
 |---|---|---|
 | Shape | 1 combined node (all roles), scaled-down mirror — same modules, same Compose units, same images | Per D-140 |
 | Data | Synthetic + isolation-suite fixtures; wiped freely | Customer data |
-| DNS | `*.staging.corebase.co` | `*.corebase.co` |
+| DNS | `*.staging.steadhold.app` | `*.steadhold.app` |
 | Gets deploys | **Every merge to main, automatically** | Only after staging gates pass + manual approval |
 | Isolation suite | Full destructive matrix per deploy + hourly (D-084) | Non-destructive canaries daily |
 
@@ -92,7 +92,7 @@ Staging's known blind spot, stated honestly: one combined node cannot catch cros
 
 ### CI/CD pipelines (GitHub Actions)
 
-**Per-PR** (required checks, ~5–10 min): lint + typecheck (Turborepo-cached) → unit tests → integration tests against the local Compose stack (`corebase dev` components, D-027 — Postgres 17, PgBouncer, PostgREST, MinIO, Redis) → build affected images (no push) → `terraform validate` + plan-dry-run on `envs/staging` when `infra/` changed. No deploy from PRs.
+**Per-PR** (required checks, ~5–10 min): lint + typecheck (Turborepo-cached) → unit tests → integration tests against the local Compose stack (`steadhold dev` components, D-027 — Postgres 17, PgBouncer, PostgREST, MinIO, Redis) → build affected images (no push) → `terraform validate` + plan-dry-run on `envs/staging` when `infra/` changed. No deploy from PRs.
 
 **Main merge:**
 
@@ -107,7 +107,7 @@ build: images for changed services → push GHCR, tag = git SHA (immutable) + br
                          auto-halt (not auto-rollback) on new page-level alert
 ```
 
-**Image strategy:** monorepo builds **per-service images** — `ghcr.io/corebase/{api,worker,gateway-caddy,dashboard}`; the per-project data-plane images (`postgres:17`, PgBouncer, PostgREST) are upstream images pinned by digest and *referenced* by, not built from, the manifest. Registry: **GHCR** — already where the code is, free for private, one fewer vendor. Tags are git SHAs; `latest` does not exist; staging/prod difference is which manifest is applied, never which tag floats.
+**Image strategy:** monorepo builds **per-service images** — `ghcr.io/steadhold/{api,worker,gateway-caddy,dashboard}`; the per-project data-plane images (`postgres:17`, PgBouncer, PostgREST) are upstream images pinned by digest and *referenced* by, not built from, the manifest. Registry: **GHCR** — already where the code is, free for private, one fewer vendor. Tags are git SHAs; `latest` does not exist; staging/prod difference is which manifest is applied, never which tag floats.
 
 ### Deploy mechanics without K8s
 
@@ -118,9 +118,9 @@ build: images for changed services → push GHCR, tag = git SHA (immutable) + br
 release: 2026-08-27.2
 git_sha: 3f9c2ab
 images:
-  api:      ghcr.io/corebase/api@sha256:…
-  worker:   ghcr.io/corebase/worker@sha256:…
-  dashboard: ghcr.io/corebase/dashboard@sha256:…
+  api:      ghcr.io/steadhold/api@sha256:…
+  worker:   ghcr.io/steadhold/worker@sha256:…
+  dashboard: ghcr.io/steadhold/dashboard@sha256:…
 project_stack:                 # consumed by the reconciler's container templates (D-070 §3)
   postgres:  postgres:17.6@sha256:…
   pgbouncer: bitnami/pgbouncer@sha256:…

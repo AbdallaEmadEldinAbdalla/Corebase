@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from 'pg';
-import { generateSecret, type Envelope, type SealedSecret } from '@corebase/crypto';
+import { generateSecret, type Envelope, type SealedSecret } from '@steadhold/crypto';
 
 /**
  * Persistence for project credentials (D-035). The control plane stores

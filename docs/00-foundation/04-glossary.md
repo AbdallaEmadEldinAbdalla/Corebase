@@ -2,13 +2,13 @@
 
 ## Purpose
 
-Shared vocabulary for the corpus. Terms are defined *as Corebase uses them* — where industry usage varies, the Corebase meaning wins inside these docs.
+Shared vocabulary for the corpus. Terms are defined *as Steadhold uses them* — where industry usage varies, the Steadhold meaning wins inside these docs.
 
 ## Platform terms
 
-| Term | Meaning in Corebase |
+| Term | Meaning in Steadhold |
 |---|---|
-| **Control plane** | The systems that manage Corebase itself: accounts, orgs, projects, billing, provisioning, infrastructure state. Never in the path of customer application traffic. |
+| **Control plane** | The systems that manage Steadhold itself: accounts, orgs, projects, billing, provisioning, infrastructure state. Never in the path of customer application traffic. |
 | **Data plane** | The systems that serve customer application traffic: project Postgres, PostgREST, auth endpoints, storage, (later) realtime. A control-plane outage must not take down the data plane. |
 | **Organization (org)** | Billing and membership boundary. Owns projects. Roles: owner / admin / member. |
 | **Project** | The unit of provisioning: one Postgres instance + pooler + PostgREST + auth config + storage bucket namespace + keys. In V1, project == environment (D-031). |
@@ -27,9 +27,9 @@ Shared vocabulary for the corpus. Terms are defined *as Corebase uses them* — 
 | **Replication slot** | A server-side bookmark guaranteeing WAL retention until a consumer confirms receipt. Powerful; hazardous if the consumer stalls. |
 | **PITR (Point-in-Time Recovery)** | Restoring a base backup and replaying archived WAL up to a chosen instant. |
 | **Base backup** | A full physical copy of the data directory, the starting point for PITR. |
-| **pgBackRest** | The backup tool Corebase standardizes on (D-019): base backups + WAL archiving to S3-compatible storage. |
-| **RLS (Row-Level Security)** | Postgres feature attaching per-row `USING`/`WITH CHECK` predicates to tables per role/command. Corebase's authorization model: policies read the request's JWT claims from session context. |
-| **`auth.uid()`** | Corebase-provided SQL helper returning the authenticated user's id from the request's session context; used inside RLS policies. Plain SQL — portable to any Postgres. |
+| **pgBackRest** | The backup tool Steadhold standardizes on (D-019): base backups + WAL archiving to S3-compatible storage. |
+| **RLS (Row-Level Security)** | Postgres feature attaching per-row `USING`/`WITH CHECK` predicates to tables per role/command. Steadhold's authorization model: policies read the request's JWT claims from session context. |
+| **`auth.uid()`** | Steadhold-provided SQL helper returning the authenticated user's id from the request's session context; used inside RLS policies. Plain SQL — portable to any Postgres. |
 | **Session context** | Request-scoped Postgres settings (`SET LOCAL request.jwt.claims = '...'`) carrying identity into the database so RLS can see it. `SET LOCAL` scopes to the transaction — the only pattern that survives transaction pooling. |
 | **Shadow database** | A scratch database used to compute migration diffs by applying migrations fresh and comparing schemas. Basis of `db diff` (V1.1, D-028). |
 
@@ -37,7 +37,7 @@ Shared vocabulary for the corpus. Terms are defined *as Corebase uses them* — 
 
 | Term | Meaning |
 |---|---|
-| **PgBouncer** | Lightweight Postgres connection pooler. Corebase runs one per project (D-015). |
+| **PgBouncer** | Lightweight Postgres connection pooler. Steadhold runs one per project (D-015). |
 | **Pooling modes** | *Session*: one client ↔ one server connection for the session (safe, no multiplexing). *Transaction*: server connection borrowed per transaction (multiplexes well; breaks prepared statements, `SET`, advisory locks across transactions). *Statement*: per-statement (breaks transactions; unused). |
 | **PostgREST** | OSS server that introspects a Postgres schema and serves it as a REST API; enforces auth by switching database roles per request and letting RLS do authorization. Embedded per project (D-011). |
 | **anon key / service_role key** | The two project API keys (D-029): long-lived JWTs mapping to the `anon` (public, RLS-restricted) and `service_role` (bypasses RLS; server-side only) Postgres roles. |
@@ -51,12 +51,12 @@ Shared vocabulary for the corpus. Terms are defined *as Corebase uses them* — 
 | Term | Meaning |
 |---|---|
 | **cgroups** | Linux kernel resource limits (CPU, memory, IO) applied per container — the enforcement mechanism for project resource caps on shared nodes. |
-| **Envelope encryption** | Encrypting data with a data key, and the data key with a master key (KMS). Corebase's secrets pattern (D-035). |
+| **Envelope encryption** | Encrypting data with a data key, and the data key with a master key (KMS). Steadhold's secrets pattern (D-035). |
 | **IaC** | Infrastructure as Code — Terraform + cloud-init here (D-022). |
 | **CDC (Change Data Capture)** | Streaming row-level database changes to consumers; the WAL-based flavor of realtime. |
 | **Fan-out** | Delivering one event to N subscribed connections (realtime's scaling problem). |
 | **Break-glass** | Audited, time-boxed emergency access procedure for operators to reach customer infrastructure. |
-| **SNI routing** | Routing TLS connections by the hostname in the TLS handshake — how `<project>.corebase.co` reaches the right backend without per-project certs. |
+| **SNI routing** | Routing TLS connections by the hostname in the TLS handshake — how `<project>.steadhold.app` reaches the right backend without per-project certs. |
 
 ## Dependencies
 

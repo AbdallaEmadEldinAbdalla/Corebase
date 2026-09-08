@@ -20,21 +20,21 @@
 # same exposure the Postgres container's bootstrap password already has.
 set -eu
 
-: "${COREBASE_REF:?COREBASE_REF is required}"
-: "${COREBASE_PG_HOST:?COREBASE_PG_HOST is required}"
+: "${STEADHOLD_REF:?STEADHOLD_REF is required}"
+: "${STEADHOLD_PG_HOST:?STEADHOLD_PG_HOST is required}"
 : "${PGRST_DB_URI:?PGRST_DB_URI is required — it carries the authenticator password}"
 # No apostrophe in this message, and that is not fussiness: inside a
 # `${VAR:?word}` expansion the word is parsed, so an apostrophe opens a quote that
 # never closes and the whole script becomes a syntax error at the *end* of the
 # file. The image built perfectly well around it — a broken artifact that only
 # fails when a container starts.
-: "${COREBASE_JWKS:?COREBASE_JWKS is required — it carries the project keys}"
+: "${STEADHOLD_JWKS:?STEADHOLD_JWKS is required — it carries the project keys}"
 
 CONF_DIR=/etc/postgrest
-DB_POOL="${COREBASE_DB_POOL:-7}"
+DB_POOL="${STEADHOLD_DB_POOL:-7}"
 
-sed -e "s|__REF__|${COREBASE_REF}|g" \
-    -e "s|__PG_HOST__|${COREBASE_PG_HOST}|g" \
+sed -e "s|__REF__|${STEADHOLD_REF}|g" \
+    -e "s|__PG_HOST__|${STEADHOLD_PG_HOST}|g" \
     -e "s|__DB_POOL__|${DB_POOL}|g" \
     "$CONF_DIR/postgrest.conf.template" > "$CONF_DIR/postgrest.conf"
 
@@ -43,9 +43,9 @@ sed -e "s|__REF__|${COREBASE_REF}|g" \
 # than need: these are public keys, and treating them as secret would be
 # cargo-culting — what actually matters is that the file exists before PostgREST
 # starts, since a missing one makes every request fail closed with no diagnosis.
-printf '%s' "$COREBASE_JWKS" > "$CONF_DIR/jwks.json"
+printf '%s' "$STEADHOLD_JWKS" > "$CONF_DIR/jwks.json"
 if ! grep -q '"keys"' "$CONF_DIR/jwks.json"; then
-  echo "✗ COREBASE_JWKS is not a JWKS document — refusing to start with a key set" >&2
+  echo "✗ STEADHOLD_JWKS is not a JWKS document — refusing to start with a key set" >&2
   echo "  PostgREST would come up and reject every token, which looks like an auth" >&2
   echo "  bug rather than a provisioning one." >&2
   exit 1

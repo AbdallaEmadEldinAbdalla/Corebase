@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
-import { createRedis, createQueue } from '@corebase/queue';
+import { createRedis, createQueue } from '@steadhold/queue';
 import { createRestoreExpiry } from './restore-expiry.ts';
 
 /**
@@ -14,9 +14,9 @@ import { createRestoreExpiry } from './restore-expiry.ts';
  * milliseconds and covers the cases that matter, including the ones a
  * container-based test would have made too slow to bother writing.
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
-const REDIS = process.env.CB_REDIS_URL ?? 'redis://127.0.0.1:56379';
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
+const REDIS = process.env.SH_REDIS_URL ?? 'redis://127.0.0.1:56379';
 
 let pool: Pool; let orgId: string;
 let redis: ReturnType<typeof createRedis>;

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
 import { join } from 'node:path';
 import { readFileSync, existsSync } from 'node:fs';
-import { createS3, s3FromEnv, type S3 } from '@corebase/s3';
+import { createS3, s3FromEnv, type S3 } from '@steadhold/s3';
 import { createRepoDestroy, REPO_RETENTION_DAYS } from './repo-destroy.ts';
 import { repoPathFor } from './backup.ts';
 import { loadBackupEnv } from './staging-env.ts';
@@ -15,8 +15,8 @@ import { loadBackupEnv } from './staging-env.ts';
  * checking, but a test that only checked rows would pass over a bucket it never
  * touched — which is exactly the state this step was written to end.
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
 
 
 let pool: Pool; let s3: S3; let orgId: string;
@@ -88,14 +88,14 @@ async function seedRepo(projectId: string, count: number): Promise<string> {
   const { execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const run = promisify(execFile);
-  const bucket = process.env['CB_BACKUP_S3_BUCKET']!;
+  const bucket = process.env['SH_BACKUP_S3_BUCKET']!;
   // Written through mc rather than the client under test: seeding with the same
   // code path that is being verified would let a broken client produce a bucket
   // that looks correct to itself.
   const script = Array.from({ length: count }, (_, i) =>
     `echo "segment ${i}" > /tmp/o${i} && mc --insecure cp /tmp/o${i} ` +
     `local/${bucket}/${prefix}backup/x${i}.zst >/dev/null`).join(' && ');
-  await run('docker', ['exec', 'cb-object-store', 'sh', '-c', script]);
+  await run('docker', ['exec', 'sh-object-store', 'sh', '-c', script]);
   return prefix;
 }
 
@@ -112,7 +112,7 @@ describe('P3g — destruction after the 30-day window', () => {
     expect((await s3.list(prefix)).length).toBe(7);
 
     const sweep = createRepoDestroy({ pool, s3 });
-    await sweep.schedule(p.id, process.env['CB_BACKUP_S3_BUCKET']!);
+    await sweep.schedule(p.id, process.env['SH_BACKUP_S3_BUCKET']!);
     // The window has not passed, so nothing happens yet — the 30 days are the
     // point of the feature, not an implementation detail.
     expect((await sweep.scanOnce()).due).toBe(0);
@@ -142,7 +142,7 @@ describe('P3g — destruction after the 30-day window', () => {
       const p = await mkPurged();
       await seedRepo(p.id, 2);
       const sweep = createRepoDestroy({ pool, s3 });
-      await sweep.schedule(p.id, process.env['CB_BACKUP_S3_BUCKET']!);
+      await sweep.schedule(p.id, process.env['SH_BACKUP_S3_BUCKET']!);
       await pool.query(
         `update project_repos set destroy_after = now() - interval '1 hour'
           where project_id = $1`, [p.id]);
@@ -161,7 +161,7 @@ describe('P3g — destruction after the 30-day window', () => {
     const p = await mkPurged();
     const prefix = await seedRepo(p.id, 3);
     const sweep = createRepoDestroy({ pool, s3 });
-    await sweep.schedule(p.id, process.env['CB_BACKUP_S3_BUCKET']!);
+    await sweep.schedule(p.id, process.env['SH_BACKUP_S3_BUCKET']!);
     await pool.query(
       `update project_repos set destroy_after = now() - interval '1 hour'
         where project_id = $1`, [p.id]);
@@ -180,7 +180,7 @@ describe('P3g — destruction after the 30-day window', () => {
     // The ordinary case for a project deleted before it ever backed anything up.
     const p = await mkPurged();
     const sweep = createRepoDestroy({ pool, s3 });
-    await sweep.schedule(p.id, process.env['CB_BACKUP_S3_BUCKET']!);
+    await sweep.schedule(p.id, process.env['SH_BACKUP_S3_BUCKET']!);
     await pool.query(
       `update project_repos set destroy_after = now() - interval '1 hour'
         where project_id = $1`, [p.id]);
@@ -200,8 +200,8 @@ describe('P3g — destruction after the 30-day window', () => {
     const bystanderPrefix = await seedRepo(bystander.id, 4);
 
     const sweep = createRepoDestroy({ pool, s3 });
-    await sweep.schedule(doomed.id, process.env['CB_BACKUP_S3_BUCKET']!);
-    await sweep.schedule(bystander.id, process.env['CB_BACKUP_S3_BUCKET']!);
+    await sweep.schedule(doomed.id, process.env['SH_BACKUP_S3_BUCKET']!);
+    await sweep.schedule(bystander.id, process.env['SH_BACKUP_S3_BUCKET']!);
     await pool.query(
       `update project_repos set destroy_after = now() - interval '1 hour'
         where project_id = $1`, [doomed.id]);

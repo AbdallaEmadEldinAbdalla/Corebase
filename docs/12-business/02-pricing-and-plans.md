@@ -4,7 +4,7 @@
 
 Makes proposal §51–52 concrete: the plan ladder, the quotas, the overage model, and the metering architecture (§53) that feeds billing. Every quota and price below is **provisional** — stated now so the cost model, abuse controls, and metering pipeline have concrete numbers to design against, re-priced before public launch against the final [cost model](01-cost-model.md) constants.
 
-The strategic constraint from [competitive analysis](../00-foundation/02-competitive-analysis.md) lane 5: incumbents meter 8+ dimensions and users hate it. Corebase's pricing must be explainable in one screen. Transparency is a differentiator we choose on purpose, at the cost of some billing precision.
+The strategic constraint from [competitive analysis](../00-foundation/02-competitive-analysis.md) lane 5: incumbents meter 8+ dimensions and users hate it. Steadhold's pricing must be explainable in one screen. Transparency is a differentiator we choose on purpose, at the cost of some billing precision.
 
 ## Design
 
@@ -26,7 +26,7 @@ The strategic constraint from [competitive analysis](../00-foundation/02-competi
 | Log retention | 1 day | 7 days | 30 days | custom |
 
 Notes:
-- **"No pausing" is the core Free→Pro conversion lever**, exactly as at Supabase — but Corebase's version is honest: Free pausing is an economics requirement (D-008), and resume is one click / one API call. We do not delete paused free projects; we retain volumes and backups per D-038-style retention (limits on indefinite retention: OQ-094).
+- **"No pausing" is the core Free→Pro conversion lever**, exactly as at Supabase — but Steadhold's version is honest: Free pausing is an economics requirement (D-008), and resume is one click / one API call. We do not delete paused free projects; we retain volumes and backups per D-038-style retention (limits on indefinite retention: OQ-094).
 - Pro price anchors to Supabase's $25 deliberately (proposal-consistent, §112): the differentiation is lanes 1–3, not a price war.
 - Team's job is "a real company uses this": environment groups, more seats, longer PITR — not more features.
 - Enterprise is schema-modeled but not built or priced, per **D-003**.
@@ -77,7 +77,7 @@ node agent (samplers)   ──►          flushed to PG)               idempote
 
 - **Services emit usage events; billing is never computed inside a service** (§53 adopted). Events carry `{project_id, dimension, quantity, occurred_at, idempotency_key}`.
 - Rollup worker (BullMQ, D-018) aggregates events into daily `usage_records` rows in the control-plane DB ([data model](../02-control-plane/01-data-model.md) already reserves the table, §54). Rollups are idempotent and re-runnable.
-- The billing engine reads **only** `usage_records`, compares against plan quotas, and pushes overage line items to **Stripe** (metered billing / invoice items). Stripe is processor and invoice ledger; Corebase's `usage_records` is the source of truth for *quantities*, Stripe for *money*.
+- The billing engine reads **only** `usage_records`, compares against plan quotas, and pushes overage line items to **Stripe** (metered billing / invoice items). Stripe is processor and invoice ledger; Steadhold's `usage_records` is the source of truth for *quantities*, Stripe for *money*.
 - Enforcement (caps, throttles, pauses) reads the same rollups plus near-real-time Redis counters for the fast paths (bandwidth throttle, MAU gate) — enforcement must not wait for a daily rollup.
 
 #### What is measured, and how
@@ -96,7 +96,7 @@ node agent (samplers)   ──►          flushed to PG)               idempote
 |---|---|
 | Payment fails | retry via Stripe smart retries over **14 days**; email at fail, day 7, day 12 |
 | Still failing, day 14 | plan downgraded to Free behavior: projects over Free quotas become read-only, pausing eligibility resumes. **Data is not deleted** |
-| Cancel Pro | end-of-period downgrade; same read-only mechanics; export (`corebase export`, D-004) always works, even read-only and even paused — portability applies most when someone leaves |
+| Cancel Pro | end-of-period downgrade; same read-only mechanics; export (`steadhold export`, D-004) always works, even read-only and even paused — portability applies most when someone leaves |
 | Delete account | D-038-style soft delete + staged destruction |
 
 Read-only-not-deleted plus always-available export is the enforcement stance everywhere: **we stop service growth, we do not hold data hostage.**

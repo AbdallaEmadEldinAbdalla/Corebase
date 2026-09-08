@@ -15,7 +15,7 @@ One pgBackRest **repo path per project**, in R2 (D-017, D-023). The stanza insid
 [global]
 repo1-type=s3
 repo1-s3-endpoint=<account>.r2.cloudflarestorage.com
-repo1-s3-bucket=corebase-backups-eu-central
+repo1-s3-bucket=steadhold-backups-eu-central
 repo1-s3-region=auto
 repo1-retention-full-type=time
 process-max=2                       # small tenants; bounded so backups can't starve neighbors
@@ -105,9 +105,9 @@ The scheduler runs a **continuous verification loop**, not a monthly ceremony:
 - **Job**: provision a scratch container on a designated verification node (not customer capacity) → `pgbackrest restore` to latest → recover → checks:
   1. recovery reached consistency and the expected timeline;
   2. `pg_amcheck --all` (btree integrity) and data-checksum verification (possible because `initdb --data-checksums`, [provisioning §3](01-postgres-provisioning.md));
-  3. sanity counts: `corebase_migrations.schema_migrations` row count matches control-plane knowledge; the five largest user tables return `count(*) > 0` where the live stats say they're non-empty;
+  3. sanity counts: `steadhold_migrations.schema_migrations` row count matches control-plane knowledge; the five largest user tables return `count(*) > 0` where the live stats say they're non-empty;
   4. wall-clock restore time recorded → feeds the §5 RTO table with *measured* numbers instead of aspirations.
-- **Record**: `restore_verifications(project_id, backup_label, started_at, duration, result, failure_reason, failed_check, restore_ms)`. `failed_check` names which of the four checks caught it, so a pattern across the fleet is visible without reading every reason string, and `restore_ms` feeds §5's RTO table with measured numbers. The last passing verification is derived from this table rather than denormalised onto the project, because a **failed** verification must not count as one (**D-310**) and a single `last_verified_at` column invites exactly that. The fleet metric `corebase_projects_restore_verified_ratio` is the standing SLO — one number, since one project at 200 days is the whole story and an average of per-project ages hides it.
+- **Record**: `restore_verifications(project_id, backup_label, started_at, duration, result, failure_reason, failed_check, restore_ms)`. `failed_check` names which of the four checks caught it, so a pattern across the fleet is visible without reading every reason string, and `restore_ms` feeds §5's RTO table with measured numbers. The last passing verification is derived from this table rather than denormalised onto the project, because a **failed** verification must not count as one (**D-310**) and a single `last_verified_at` column invites exactly that. The fleet metric `steadhold_projects_restore_verified_ratio` is the standing SLO — one number, since one project at 200 days is the whole story and an average of per-project ages hides it.
 - **Failure = page**, at the same severity as a failed backup, because it is one: the runbook treats the project's backups as nonexistent until a verified backup exists (immediate fresh full + re-verify).
 - `pgbackrest verify` (repo-side checksum audit) additionally runs monthly per repo — cheap, catches bit-rot without a full restore.
 

@@ -3,9 +3,9 @@ import { Pool } from 'pg';
 import { join } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRedis, createAuthEmailQueue, enqueueAuthEmail, authEmailBackoff,
-         type Queue, type AuthEmailJobData, type Redis } from '@corebase/queue';
-import { createSmtpProvider, CAPS } from '@corebase/email';
-import { createMailer } from '@corebase/api/modules/project-auth/mailer.ts';
+         type Queue, type AuthEmailJobData, type Redis } from '@steadhold/queue';
+import { createSmtpProvider, CAPS } from '@steadhold/email';
+import { createMailer } from '@steadhold/api/modules/project-auth/mailer.ts';
 import { createEmailSender } from './email-sender.ts';
 
 /**
@@ -18,7 +18,7 @@ import { createEmailSender } from './email-sender.ts';
  * go out" and "was the mail allowed" one red mark.
  *
  * The gate is what makes `/signup` and `/recover` safe to expose: they let any
- * anonymous visitor make Corebase email an arbitrary address, and V1 sends every
+ * anonymous visitor make Steadhold email an arbitrary address, and V1 sends every
  * project's mail from one domain (D-116).
  */
 /**
@@ -37,12 +37,12 @@ function loadMailEnv(): void {
 }
 loadMailEnv();
 
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
-const REDIS = process.env.CB_REDIS_URL ?? 'redis://127.0.0.1:56379';
-const SMTP_HOST = process.env.CB_SMTP_HOST ?? '127.0.0.1';
-const SMTP_PORT = Number(process.env.CB_SMTP_PORT ?? 51025);
-const MAILPIT = process.env.CB_MAILPIT_API ?? 'http://127.0.0.1:58025';
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
+const REDIS = process.env.SH_REDIS_URL ?? 'redis://127.0.0.1:56379';
+const SMTP_HOST = process.env.SH_SMTP_HOST ?? '127.0.0.1';
+const SMTP_PORT = Number(process.env.SH_SMTP_PORT ?? 51025);
+const MAILPIT = process.env.SH_MAILPIT_API ?? 'http://127.0.0.1:58025';
 
 let pool: Pool; let redis: Redis; let queue: Queue<AuthEmailJobData>;
 let orgId: string; let up = false; let reason = '';
@@ -122,7 +122,7 @@ const owe = (p: { id: string; ref: string }, over: Record<string, unknown> = {})
 /** Drain everything waiting, the way the worker does. */
 async function drain() {
   const sender = createEmailSender({
-    pool, from: 'auth@mail.corebase.co',
+    pool, from: 'auth@mail.steadhold.app',
     provider: createSmtpProvider({ host: SMTP_HOST, port: SMTP_PORT, tls: 'off', timeoutMs: 8000 }),
   });
   const jobs = await queue.getJobs(['waiting', 'delayed', 'prioritized']);

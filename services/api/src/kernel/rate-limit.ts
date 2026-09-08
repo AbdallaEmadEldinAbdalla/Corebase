@@ -1,4 +1,4 @@
-import type { Redis } from '@corebase/queue';
+import type { Redis } from '@steadhold/queue';
 
 /**
  * A fixed-window counter, for the login path (D-033: "rate-limited per

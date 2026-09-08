@@ -1,5 +1,5 @@
 {
-  "name": "@corebase/types",
+  "name": "@steadhold/types",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -14,7 +14,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@corebase/config": "workspace:*",
+    "@steadhold/config": "workspace:*",
     "typescript": "^5.6.3",
     "vitest": "^2.1.3"
   }

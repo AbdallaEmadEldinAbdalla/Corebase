@@ -18,11 +18,11 @@ import { probeNodeCaps } from './node-caps.ts';
  * because a limit written to a cgroup file is still only a claim that the kernel
  * will act on it.
  */
-const CERT_DIR = process.env.CB_DOCKER_CERT_DIR
+const CERT_DIR = process.env.SH_DOCKER_CERT_DIR
   ?? join(process.cwd(), '../../infra/docker/staging/certs');
-const HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
-const NAME = 'cb-p2f-cgroups-probe';
+const HOST = process.env.SH_DOCKER_HOST ?? '127.0.0.1';
+const PORT = Number(process.env.SH_DOCKER_PORT ?? 2376);
+const NAME = 'sh-p2f-cgroups-probe';
 
 let docker: Docker; let up = false; let reason = '';
 let caps = { ioWeight: false };
@@ -108,7 +108,7 @@ async function cgExists(file: string): Promise<boolean> {
 
 /**
  * Every container in this file runs the project image with **no mount**, and
- * `corebase/postgres` declares `VOLUME /var/lib/postgresql/data` — so Docker
+ * `steadhold/postgres` declares `VOLUME /var/lib/postgresql/data` — so Docker
  * hands each one an anonymous volume that a normal remove (`v=0`, the right
  * default for a project) leaves behind forever. Each run left a 64-hex orphan
  * volume on the node, which reconciliation then reported as disk with no owner,
@@ -172,7 +172,7 @@ describe('P2f — processes', () => {
     // limit, and every later exec into it then fails to fork — the wall working,
     // but it poisoned every assertion that came after it in this file. A small
     // limit reaches the same wall in a second and leaves nothing behind.
-    const bomb = 'cb-p2f-pidbomb';
+    const bomb = 'sh-p2f-pidbomb';
     await docker.removeContainer(bomb, true, true).catch(() => {});
     const id = await docker.createContainer(bomb, {
       ...SPEC,
@@ -211,7 +211,7 @@ describe('P2f — processes', () => {
     // cost a day to. Whether the engine refuses at exec-create (null: "cannot
     // exec") or on the stream (a throw), the one thing it must never do is hand
     // the text back as output.
-    const hog = 'cb-p2f-pidhog';
+    const hog = 'sh-p2f-pidhog';
     await docker.removeContainer(hog, true, true).catch(() => {});
     const id = await docker.createContainer(hog, {
       ...SPEC,

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Corebase Data API — demo</title>
+<title>Steadhold Data API — demo</title>
 <!--
   Phase 5's demo (roadmap §Phase 5): the proposal's §80 five-minute flow minus
   storage — "table + policy via SQL, insert as service_role, read as an
@@ -72,7 +72,7 @@
 </head>
 <body>
 <main>
-  <h1>Corebase Data API</h1>
+  <h1>Steadhold Data API</h1>
   <p class="sub" id="target">…</p>
 
   <section>
@@ -171,7 +171,7 @@ create policy "insert own notes" on public.notes for insert
 <script src="config.js"></script>
 <script>
 (() => {
-  const cfg = window.COREBASE_DEMO;
+  const cfg = window.STEADHOLD_DEMO;
   const $ = (id) => document.getElementById(id);
   if (!cfg) {
     $('target').textContent = 'No config.js — run ./scripts/data-demo.sh first.';

@@ -6,18 +6,18 @@
 
 ## Purpose
 
-Define what Corebase is, what it refuses to be, and the principles that settle arguments when documents in this corpus disagree. Every other doc inherits from this one.
+Define what Steadhold is, what it refuses to be, and the principles that settle arguments when documents in this corpus disagree. Every other doc inherits from this one.
 
 ## Design
 
 ### The one-sentence product
 
-**Corebase turns "I have an idea" into a production-ready application backend in minutes**: PostgreSQL, auto-generated APIs, authentication, row-level security, object storage, and eventually realtime and functions — behind one project, one CLI, one dashboard.
+**Steadhold turns "I have an idea" into a production-ready application backend in minutes**: PostgreSQL, auto-generated APIs, authentication, row-level security, object storage, and eventually realtime and functions — behind one project, one CLI, one dashboard.
 
 ### The north-star experience
 
 ```bash
-corebase create my-app
+steadhold create my-app
 ```
 
 ```text
@@ -40,7 +40,7 @@ First successful database request in **under five minutes** from sign-up ([the "
 
 1. **Developer first.** Every decision is graded against "does this make the developer's first hour better?" Provisioning speed, error message quality, docs, and CLI ergonomics are product features, not polish.
 
-2. **PostgreSQL first.** Corebase enhances Postgres; it never hides it. Developers get real connection strings, real SQL, real extensions (curated — see [extensions & upgrades](../03-database-platform/06-extensions-and-upgrades.md)). No proprietary query abstraction sits between the developer and their database.
+2. **PostgreSQL first.** Steadhold enhances Postgres; it never hides it. Developers get real connection strings, real SQL, real extensions (curated — see [extensions & upgrades](../03-database-platform/06-extensions-and-upgrades.md)). No proprietary query abstraction sits between the developer and their database.
 
 3. **Portable.** A developer can leave at any time with their database (`pg_dump`), files (S3-compatible export), users (standard table export including password hashes), and migrations. Portability is a *tested feature* with an export command, not a marketing claim — see the critique of this principle in the [critical review §3.4](03-critical-review.md).
 
@@ -52,7 +52,7 @@ First successful database request in **under five minutes** from sign-up ([the "
 
 - **Not a Firebase-style proprietary data model.** Postgres is the source of truth; no NoSQL abstraction.
 - **Not a general compute platform** (V1–V2). Functions/edge come only after the data platform is boring and reliable.
-- **Not a feature-race with Supabase.** Corebase wins on simplicity, provisioning speed, portability, and economics — not feature count. Cloning Supabase's surface area is explicitly the losing strategy ([competitive analysis](02-competitive-analysis.md)).
+- **Not a feature-race with Supabase.** Steadhold wins on simplicity, provisioning speed, portability, and economics — not feature count. Cloning Supabase's surface area is explicitly the losing strategy ([competitive analysis](02-competitive-analysis.md)).
 - **Not enterprise-first.** SSO/SAML/SCIM/compliance are V3 concerns. Building them early is the classic way to die before product-market fit.
 - **No SLA before the infrastructure can honor one.**
 
@@ -81,14 +81,14 @@ Example: a feature that improves DX but weakens isolation (e.g., allowing arbitr
 
 ## Decisions
 
-- **D-001 — Corebase's differentiation axis is *simplicity + portability + provisioning speed + economics*, not feature parity with Supabase.** All scope debates resolve against this. *(Rationale: a three-person team cannot out-feature a 100-person incumbent; it can out-simple them.)*
+- **D-001 — Steadhold's differentiation axis is *simplicity + portability + provisioning speed + economics*, not feature parity with Supabase.** All scope debates resolve against this. *(Rationale: a three-person team cannot out-feature a 100-person incumbent; it can out-simple them.)*
 - **D-002 — The priority stack above is binding.** Isolation and durability outrank DX; DX outranks cost; cost outranks breadth.
 - **D-003 — V1 targets indie developers and startups only.** Agency and enterprise needs are represented in data models (orgs, roles, audit tables) but their features are deferred.
-- **D-004 — Portability is a shippable feature**: `corebase export` (DB dump + storage manifest + users + migrations) is in V1 scope. *(Rationale: it's the claimed moat; an untested moat is fiction.)*
+- **D-004 — Portability is a shippable feature**: `steadhold export` (DB dump + storage manifest + users + migrations) is in V1 scope. *(Rationale: it's the claimed moat; an untested moat is fiction.)*
 
 ## Open Questions
 
-- OQ-001: Product name/domain availability check (`corebase.com`, `corebase.co`) — commercial task, outside this corpus. Tracked in [open questions](../15-risks/02-open-questions.md).
+- OQ-001: Product name/domain availability check (`steadhold.dev`, `steadhold.app`) — commercial task, outside this corpus. Tracked in [open questions](../15-risks/02-open-questions.md).
 
 ## Dependencies
 

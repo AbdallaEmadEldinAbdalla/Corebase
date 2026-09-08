@@ -15,9 +15,9 @@ tests:
   # the tempting definition that would make it 300 and page forever.
   - interval: 1m
     input_series:
-      - series: 'corebase_backup_wal_archive_lag_seconds{node="data-1",project_ref="healthy"}'
+      - series: 'steadhold_backup_wal_archive_lag_seconds{node="data-1",project_ref="healthy"}'
         values: '0+0x10'
-      - series: 'corebase_backup_check_ok{node="data-1",project_ref="healthy"}'
+      - series: 'steadhold_backup_check_ok{node="data-1",project_ref="healthy"}'
         values: '1+0x10'
     alert_rule_test:
       - eval_time: 10m
@@ -31,7 +31,7 @@ tests:
   # >900s — both from the same series, so a mistake in either bound shows here.
   - interval: 1m
     input_series:
-      - series: 'corebase_backup_wal_archive_lag_seconds{node="data-1",project_ref="rotting"}'
+      - series: 'steadhold_backup_wal_archive_lag_seconds{node="data-1",project_ref="rotting"}'
         values: '60+120x14'
     alert_rule_test:
       # 4 min in: lag is 60+120*4 = 540s, over the warn line, and `for: 1m` has
@@ -67,9 +67,9 @@ tests:
   # `pgbackrest check` is a separate signal rather than a confirmation of the same one.
   - interval: 1m
     input_series:
-      - series: 'corebase_backup_wal_archive_lag_seconds{node="data-1",project_ref="badcreds"}'
+      - series: 'steadhold_backup_wal_archive_lag_seconds{node="data-1",project_ref="badcreds"}'
         values: '0+0x10'
-      - series: 'corebase_backup_check_ok{node="data-1",project_ref="badcreds"}'
+      - series: 'steadhold_backup_check_ok{node="data-1",project_ref="badcreds"}'
         values: '0+0x10'
     alert_rule_test:
       - eval_time: 10m
@@ -88,7 +88,7 @@ tests:
                 The repo will not accept a backup. Until this clears, the project has no PITR regardless of what its lag says.
 
   # No successful *base backup* in over 26 hours (D-019: absent backups are
-  # fiction). The series is `corebase_backup_last_success_ts`, which means the last
+  # fiction). The series is `steadhold_backup_last_success_ts`, which means the last
   # successful full — P3b briefly wired it to the last archived WAL, which would
   # have kept this alert green for a project whose nightly full had been failing
   # for a week while its WAL flowed perfectly (D-277).
@@ -101,7 +101,7 @@ tests:
   # is prone to, and worth knowing before writing the next one.
   - interval: 1m
     input_series:
-      - series: 'corebase_backup_last_success_ts{node="data-1",project_ref="stale"}'
+      - series: 'steadhold_backup_last_success_ts{node="data-1",project_ref="stale"}'
         values: '0+0x1650'
     alert_rule_test:
       - eval_time: 27h
@@ -119,7 +119,7 @@ tests:
   # happening and going wrong.
   - interval: 1m
     input_series:
-      - series: 'corebase_backup_runs_total{type="full",outcome="failed"}'
+      - series: 'steadhold_backup_runs_total{type="full",outcome="failed"}'
         values: '0+0x30 1+0x30'
     alert_rule_test:
       - eval_time: 40m

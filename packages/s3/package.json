@@ -1,5 +1,5 @@
 {
-  "name": "@corebase/s3",
+  "name": "@steadhold/s3",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "test:unit": "vitest run --passWithNoTests"
   },
   "devDependencies": {
-    "@corebase/config": "workspace:*",
+    "@steadhold/config": "workspace:*",
     "@types/node": "^22.7.5",
     "typescript": "^5.6.3",
     "vitest": "^2.1.3"

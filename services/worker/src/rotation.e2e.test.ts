@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { createEnvelope } from '@corebase/crypto';
-import { createSecretStore, SECRET_NAMES } from '@corebase/secrets';
+import { createEnvelope } from '@steadhold/crypto';
+import { createSecretStore, SECRET_NAMES } from '@steadhold/secrets';
 import { createDocker, type Docker } from './docker.ts';
 import { buildSagas } from './jobs/sagas.ts';
 import { registerNode } from './placement.ts';
@@ -29,12 +29,12 @@ import type { SagaStep, SagaContext } from './jobs/runner.ts';
  * to reload. It is asserted as an absence — no pooler restart, no config write —
  * which is the only way to test that a step is genuinely unnecessary.
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
-const CERT_DIR = process.env.CB_DOCKER_CERT_DIR
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
+const CERT_DIR = process.env.SH_DOCKER_CERT_DIR
   ?? new URL('../../../infra/docker/staging/certs', import.meta.url).pathname;
-const HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
+const HOST = process.env.SH_DOCKER_HOST ?? '127.0.0.1';
+const PORT = Number(process.env.SH_DOCKER_PORT ?? 2376);
 const SECRET = 'test-bootstrap-secret-0123456789';
 
 let pool: Pool; let docker: Docker; let secrets: ReturnType<typeof createSecretStore>;
@@ -43,7 +43,7 @@ let kekDir: string; let orgId: string; let up = false; let seq = 0;
 const mkRef = () => 'x' + String(Date.now() % 100000) + String(++seq).padStart(14, 'x');
 
 beforeAll(async () => {
-  kekDir = mkdtempSync(join(tmpdir(), 'cb-p2d-'));
+  kekDir = mkdtempSync(join(tmpdir(), 'sh-p2d-'));
   writeFileSync(join(kekDir, 'k1.key'), randomBytes(32));
   try {
     pool = new Pool({ connectionString: DB, max: 6, connectionTimeoutMillis: 2000 });
@@ -110,7 +110,7 @@ beforeEach(async () => {
 function sagas() {
   return buildSagas({
     pool, docker, secrets, bootstrapSecret: SECRET,
-    healthTimeoutMs: 60_000, projectDomain: 'corebase.test',
+    healthTimeoutMs: 60_000, projectDomain: 'steadhold.test',
   });
 }
 
@@ -221,13 +221,13 @@ describe('P2d — credential rotation with active connections', () => {
     await old.query('select 1');
     await old.end();
 
-    const poolerBefore = await docker.inspectContainer(`cb-${p.ref}-pooler`);
+    const poolerBefore = await docker.inspectContainer(`sh-${p.ref}-pooler`);
     await runSaga('rotate_credentials', p.id);
     const after = (await secrets.get(p.id, SECRET_NAMES.developer))!;
 
     // The absence is the assertion: same container, never restarted, no config
     // written. auth_query means the pooler reads pg_shadow live (D-074).
-    const poolerAfter = await docker.inspectContainer(`cb-${p.ref}-pooler`);
+    const poolerAfter = await docker.inspectContainer(`sh-${p.ref}-pooler`);
     expect(poolerAfter!.Id, 'the pooler was replaced').toBe(poolerBefore!.Id);
     expect(poolerAfter!.State.Running).toBe(true);
     expect(poolerAfter!.State.Status, 'the pooler restarted').toBe('running');

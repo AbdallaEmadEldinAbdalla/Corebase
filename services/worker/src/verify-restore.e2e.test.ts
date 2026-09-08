@@ -6,8 +6,8 @@ import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { createEnvelope } from '@corebase/crypto';
-import { createSecretStore, SECRET_NAMES } from '@corebase/secrets';
+import { createEnvelope } from '@steadhold/crypto';
+import { createSecretStore, SECRET_NAMES } from '@steadhold/secrets';
 import { createDocker, type Docker } from './docker.ts';
 import { buildSagas } from './jobs/sagas.ts';
 import { registerNode } from './placement.ts';
@@ -27,12 +27,12 @@ import type { SagaStep, SagaContext } from './jobs/runner.ts';
  * that has not been restore-tested is treated as not existing" becomes a sentence
  * about a test that cannot fail.
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
-const CERT_DIR = process.env.CB_DOCKER_CERT_DIR
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
+const CERT_DIR = process.env.SH_DOCKER_CERT_DIR
   ?? join(process.cwd(), '../../infra/docker/staging/certs');
-const HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
+const HOST = process.env.SH_DOCKER_HOST ?? '127.0.0.1';
+const PORT = Number(process.env.SH_DOCKER_PORT ?? 2376);
 const SECRET = 'test-bootstrap-secret-0123456789';
 const run = promisify(execFile);
 
@@ -52,7 +52,7 @@ let up = false; let reason = '';
 beforeAll(async () => {
   loadBackupEnv();
   pool = new Pool({ connectionString: DB, max: 6, connectionTimeoutMillis: 1500 });
-  kekDir = mkdtempSync(join(tmpdir(), 'cb-kek-p3h-'));
+  kekDir = mkdtempSync(join(tmpdir(), 'sh-kek-p3h-'));
   writeFileSync(join(kekDir, 'kek_2026_09.key'), randomBytes(32));
   try {
     await pool.query('select 1 from restore_verifications limit 0');   // P3h migration?
@@ -211,7 +211,7 @@ describe('P3h — verifying a healthy backup', () => {
       projectId: p.id, ref: p.ref, plan: 'free', cipherPass: await cipherFor(p.id) });
 
     const scratch = (await docker.listContainers())
-      .filter((c) => c.Names.some((n) => n.includes('cb-verify-')));
+      .filter((c) => c.Names.some((n) => n.includes('sh-verify-')));
     expect(scratch).toEqual([]);
     // The project's own volume remains; the scratch one does not.
     expect((await docker.listVolumes()).length).toBe(before + 1);
@@ -231,15 +231,15 @@ describe('P3h — EXIT CRITERION: sabotage a backup and the verification fails',
     // only write rights the control plane is supposed to hold (backups §6), and
     // adding one to sabotage a test would have broken the access model it
     // documents.
-    const bucket = process.env['CB_BACKUP_S3_BUCKET']!;
+    const bucket = process.env['SH_BACKUP_S3_BUCKET']!;
     const prefix = repoPathFor(p.id).replace(/^\//, '');
-    const { stdout: listing } = await run('docker', ['exec', 'cb-object-store',
+    const { stdout: listing } = await run('docker', ['exec', 'sh-object-store',
       'mc', '--insecure', 'ls', '--recursive', `local/${bucket}/${prefix}/backup`]);
     const target = listing.split('\n').map((l) => l.trim().split(/\s+/).pop() ?? '')
       .filter((k) => k.endsWith('.zst') || k.endsWith('.gz'))[0];
     expect(target, 'no backup data file found to sabotage').toBeTruthy();
 
-    await run('docker', ['exec', 'cb-object-store', 'sh', '-c',
+    await run('docker', ['exec', 'sh-object-store', 'sh', '-c',
       `head -c 4096 /dev/urandom > /tmp/garbage && mc --insecure cp /tmp/garbage ` +
       `local/${bucket}/${prefix}/backup/${target} >/dev/null`]);
 
@@ -340,7 +340,7 @@ describe('P3h — the scheduler picks the right project (D-176)', () => {
          (project_id, node_id, volume_name, port, pooler_port, ram_limit_mb,
           ram_booked_mb, disk_limit_mb, status)
        values ($1,$2,$3,$4,$5,512,350,500,'running')`,
-      [p.id, n[0]!.id, 'cb-' + ref + '-pgdata', 15000 + seq, 16000 + seq]);
+      [p.id, n[0]!.id, 'sh-' + ref + '-pgdata', 15000 + seq, 16000 + seq]);
     return p;
   }
 

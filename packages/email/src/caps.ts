@@ -4,7 +4,7 @@
  * ## What these are defending
  *
  * Not our bill. The threat is that `/signup` and `/recover` let any anonymous
- * visitor cause Corebase to email an arbitrary address, and V1 sends every
+ * visitor cause Steadhold to email an arbitrary address, and V1 sends every
  * project's mail from one domain — so one attacker with a free project can use us
  * as a bulk mailer or mail-bomb a victim, and the reputation damage lands on every
  * project on the platform. These caps are the blast radius.

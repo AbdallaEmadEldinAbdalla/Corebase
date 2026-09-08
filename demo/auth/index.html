@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Corebase Auth — demo</title>
+<title>Steadhold Auth — demo</title>
 <!--
   Phase 4's demo (roadmap §Phase 4): "a plain HTML page signs a user up against a
   project, verifies email, logs in, shows the JWT claims."
@@ -72,7 +72,7 @@
 </head>
 <body>
 <main>
-  <h1>Corebase Auth</h1>
+  <h1>Steadhold Auth</h1>
   <p class="sub" id="target">…</p>
 
   <section>
@@ -133,7 +133,7 @@
 <script>
 (() => {
   'use strict';
-  const cfg = window.COREBASE_DEMO || {};
+  const cfg = window.STEADHOLD_DEMO || {};
   const api = (cfg.apiBase || 'http://127.0.0.1:8099').replace(/\/$/, '');
   const key = cfg.anonKey || '';
   const $ = (id) => document.getElementById(id);

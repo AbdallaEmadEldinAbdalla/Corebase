@@ -3,7 +3,7 @@ import { QUEUE_PROVISIONING, QUEUE_PREFIX } from './index.ts';
 
 describe('queue naming', () => {
   /**
-   * Regression: the queue was originally named 'corebase:provisioning', which
+   * Regression: the queue was originally named 'steadhold:provisioning', which
    * BullMQ rejects because ':' is reserved for its own key namespacing. The
    * failure surfaced only in integration tests — and those were skipping
    * silently, so it nearly shipped.
@@ -12,7 +12,7 @@ describe('queue naming', () => {
     expect(QUEUE_PROVISIONING).not.toContain(':');
   });
   it('namespaces through prefix instead', () => {
-    expect(QUEUE_PREFIX).toBe('corebase');
+    expect(QUEUE_PREFIX).toBe('steadhold');
     expect(QUEUE_PREFIX).not.toContain(':');
   });
   it('keeps the names non-empty and lowercase-safe for Redis keys', () => {

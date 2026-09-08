@@ -1,4 +1,4 @@
-import type { ProvisioningJobData } from '@corebase/queue';
+import type { ProvisioningJobData } from '@steadhold/queue';
 import type { JobRepo, JobRecord } from './repo.ts';
 
 /**

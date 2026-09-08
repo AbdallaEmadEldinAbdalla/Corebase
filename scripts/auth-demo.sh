@@ -11,13 +11,13 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-API="${CB_DEMO_API:-http://127.0.0.1:8099}"
-TOKEN="${CB_STATIC_TOKEN:-local-dev-only-not-a-production-credential}"
-PORT="${CB_DEMO_PORT:-8123}"
+API="${SH_DEMO_API:-http://127.0.0.1:8099}"
+TOKEN="${SH_STATIC_TOKEN:-local-dev-only-not-a-production-credential}"
+PORT="${SH_DEMO_PORT:-8123}"
 ORIGIN="http://127.0.0.1:$PORT"
-MAILPIT="${CB_MAILPIT_API:-http://127.0.0.1:58025}"
-DB="${CB_CONTROL_DATABASE_URL:-postgres://corebase:controlpass@127.0.0.1:55433/corebase_control}"
-NAME="${CB_DEMO_PROJECT:-auth-demo}"
+MAILPIT="${SH_MAILPIT_API:-http://127.0.0.1:58025}"
+DB="${SH_CONTROL_DATABASE_URL:-postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control}"
+NAME="${SH_DEMO_PROJECT:-auth-demo}"
 
 say() { printf '  %s\n' "$*"; }
 
@@ -31,14 +31,14 @@ if ! curl -fsS "$MAILPIT/api/v1/messages" >/dev/null 2>&1; then
 fi
 # The page is served from its own origin, so every call it makes is cross-origin.
 # Without the origin allowlisted the browser refuses the preflight and the console
-# says only "CORS", which is a long way from "add this to CB_DASHBOARD_ORIGINS".
+# says only "CORS", which is a long way from "add this to SH_DASHBOARD_ORIGINS".
 PREFLIGHT="$(curl -sS -X OPTIONS "$API/auth/v1/signup" \
              -H "origin: $ORIGIN" -H 'access-control-request-method: POST' \
              -o /dev/null -w '%{http_code}' 2>/dev/null || echo 000)"
 if [ "$PREFLIGHT" != "204" ]; then
   echo "✗ $API will not accept browser calls from $ORIGIN (preflight $PREFLIGHT)." >&2
-  echo "  Add it to CB_DASHBOARD_ORIGINS and restart the API:" >&2
-  echo "    CB_DASHBOARD_ORIGINS=\"\$CB_DASHBOARD_ORIGINS,$ORIGIN\" ./scripts/dev.sh" >&2
+  echo "  Add it to SH_DASHBOARD_ORIGINS and restart the API:" >&2
+  echo "    SH_DASHBOARD_ORIGINS=\"\$SH_DASHBOARD_ORIGINS,$ORIGIN\" ./scripts/dev.sh" >&2
   exit 1
 fi
 
@@ -54,9 +54,9 @@ ORG="$(curl -fsS "$API/v1/orgs" -H "authorization: Bearer $TOKEN" \
 # the nightly harnesses fell into: omitting it works right up until some other
 # suite creates an org.
 REF="$(curl -fsS "$API/v1/projects?limit=100&org_id=$ORG" -H "authorization: Bearer $TOKEN" \
-       | CB_NAME="$NAME" python3 -c "
+       | SH_NAME="$NAME" python3 -c "
 import json, os, sys
-want = os.environ['CB_NAME']
+want = os.environ['SH_NAME']
 for p in json.load(sys.stdin).get('projects', []):
     if p.get('name') == want:
         print(p['ref']); break
@@ -88,7 +88,7 @@ echo "▸ auth config"
 # `site_url` is the only place a verification link is allowed to land, and the
 # demo page is that place. Without it `GET /verify` has nowhere to redirect and
 # answers in JSON instead — correct, and not the flow being demonstrated.
-psql_c() { docker exec -i cb-control-db psql -U corebase -d corebase_control -qAtc "$1"; }
+psql_c() { docker exec -i sh-control-db psql -U steadhold -d steadhold_control -qAtc "$1"; }
 PROJECT_ID="$(psql_c "select id from projects where ref = '$REF'")"
 psql_c "insert into project_auth_config (project_id, site_url, additional_redirects)
         values ('$PROJECT_ID', '$ORIGIN', '{}')
@@ -115,7 +115,7 @@ cat > "$ROOT/demo/auth/config.js" <<CFGEOF
 // browser holding it is the intended state. A service_role key here would hand
 // every visitor the ability to read every user's row, which is why nothing on
 // this page ever sees one.
-window.COREBASE_DEMO = {
+window.STEADHOLD_DEMO = {
   apiBase: '$API',
   ref: '$REF',
   anonKey: '$ANON',

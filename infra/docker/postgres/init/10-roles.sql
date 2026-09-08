@@ -19,9 +19,9 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticator') THEN
     CREATE ROLE authenticator NOINHERIT LOGIN PASSWORD NULL;
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'corebase_admin') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'steadhold_admin') THEN
     -- audited dashboard/DDL path; never handed to customer apps (D-132)
-    CREATE ROLE corebase_admin NOINHERIT LOGIN PASSWORD NULL CREATEROLE;
+    CREATE ROLE steadhold_admin NOINHERIT LOGIN PASSWORD NULL CREATEROLE;
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'pgbouncer_auth') THEN
     -- The pooler's own identity (D-074). It can do exactly one thing: call the
@@ -35,8 +35,8 @@ BEGIN
   -- (25-auth-schema.sql), which is what keeps the end-user password hashes out of
   -- reach of every role a customer's API traffic can arrive as — service_role
   -- included, since BYPASSRLS does not grant table privileges.
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'corebase_auth') THEN
-    CREATE ROLE corebase_auth NOINHERIT LOGIN PASSWORD NULL;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'steadhold_auth') THEN
+    CREATE ROLE steadhold_auth NOINHERIT LOGIN PASSWORD NULL;
   END IF;
 END
 $$;

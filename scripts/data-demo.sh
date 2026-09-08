@@ -13,12 +13,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-API="${CB_DEMO_API:-http://127.0.0.1:8099}"
-TOKEN="${CB_STATIC_TOKEN:-local-dev-only-not-a-production-credential}"
-PORT="${CB_DEMO_PORT:-8124}"
+API="${SH_DEMO_API:-http://127.0.0.1:8099}"
+TOKEN="${SH_STATIC_TOKEN:-local-dev-only-not-a-production-credential}"
+PORT="${SH_DEMO_PORT:-8124}"
 ORIGIN="http://127.0.0.1:$PORT"
-DOMAIN="${CB_PROJECT_DOMAIN:-localhost}"
-NAME="${CB_DEMO_PROJECT:-data-demo}"
+DOMAIN="${SH_PROJECT_DOMAIN:-localhost}"
+NAME="${SH_DEMO_PROJECT:-data-demo}"
 
 say() { printf '  %s\n' "$*"; }
 jq_py() { python3 -c "import json,sys; $1"; }
@@ -37,9 +37,9 @@ ORG="$(curl -fsS "$API/v1/orgs" -H "authorization: Bearer $TOKEN" \
 [ -n "$ORG" ] || { echo "✗ the bootstrap user belongs to no organization" >&2; exit 1; }
 
 REF="$(curl -fsS "$API/v1/projects?limit=100&org_id=$ORG" -H "authorization: Bearer $TOKEN" \
-       | CB_NAME="$NAME" python3 -c "
+       | SH_NAME="$NAME" python3 -c "
 import json, os, sys
-want = os.environ['CB_NAME']
+want = os.environ['SH_NAME']
 for p in json.load(sys.stdin).get('projects', []):
     if p.get('name') == want:
         print(p['ref']); break
@@ -111,12 +111,12 @@ printf '%s' "$SQL" | psql "$DIRECT" -q -v ON_ERROR_STOP=1 \
 say "✓ table and policies applied over the project's own DATABASE_URL"
 
 echo "▸ two users"
-PROJECT_ID="$(docker exec -i cb-control-db psql -U corebase -d corebase_control -qAtc \
+PROJECT_ID="$(docker exec -i sh-control-db psql -U steadhold -d steadhold_control -qAtc \
   "select id from projects where ref = '$REF'")"
 # Autoconfirm ON here, and only here: Phase 4's demo is the one that proves a real
 # address gets a real mail. This one is about RLS, and a mailbox round trip in the
 # middle of it would be a different lesson.
-docker exec -i cb-control-db psql -U corebase -d corebase_control -qAtc \
+docker exec -i sh-control-db psql -U steadhold -d steadhold_control -qAtc \
   "insert into project_auth_config (project_id, autoconfirm, site_url)
    values ('$PROJECT_ID', true, '$ORIGIN')
    on conflict (project_id) do update set autoconfirm = true, site_url = '$ORIGIN'" >/dev/null
@@ -191,7 +191,7 @@ cat > "$ROOT/demo/data/config.js" <<CFGEOF
 // published in client code by design (D-029). The service_role key this script
 // also holds is never written here: it bypasses RLS entirely, so a page carrying
 // it would show every visitor every user's notes.
-window.COREBASE_DEMO = {
+window.STEADHOLD_DEMO = {
   ref: '$REF',
   anonKey: '$ANON',
   users: { alice: '$ALICE', bob: '$BOB' },

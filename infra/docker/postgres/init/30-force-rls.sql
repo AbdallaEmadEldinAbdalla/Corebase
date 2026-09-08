@@ -14,9 +14,9 @@
 --
 -- The event trigger is what makes this non-optional; a tooling-layer lint can be
 -- bypassed by anyone with SQL access, and the whole point is that it cannot be.
-CREATE SCHEMA IF NOT EXISTS corebase;
+CREATE SCHEMA IF NOT EXISTS steadhold;
 
-CREATE OR REPLACE FUNCTION corebase.force_rls_on_new_tables()
+CREATE OR REPLACE FUNCTION steadhold.force_rls_on_new_tables()
   RETURNS event_trigger LANGUAGE plpgsql AS $$
 DECLARE
   obj record;
@@ -25,12 +25,12 @@ BEGIN
              WHERE command_tag = 'CREATE TABLE' AND schema_name = 'public'
   LOOP
     EXECUTE format('ALTER TABLE %s ENABLE ROW LEVEL SECURITY', obj.object_identity);
-    RAISE NOTICE 'corebase: RLS enabled on % (no policies yet: anon and authenticated see nothing)',
+    RAISE NOTICE 'steadhold: RLS enabled on % (no policies yet: anon and authenticated see nothing)',
       obj.object_identity;
   END LOOP;
 END $$;
 
-DROP EVENT TRIGGER IF EXISTS corebase_force_rls;
-CREATE EVENT TRIGGER corebase_force_rls
+DROP EVENT TRIGGER IF EXISTS steadhold_force_rls;
+CREATE EVENT TRIGGER steadhold_force_rls
   ON ddl_command_end WHEN TAG IN ('CREATE TABLE')
-  EXECUTE FUNCTION corebase.force_rls_on_new_tables();
+  EXECUTE FUNCTION steadhold.force_rls_on_new_tables();

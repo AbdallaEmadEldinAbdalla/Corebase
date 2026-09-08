@@ -4,9 +4,9 @@ import { join } from 'node:path';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { createEnvelope } from '@corebase/crypto';
-import { createSecretStore, SECRET_NAMES } from '@corebase/secrets';
-import { createRedis, createQueue } from '@corebase/queue';
+import { createEnvelope } from '@steadhold/crypto';
+import { createSecretStore, SECRET_NAMES } from '@steadhold/secrets';
+import { createRedis, createQueue } from '@steadhold/queue';
 import { createDocker, type Docker } from './docker.ts';
 import { buildSagas } from './jobs/sagas.ts';
 import { registerNode } from './placement.ts';
@@ -27,13 +27,13 @@ import { loadBackupEnv } from './staging-env.ts';
  * proves is that backups happen on their own, that failures are visible, and that
  * old ones go away.
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
-const REDIS = process.env.CB_REDIS_URL ?? 'redis://127.0.0.1:56379';
-const CERT_DIR = process.env.CB_DOCKER_CERT_DIR
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
+const REDIS = process.env.SH_REDIS_URL ?? 'redis://127.0.0.1:56379';
+const CERT_DIR = process.env.SH_DOCKER_CERT_DIR
   ?? join(process.cwd(), '../../infra/docker/staging/certs');
-const HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
+const HOST = process.env.SH_DOCKER_HOST ?? '127.0.0.1';
+const PORT = Number(process.env.SH_DOCKER_PORT ?? 2376);
 const SECRET = 'test-bootstrap-secret-0123456789';
 const ALWAYS = { startHour: 0, endHour: 24 };
 
@@ -47,7 +47,7 @@ let up = false; let reason = '';
 beforeAll(async () => {
   loadBackupEnv();
   pool = new Pool({ connectionString: DB, max: 6, connectionTimeoutMillis: 1500 });
-  kekDir = mkdtempSync(join(tmpdir(), 'cb-kek-p3c-'));
+  kekDir = mkdtempSync(join(tmpdir(), 'sh-kek-p3c-'));
   writeFileSync(join(kekDir, 'kek_2026_09.key'), randomBytes(32));
   try {
     await pool.query('select 1');

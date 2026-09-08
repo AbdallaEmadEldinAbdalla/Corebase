@@ -1,6 +1,6 @@
 import type { Pool } from 'pg';
 import { Client } from 'pg';
-import { enqueueProvisioning, type Queue, type ProvisioningJobData } from '@corebase/queue';
+import { enqueueProvisioning, type Queue, type ProvisioningJobData } from '@steadhold/queue';
 import { DEVELOPER_ROLE, POOLER_AUTH_ROLE } from './project-admin.ts';
 import { poolerName, networkName } from './container-spec.ts';
 import type { Docker } from './docker.ts';

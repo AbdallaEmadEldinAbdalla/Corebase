@@ -75,7 +75,7 @@ describe('probeNodeCaps', () => {
     });
     await probeNodeCaps(d, 'img');
     expect(removed).toHaveLength(1);
-    expect(removed[0]).toMatch(/^cb-caps-probe-/);
+    expect(removed[0]).toMatch(/^sh-caps-probe-/);
   });
 });
 

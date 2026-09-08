@@ -17,14 +17,14 @@ export default function NoOrgPage() {
   return (
     <AppShell>
       <div className="wrap">
-          <div className="emptywrap"><div className="cb-empty">
-            <div className="cb-empty__icon" aria-hidden="true">·</div>
-            <div className="cb-empty__title">No organizations yet</div>
-            <div className="cb-empty__text">
+          <div className="emptywrap"><div className="sh-empty">
+            <div className="sh-empty__icon" aria-hidden="true">·</div>
+            <div className="sh-empty__title">No organizations yet</div>
+            <div className="sh-empty__text">
               Organizations own projects. Create one to get started, or open the
               invitation link you were sent if someone added you to theirs.
             </div>
-            <Link className="cb-btn" href="/new-org">New organization</Link>
+            <Link className="sh-btn" href="/new-org">New organization</Link>
           </div></div>
       </div>
     </AppShell>

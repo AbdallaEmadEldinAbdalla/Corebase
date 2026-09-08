@@ -20,8 +20,8 @@
  * clients attached, and how far booked RAM sits from used RAM at that scale.
  *
  * Usage (staging up, migrated, images seeded):
- *   pnpm --filter @corebase/worker density
- *   CB_DN_PROJECTS=100 CB_DN_CONNS=2 pnpm --filter @corebase/worker density
+ *   pnpm --filter @steadhold/worker density
+ *   SH_DN_PROJECTS=100 SH_DN_CONNS=2 pnpm --filter @steadhold/worker density
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { connect } from 'node:net';
@@ -34,13 +34,13 @@ import { PLAN_RAM_MB, FILL_CEILING } from '../src/placement.ts';
 import { IMAGE } from '../src/container-spec.ts';
 
 const ROOT = resolve(import.meta.dirname, '../../..');
-const TARGET = Number(process.env.CB_DN_PROJECTS ?? 100);
-const CONNS = Number(process.env.CB_DN_CONNS ?? 2);
-const LOAD_SECONDS = Number(process.env.CB_DN_LOAD_SECONDS ?? 30);
-const CONCURRENCY = Number(process.env.CB_DN_CONCURRENCY ?? 4);
-const PORT = Number(process.env.CB_DN_API_PORT ?? 8098);
+const TARGET = Number(process.env.SH_DN_PROJECTS ?? 100);
+const CONNS = Number(process.env.SH_DN_CONNS ?? 2);
+const LOAD_SECONDS = Number(process.env.SH_DN_LOAD_SECONDS ?? 30);
+const CONCURRENCY = Number(process.env.SH_DN_CONCURRENCY ?? 4);
+const PORT = Number(process.env.SH_DN_API_PORT ?? 8098);
 const TOKEN = 'dn-token-harness-token-long-enough-for-the-boot-check';
-const BUDGET_MS = Number(process.env.CB_DN_BUDGET_MS ?? 120_000);
+const BUDGET_MS = Number(process.env.SH_DN_BUDGET_MS ?? 120_000);
 
 /**
  * The node is declared far larger than the VM it runs in, deliberately, and this
@@ -56,25 +56,25 @@ const BUDGET_MS = Number(process.env.CB_DN_BUDGET_MS ?? 120_000);
  * booking model*. It says what 100 projects actually consume, which is the number
  * the booking model is supposed to be conservative about.
  */
-const DECLARED_RAM_MB = Number(process.env.CB_DN_NODE_RAM_MB
+const DECLARED_RAM_MB = Number(process.env.SH_DN_NODE_RAM_MB
   ?? Math.ceil((TARGET * (PLAN_RAM_MB['free'] ?? 350)) / FILL_CEILING / 1024) * 1024);
-const DECLARED_DISK_GB = Number(process.env.CB_DN_NODE_DISK_GB ?? Math.ceil(TARGET / FILL_CEILING) + 50);
+const DECLARED_DISK_GB = Number(process.env.SH_DN_NODE_DISK_GB ?? Math.ceil(TARGET / FILL_CEILING) + 50);
 
-const PG_PORT_BASE = Number(process.env.CB_DN_PG_PORT_BASE ?? 5433);
-const POOLER_PORT_BASE = Number(process.env.CB_DN_POOLER_PORT_BASE ?? 6433);
+const PG_PORT_BASE = Number(process.env.SH_DN_PG_PORT_BASE ?? 5433);
+const POOLER_PORT_BASE = Number(process.env.SH_DN_POOLER_PORT_BASE ?? 6433);
 
 const env = {
   ...process.env,
-  CB_CONTROL_DATABASE_URL: appDatabaseUrl(ROOT),
-  CB_REDIS_URL: process.env.CB_REDIS_URL ?? 'redis://127.0.0.1:56379',
-  CB_DOCKER_HOST: process.env.CB_DOCKER_HOST ?? '127.0.0.1',
-  CB_DOCKER_PORT: process.env.CB_DOCKER_PORT ?? '2376',
-  CB_DOCKER_CERT_DIR: process.env.CB_DOCKER_CERT_DIR ?? join(ROOT, 'infra/docker/staging/certs'),
-  CB_KEK_DIR: process.env.CB_KEK_DIR ?? join(ROOT, 'infra/docker/staging/kek.d'),
-  ...(process.env.CB_KEK_ID ? { CB_KEK_ID: process.env.CB_KEK_ID } : {}),
-  CB_BOOTSTRAP_SECRET: process.env.CB_BOOTSTRAP_SECRET ?? 'bench-bootstrap-secret-0123456789',
-  CB_STATIC_TOKEN: TOKEN,
-  CB_NODE_RAM_MB: String(DECLARED_RAM_MB),
+  SH_CONTROL_DATABASE_URL: appDatabaseUrl(ROOT),
+  SH_REDIS_URL: process.env.SH_REDIS_URL ?? 'redis://127.0.0.1:56379',
+  SH_DOCKER_HOST: process.env.SH_DOCKER_HOST ?? '127.0.0.1',
+  SH_DOCKER_PORT: process.env.SH_DOCKER_PORT ?? '2376',
+  SH_DOCKER_CERT_DIR: process.env.SH_DOCKER_CERT_DIR ?? join(ROOT, 'infra/docker/staging/certs'),
+  SH_KEK_DIR: process.env.SH_KEK_DIR ?? join(ROOT, 'infra/docker/staging/kek.d'),
+  ...(process.env.SH_KEK_ID ? { SH_KEK_ID: process.env.SH_KEK_ID } : {}),
+  SH_BOOTSTRAP_SECRET: process.env.SH_BOOTSTRAP_SECRET ?? 'bench-bootstrap-secret-0123456789',
+  SH_STATIC_TOKEN: TOKEN,
+  SH_NODE_RAM_MB: String(DECLARED_RAM_MB),
   // The per-org ceiling (20 live projects) is an abuse control, not a capacity
   // one — it exists so a single account cannot consume a node's whole RAM budget
   // and turn a billing question into an outage. It is also the wall this run hit
@@ -86,8 +86,8 @@ const env = {
   // nothing about cross-tenant behaviour in the control plane. It says nothing
   // about density either way — isolation is per container, and an org is a
   // control-plane grouping the node has never heard of.
-  CB_PROJECTS_PER_ORG: String(process.env.CB_DN_ORG_LIMIT ?? TARGET + 20),
-  CB_NODE_DISK_GB: String(DECLARED_DISK_GB),
+  SH_PROJECTS_PER_ORG: String(process.env.SH_DN_ORG_LIMIT ?? TARGET + 20),
+  SH_NODE_DISK_GB: String(DECLARED_DISK_GB),
   // One published host port per container, two containers per project, and the
   // allocator must be narrowed to exactly what the data node republishes —
   // `dind` puts project ports in its own namespace, so a port the compose file
@@ -95,15 +95,15 @@ const env = {
   // this wrong does not fail at allocation: every project provisions
   // successfully and then dies at `wait_pooler_healthy` with `ECONNREFUSED`,
   // nine steps in, which reads like a broken pooler.
-  CB_PG_PORT_MIN: String(PG_PORT_BASE), CB_PG_PORT_MAX: String(PG_PORT_BASE + TARGET - 1),
-  CB_POOLER_PORT_MIN: String(POOLER_PORT_BASE), CB_POOLER_PORT_MAX: String(POOLER_PORT_BASE + TARGET - 1),
+  SH_PG_PORT_MIN: String(PG_PORT_BASE), SH_PG_PORT_MAX: String(PG_PORT_BASE + TARGET - 1),
+  SH_POOLER_PORT_MIN: String(POOLER_PORT_BASE), SH_POOLER_PORT_MAX: String(POOLER_PORT_BASE + TARGET - 1),
   // The disk and idle sweeps would otherwise run mid-measurement and their
   // `pg_database_size` queries are themselves client load.
-  CB_DISK_SCAN_MS: '3600000',
-  CB_IDLE_SCAN_MS: '3600000',
+  SH_DISK_SCAN_MS: '3600000',
+  SH_IDLE_SCAN_MS: '3600000',
   PORT: String(PORT),
-  CB_METRICS_PORT: '9116',
-  CB_PROJECT_DOMAIN: 'localhost',
+  SH_METRICS_PORT: '9116',
+  SH_PROJECT_DOMAIN: 'localhost',
 };
 
 const children: ChildProcess[] = [];
@@ -111,7 +111,7 @@ const start = (name: string, cwd: string, script: string) => {
   const c = spawn('node', ['--experimental-strip-types', script], {
     cwd: join(ROOT, cwd), env, stdio: ['ignore', 'pipe', 'pipe'],
   });
-  c.stdout.on('data', (b) => { if (process.env.CB_DN_VERBOSE) process.stdout.write(`[${name}] ${b}`); });
+  c.stdout.on('data', (b) => { if (process.env.SH_DN_VERBOSE) process.stdout.write(`[${name}] ${b}`); });
   c.stderr.on('data', (b) => process.stderr.write(`[${name}] ${b}`));
   children.push(c);
   return c;
@@ -150,8 +150,8 @@ async function waitFor(ref: string, want: string): Promise<void> {
 }
 
 const docker = createDocker({
-  host: env.CB_DOCKER_HOST, port: Number(env.CB_DOCKER_PORT),
-  certDir: env.CB_DOCKER_CERT_DIR, timeoutMs: 30_000,
+  host: env.SH_DOCKER_HOST, port: Number(env.SH_DOCKER_PORT),
+  certDir: env.SH_DOCKER_CERT_DIR, timeoutMs: 30_000,
 });
 
 interface Sample {
@@ -166,7 +166,7 @@ interface Sample {
 
 /** Read every managed container's memory, plus the node's own view of itself. */
 async function sample(): Promise<Sample> {
-  const list = await docker.listContainers('com.corebase.managed=true');
+  const list = await docker.listContainers('com.steadhold.managed=true');
   const running = list.filter((c) => c.State === 'running');
   const rows: Array<{ role: string; anon: number; usage: number; cpu: number }> = [];
   for (const c of running) {
@@ -178,7 +178,7 @@ async function sample(): Promise<Sample> {
       // project overstates it by whatever the kernel happened to be caching.
       const anon = st['anon'] ?? Math.max(0, (s.memory_stats?.usage ?? 0) - (st['inactive_file'] ?? 0));
       rows.push({
-        role: c.Labels?.['com.corebase.role'] ?? 'database',
+        role: c.Labels?.['com.steadhold.role'] ?? 'database',
         anon,
         usage: s.memory_stats?.usage ?? 0,
         cpu: s.cpu_stats?.cpu_usage?.total_usage ?? 0,
@@ -222,16 +222,16 @@ async function sample(): Promise<Sample> {
  * "would another project fit".
  */
 async function nodeMemory(): Promise<{ mem_total_mib: number; mem_available_mib: number; mem_used_mib: number }> {
-  const probe = 'cb-dn-meminfo';
+  const probe = 'sh-dn-meminfo';
   await docker.removeContainer(probe, true, true).catch(() => {});
   try {
     const id = await docker.createContainer(probe, {
       // The same constant the product reads, rather than this harness's own
-      // `env` object — which never carried `CB_PG_IMAGE`, so the `??` always
+      // `env` object — which never carried `SH_PG_IMAGE`, so the `??` always
       // took its fallback and the probe silently pinned an image the fleet may
       // have moved off. Caught the moment these files were added to `tsc`.
       Image: IMAGE,
-      Env: [], Labels: { 'com.corebase.role': 'density-probe' },
+      Env: [], Labels: { 'com.steadhold.role': 'density-probe' },
       Cmd: ['sh', '-c', 'grep -E "^(MemTotal|MemAvailable|MemFree|Cached):" /proc/meminfo'],
       HostConfig: {
         Memory: 64 * 1024 * 1024, MemorySwap: 64 * 1024 * 1024, NanoCpus: 1e8,

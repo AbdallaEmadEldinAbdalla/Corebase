@@ -170,11 +170,11 @@ function encodeHeader(value: string): string {
 /**
  * Quote a display name, so RFC 5322 reads it as one.
  *
- * The friendly-from is `Acme (via Corebase)`, and unquoted that is **not** the
+ * The friendly-from is `Acme (via Steadhold)`, and unquoted that is **not** the
  * name it looks like: parentheses delimit a *comment* in a mail header, so
- * `Acme (via Corebase) <auth@…>` parses as the display name "Acme" with a
+ * `Acme (via Steadhold) <auth@…>` parses as the display name "Acme" with a
  * comment beside it, and the recipient sees "Acme" alone. The live sink caught
- * exactly that — which matters because the "via Corebase" half is the part that
+ * exactly that — which matters because the "via Steadhold" half is the part that
  * keeps us from claiming to *be* the customer while sending from our own domain,
  * which is what DMARC alignment exists to catch.
  *
@@ -211,7 +211,7 @@ const dotStuff = (body: string) =>
   body.split('\r\n').map((l) => (l.startsWith('.') ? '.' + l : l)).join('\r\n');
 
 function buildMime(m: OutgoingMessage, messageId: string): string {
-  const boundary = `cb_${randomUUID().replace(/-/g, '')}`;
+  const boundary = `sh_${randomUUID().replace(/-/g, '')}`;
   const from = m.fromName ? `${displayName(m.fromName)} <${headerSafe(m.from)}>`
                           : headerSafe(m.from);
   const headers = [
@@ -255,13 +255,13 @@ function buildMime(m: OutgoingMessage, messageId: string): string {
 
 export function createSmtpProvider(config: SmtpConfig): EmailProvider {
   const timeoutMs = config.timeoutMs ?? 15_000;
-  const clientName = config.clientName ?? 'corebase';
+  const clientName = config.clientName ?? 'steadhold';
 
   return {
     name: `smtp:${config.host}:${config.port}`,
 
     async send(m: OutgoingMessage): Promise<SendResult> {
-      const messageId = `${randomUUID()}@corebase`;
+      const messageId = `${randomUUID()}@steadhold`;
       let socket: AnySocket;
       try {
         socket = config.tls === 'require'

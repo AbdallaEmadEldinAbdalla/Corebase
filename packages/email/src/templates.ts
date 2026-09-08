@@ -1,5 +1,5 @@
 /**
- * The five V1 templates, rendered from Corebase-controlled layouts (D-116).
+ * The five V1 templates, rendered from Steadhold-controlled layouts (D-116).
  *
  * ## The restriction is the feature
  *
@@ -236,7 +236,7 @@ export function render(
   const subject = interpolate(source.subject, withDefaults, (v) => v);
   const paragraphs = source.body.map((p) => interpolate(p, withDefaults, escapeHtml));
   const url = vars.ConfirmationURL;
-  const footer = `Sent by Corebase on behalf of ${escapeHtml(projectName)}. `
+  const footer = `Sent by Steadhold on behalf of ${escapeHtml(projectName)}. `
     + 'You are receiving this because your email address was used on their app.';
 
   const html = layout({
@@ -252,7 +252,7 @@ export function render(
     subject, '',
     ...textParagraphs.flatMap((p) => [p, '']),
     ...(source.action && url ? [`${source.action}: ${url}`, ''] : []),
-    `Sent by Corebase on behalf of ${projectName}.`,
+    `Sent by Steadhold on behalf of ${projectName}.`,
   ].join('\n');
 
   return { subject, html, text };

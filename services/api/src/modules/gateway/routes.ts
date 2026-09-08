@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { createHash } from 'node:crypto';
-import { decodeUnverified, verify as verifyJwt, JwtError } from '@corebase/jwt';
+import { decodeUnverified, verify as verifyJwt, JwtError } from '@steadhold/jwt';
 import type { RateLimiter } from '../../kernel/rate-limit.ts';
 import { rateLimitKey } from '../../kernel/rate-limit.ts';
 import { refFromHost, type RoutingTable, type RouteEntry } from './routing.ts';
@@ -214,7 +214,7 @@ export function registerGateway(app: FastifyInstance, deps: GatewayDeps) {
 
     const headers: Record<string, string> = {
       authorization: auth as string,
-      // Forwarded so `corebase.pre_request` can stamp it into application_name
+      // Forwarded so `steadhold.pre_request` can stamp it into application_name
       // (D-105) — this is how a slow query traces back to an HTTP request.
       'x-request-id': requestId,
       accept: (req.headers['accept'] as string) ?? 'application/json',

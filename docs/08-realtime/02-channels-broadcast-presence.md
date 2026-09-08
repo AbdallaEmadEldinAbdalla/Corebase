@@ -17,7 +17,7 @@ The non-WAL 80% of realtime's user value — ephemeral pub/sub (broadcast) and w
 ### A. Endpoint and connection auth
 
 ```
-wss://<project_ref>.corebase.co/realtime/v1?apikey=<anon-or-service_role-key>
+wss://<project_ref>.steadhold.app/realtime/v1?apikey=<anon-or-service_role-key>
 ```
 
 - **`apikey` (required):** one of the two project keys (D-029). The gateway resolves `<project_ref>` → project, verifies the key against the project keypair, and binds the connection to exactly that `project_id` — proposal §24's rule: no channel on this connection can ever reference another project.
@@ -78,7 +78,7 @@ Client → channel → all current subscribers. **No database involvement whatso
 **Server-initiated publish** without holding a WebSocket (e.g., from the customer's own backend):
 
 ```
-POST https://<project_ref>.corebase.co/realtime/v1/broadcast
+POST https://<project_ref>.steadhold.app/realtime/v1/broadcast
 Authorization: Bearer <service_role key>
 {"channel":"room:42","event":"game_over","payload":{"winner":"Ada"}}
 ```
@@ -128,7 +128,7 @@ One realtime process per node (colocated per [D-125](01-realtime-architecture.md
 
 ## Decisions
 
-- **D-128 — Realtime wire protocol v1: JSON frames `{v, type, id?, channel?, event?, payload}` over `wss://<ref>.corebase.co/realtime/v1?apikey=...`; user JWT via `access_token` message (never in the URL); token-expiry renegotiation (`token_expiring` → `access_token`, 30 s grace, close 4401); client heartbeat every 30 s with 60 s server timeout; broadcast is DB-free and at-most-once with a `service_role`-only REST publish at `POST /realtime/v1/broadcast`; rate limits per the §C table; cross-node fan-out over Redis pub/sub behind a broker interface.** *(Rationale: the protocol is the compatibility surface SDKs and CDC both ride on — fixing it now is what keeps V1 from foreclosing realtime; every mechanism chosen avoids touching the customer database, which is the entire point of shipping this half first per D-030.)*
+- **D-128 — Realtime wire protocol v1: JSON frames `{v, type, id?, channel?, event?, payload}` over `wss://<ref>.steadhold.app/realtime/v1?apikey=...`; user JWT via `access_token` message (never in the URL); token-expiry renegotiation (`token_expiring` → `access_token`, 30 s grace, close 4401); client heartbeat every 30 s with 60 s server timeout; broadcast is DB-free and at-most-once with a `service_role`-only REST publish at `POST /realtime/v1/broadcast`; rate limits per the §C table; cross-node fan-out over Redis pub/sub behind a broker interface.** *(Rationale: the protocol is the compatibility surface SDKs and CDC both ride on — fixing it now is what keeps V1 from foreclosing realtime; every mechanism chosen avoids touching the customer database, which is the entire point of shipping this half first per D-030.)*
 - **D-129 — Channel authorization v1: channels are private by default; access is granted by per-project declarative rules — `public`, `authenticated`, or JWT-claim prefix templates (e.g. `private:user:{sub}:*`) — evaluated from the token alone with no database round-trip. The `realtime.can_join(channel_name, claims)` SQL-callback convention is reserved as the follow-on for table-driven membership.** *(Rationale: token-only evaluation keeps the join path independent of the customer primary — no join-storm load, no waking paused projects (D-008) — and covers the dominant "my own room / my own user id" cases; the callback is deferred, not rejected, and its name is reserved so adopting it later is additive.)*
 
 ## Open Questions

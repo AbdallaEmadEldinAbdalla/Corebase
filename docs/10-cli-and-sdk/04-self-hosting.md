@@ -2,7 +2,7 @@
 
 ## Purpose
 
-How someone runs Corebase on their own machine or server with `docker compose up`, the way Supabase self-host works. Defines what is in the box, what is deliberately not, and the one thing our architecture did not previously answer: **whether the dashboard ships**.
+How someone runs Steadhold on their own machine or server with `docker compose up`, the way Supabase self-host works. Defines what is in the box, what is deliberately not, and the one thing our architecture did not previously answer: **whether the dashboard ships**.
 
 D-027 already gives us the local stack and D-099 already defines "self-hostable" as the hardened single-node Compose data plane. This doc turns that into an actual distribution.
 
@@ -10,9 +10,9 @@ D-027 already gives us the local stack and D-099 already defines "self-hostable"
 
 ### 1. Two different things that share one compose file
 
-| | `corebase dev` | Self-host |
+| | `steadhold dev` | Self-host |
 |---|---|---|
-| Audience | a developer building an app *against* Corebase | someone running Corebase *as* their backend |
+| Audience | a developer building an app *against* Steadhold | someone running Steadhold *as* their backend |
 | Lifetime | minutes; torn down constantly | months; upgraded, backed up, monitored |
 | Keys | deterministic dev keypair, never valid in prod (D-138) | real ES256 keypair the operator generates |
 | Data | disposable, seeded | the actual production data |
@@ -38,12 +38,12 @@ Cutting these is not stinginess — they are meaningless for a single project, a
 
 ### 3. The dashboard problem
 
-Our dashboard is a pure client of the **platform API** ([dashboard IA](../09-dashboard/01-dashboard-ia.md), D-130), and the platform API *is* the control plane — which self-host excludes. Taken literally, self-hosting Corebase would give you a working backend and a blank browser tab. Supabase ships Studio; arriving from Supabase and finding no UI would read as the product being unfinished.
+Our dashboard is a pure client of the **platform API** ([dashboard IA](../09-dashboard/01-dashboard-ia.md), D-130), and the platform API *is* the control plane — which self-host excludes. Taken literally, self-hosting Steadhold would give you a working backend and a blank browser tab. Supabase ships Studio; arriving from Supabase and finding no UI would read as the product being unfinished.
 
 The fix is not to ship the control plane. It is to give the dashboard a **single-project shim**:
 
-- **`meta`** — schema introspection and DDL execution over one database, running as the audited `corebase_admin` role. The dashboard never holds `service_role` (D-132) locally either.
-- **`studio` in self-host mode** — the same dashboard build, with `CB_SELFHOST=true`. Org switcher, project switcher, billing, usage and team pages are compiled out; there is exactly one project and it is always READY.
+- **`meta`** — schema introspection and DDL execution over one database, running as the audited `steadhold_admin` role. The dashboard never holds `service_role` (D-132) locally either.
+- **`studio` in self-host mode** — the same dashboard build, with `SH_SELFHOST=true`. Org switcher, project switcher, billing, usage and team pages are compiled out; there is exactly one project and it is always READY.
 
 Endpoints the shim must serve for the dashboard to work: project meta (`GET /v1/projects/:ref`), tables/columns/indexes/policies introspection, DDL apply, SQL execute, migrations list/apply, auth users CRUD, storage buckets/objects, API keys reveal, logs tail, and advisor lints. Everything else in the platform API returns `501 not_available_in_selfhost` with a one-line explanation — a documented, honest failure rather than a hang.
 
@@ -63,20 +63,20 @@ Auth for the dashboard is basic auth on the studio port (`DASHBOARD_USER` / `DAS
 
 Postgres is **not published by default**. An exposed 5432 with a weak password is how self-hosted databases get mined, and the pooler is the correct entry point anyway.
 
-### 5. Hardening deltas over `corebase dev`
+### 5. Hardening deltas over `steadhold dev`
 
 1. Every secret is a required variable — compose refuses to start rather than defaulting (`${VAR:?}`).
 2. `wal_level=logical` and WAL archiving are on from first boot, so backups and future CDC never need a restart.
 3. PostgREST connects **direct** to Postgres, not through the pooler — it needs LISTEN for schema reload and is itself a pool (D-101).
 4. The gateway enforces rate limits locally too, so the self-hoster inherits the same abuse floor.
-5. No superuser is ever handed to a service: `authenticator`, `corebase_auth`, `corebase_storage` and `corebase_admin` are separate least-privilege roles created by the init scripts.
+5. No superuser is ever handed to a service: `authenticator`, `steadhold_auth`, `steadhold_storage` and `steadhold_admin` are separate least-privilege roles created by the init scripts.
 
 ### 6. Install flow
 
 ```bash
-git clone https://github.com/corebase/corebase && cd corebase/selfhost
+git clone https://github.com/steadhold/steadhold && cd steadhold/selfhost
 cp .env.example .env
-corebase keys mint --selfhost >> .env     # ES256 keypair + anon/service_role
+steadhold keys mint --selfhost >> .env     # ES256 keypair + anon/service_role
 docker compose up -d
 docker compose --profile dev up -d        # add Mailpit for local mail
 ```
@@ -91,7 +91,7 @@ Supported: the compose file as shipped, on a single node, with the documented va
 
 ## Decisions
 
-**D-181 — The dashboard ships in the self-host distribution, in single-project mode: the same build with `CB_SELFHOST=true`, backed by a `meta` introspection service and a control-plane shim serving a documented endpoint subset. Org, billing, usage, team and provisioning routes are compiled out; unimplemented platform-API routes return `501 not_available_in_selfhost`.** *(Rationale: our dashboard is a control-plane client and the control plane is excluded from self-host, so without a shim self-hosting yields no UI at all — which reads as an unfinished product to anyone arriving from Supabase Studio. A shim bounded to one project is a small, well-defined surface; shipping the real control plane would drag orgs, billing and provisioning into the support boundary D-099 exists to protect.)*
+**D-181 — The dashboard ships in the self-host distribution, in single-project mode: the same build with `SH_SELFHOST=true`, backed by a `meta` introspection service and a control-plane shim serving a documented endpoint subset. Org, billing, usage, team and provisioning routes are compiled out; unimplemented platform-API routes return `501 not_available_in_selfhost`.** *(Rationale: our dashboard is a control-plane client and the control plane is excluded from self-host, so without a shim self-hosting yields no UI at all — which reads as an unfinished product to anyone arriving from Supabase Studio. A shim bounded to one project is a small, well-defined surface; shipping the real control plane would drag orgs, billing and provisioning into the support boundary D-099 exists to protect.)*
 
 **D-182 — Postgres is not published to the host by default; the pooler on 6543 is the only database entry point, and the dashboard is protected by basic auth with the docs instructing a reverse proxy.** *(Rationale: an exposed 5432 is the single most common way self-hosted databases are compromised, and the pooler is the correct entry point regardless; basic auth is honest about being a stopgap rather than pretending to be a login system.)*
 
@@ -100,7 +100,7 @@ Supported: the compose file as shipped, on a single node, with the documented va
 ## Open Questions
 
 - **OQ-172** — Does self-host get the Advisors lints? They are pure SQL and the highest-leverage thing we have, but they are also a paid-cloud differentiator. Leaning yes-with-attribution; decide at the open-source release.
-- **OQ-173** — Distribution: a `corebase selfhost init` CLI command that renders the compose file and mints keys, or a plain cloned repo the operator edits? The CLI path is friendlier but couples self-host releases to CLI releases.
+- **OQ-173** — Distribution: a `steadhold selfhost init` CLI command that renders the compose file and mints keys, or a plain cloned repo the operator edits? The CLI path is friendlier but couples self-host releases to CLI releases.
 - **OQ-174** — Do we publish a single-container "all-in-one" image for evaluation (PocketBase-style, one process, SQLite-free but single-node), alongside the compose stack? Cheap demo win, real support risk.
 
 ## Dependencies

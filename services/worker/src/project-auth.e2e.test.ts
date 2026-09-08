@@ -4,19 +4,19 @@ import { join } from 'node:path';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { createEnvelope } from '@corebase/crypto';
-import { createSecretStore, SECRET_NAMES } from '@corebase/secrets';
-import { verify as verifyJwt, decodeUnverified, sign as signJwt } from '@corebase/jwt';
-import { buildApp } from '@corebase/api';
-import { createPgStore } from '@corebase/api/modules/control-plane/store.pg.ts';
-import { createMemoryRateLimiter } from '@corebase/api/kernel/rate-limit.ts';
-import { createNullMailer } from '@corebase/api/modules/project-auth/mail.ts';
-import { createMailer } from '@corebase/api/modules/project-auth/mailer.ts';
-import { createRedis, createAuthEmailQueue } from '@corebase/queue';
-import { createSmtpProvider } from '@corebase/email';
+import { createEnvelope } from '@steadhold/crypto';
+import { createSecretStore, SECRET_NAMES } from '@steadhold/secrets';
+import { verify as verifyJwt, decodeUnverified, sign as signJwt } from '@steadhold/jwt';
+import { buildApp } from '@steadhold/api';
+import { createPgStore } from '@steadhold/api/modules/control-plane/store.pg.ts';
+import { createMemoryRateLimiter } from '@steadhold/api/kernel/rate-limit.ts';
+import { createNullMailer } from '@steadhold/api/modules/project-auth/mail.ts';
+import { createMailer } from '@steadhold/api/modules/project-auth/mailer.ts';
+import { createRedis, createAuthEmailQueue } from '@steadhold/queue';
+import { createSmtpProvider } from '@steadhold/email';
 import { createEmailSender } from './email-sender.ts';
 
-const MAILPIT = process.env.CB_MAILPIT_API ?? 'http://127.0.0.1:58025';
+const MAILPIT = process.env.SH_MAILPIT_API ?? 'http://127.0.0.1:58025';
 import { createDocker, type Docker } from './docker.ts';
 import { buildSagas } from './jobs/sagas.ts';
 import { registerNode } from './placement.ts';
@@ -31,7 +31,7 @@ import type { SagaStep, SagaContext } from './jobs/runner.ts';
  *
  * It needs both halves of the thing it is testing: a genuinely provisioned
  * project (this package's saga, a real Postgres container, real roles and
- * credentials) and the HTTP surface that serves it (`@corebase/api`, a
+ * credentials) and the HTTP surface that serves it (`@steadhold/api`, a
  * devDependency here). A version of this test with only one of those cannot prove
  * what P4b claims — a mocked database would pass with the privilege boundary
  * removed, and a mocked API would pass with the routes unwired.
@@ -43,12 +43,12 @@ import type { SagaStep, SagaContext } from './jobs/runner.ts';
  * response, an unknown email costing the same time as a wrong password, and no
  * response anywhere carrying `encrypted_password`.
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
-const CERT_DIR = process.env.CB_DOCKER_CERT_DIR
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
+const CERT_DIR = process.env.SH_DOCKER_CERT_DIR
   ?? join(process.cwd(), '../../infra/docker/staging/certs');
-const HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
+const HOST = process.env.SH_DOCKER_HOST ?? '127.0.0.1';
+const PORT = Number(process.env.SH_DOCKER_PORT ?? 2376);
 const SECRET = 'test-bootstrap-secret-0123456789';
 
 let pool: Pool; let docker: Docker; let orgId: string; let kekDir: string;
@@ -57,7 +57,7 @@ let up = false; let reason = '';
 
 beforeAll(async () => {
   pool = new Pool({ connectionString: DB, max: 6, connectionTimeoutMillis: 1500 });
-  kekDir = mkdtempSync(join(tmpdir(), 'cb-kek-p4b-'));
+  kekDir = mkdtempSync(join(tmpdir(), 'sh-kek-p4b-'));
   writeFileSync(join(kekDir, 'kek_2026_09.key'), randomBytes(32));
   try {
     await pool.query('select 1');
@@ -198,7 +198,7 @@ const autoconfirm = (projectId: string) => pool.query(
 
 const asAuthRole = async (p: Fixture) => {
   const c = new Client({
-    host: '127.0.0.1', port: p.port, user: 'corebase_auth', database: 'postgres',
+    host: '127.0.0.1', port: p.port, user: 'steadhold_auth', database: 'postgres',
     password: (await secrets.get(p.id, SECRET_NAMES.authRole))!,
     connectionTimeoutMillis: 8000,
   });
@@ -307,7 +307,7 @@ describe('P4b — signup', () => {
     const body = res.json();
     expect(body.token_type).toBe('bearer');
     expect(body.expires_in).toBe(3600);
-    expect(body.refresh_token.startsWith('cb_rt_')).toBe(true);
+    expect(body.refresh_token.startsWith('sh_rt_')).toBe(true);
     // The allowlisted user object, and specifically not the hash (store.ts).
     expect(body.user.email).toBe('auto@example.com');
     expect(JSON.stringify(body.user)).not.toContain('encrypted_password');
@@ -315,7 +315,7 @@ describe('P4b — signup', () => {
 
     const pub = (await secrets.get(p.id, SECRET_NAMES.jwtPublicKey))!;
     const claims = verifyJwt(body.access_token, {
-      publicKeyPem: pub, issuer: `https://${p.ref}.corebase.co/auth/v1` });
+      publicKeyPem: pub, issuer: `https://${p.ref}.steadhold.app/auth/v1` });
     // Every one of these is load-bearing downstream: PostgREST enforces `aud`,
     // `role` maps to a Postgres role, and `sub` is what auth.uid() reads.
     expect(claims['aud']).toBe('authenticated');
@@ -580,7 +580,7 @@ describe('P4b — the project boundary', () => {
       const kid = (await secrets.get(p.id, SECRET_NAMES.jwtKid))!;
       const now = Math.floor(Date.now() / 1000);
       const asKeyIssuer = signJwt({
-        iss: `https://${p.ref}.corebase.co`,      // the API-key issuer, not the auth one
+        iss: `https://${p.ref}.steadhold.app`,      // the API-key issuer, not the auth one
         ref: p.ref, role: 'authenticated', sub: 'someone', iat: now, exp: now + 3600,
       }, { privateKeyPem: priv, kid });
       const roleRes = await app.inject({
@@ -641,7 +641,7 @@ describe('P4b — the project boundary', () => {
     // validation error above.
     const refresh = await app.inject({
       method: 'POST', url: '/auth/v1/token?grant_type=refresh_token',
-      headers: { apikey: p.anonKey }, payload: { refresh_token: 'cb_rt_' + 'a'.repeat(43) } });
+      headers: { apikey: p.anonKey }, payload: { refresh_token: 'sh_rt_' + 'a'.repeat(43) } });
     expect(refresh.statusCode).toBe(401);
     expect(refresh.json().error.code).toBe('invalid_grant');
     await app.close();
@@ -666,7 +666,7 @@ describe('P4c — email confirmation', () => {
     const job = app.mailer.jobs[0]!;
     expect(job.email).toBe('confirmation');
     expect(job.to).toBe('conf@example.com');
-    expect(job.variables['action_url']).toContain(`https://${p.ref}.corebase.co/auth/v1/verify`);
+    expect(job.variables['action_url']).toContain(`https://${p.ref}.steadhold.app/auth/v1/verify`);
 
     const token = tokenFromJob(job);
     const res = await app.inject({
@@ -980,7 +980,7 @@ describe('P4c — password recovery', () => {
       payload: { email: 'redirreset@example.com', redirect_to: 'https://evil.test/collect' } });
 
     // The first version of this endpoint passed `redirect_to` straight into the
-    // link, which would have made Corebase send an attacker-chosen destination
+    // link, which would have made Steadhold send an attacker-chosen destination
     // from its own domain — the exact capability D-116's fixed templates exist
     // to withhold. The mail is the artefact, so the mail is what is asserted on.
     const url = new URL(app.mailer.jobs[0]!.variables['action_url']!);
@@ -1041,7 +1041,7 @@ describe('P4c — the redirect allowlist, live', () => {
     expect(location).not.toContain('evil.test');
     const frag = new URLSearchParams(location.split('#')[1]);
     expect(frag.get('access_token')).toBeTruthy();
-    expect(frag.get('refresh_token')!.startsWith('cb_rt_')).toBe(true);
+    expect(frag.get('refresh_token')!.startsWith('sh_rt_')).toBe(true);
 
     const db = await asAuthRole(p);
     try {
@@ -1176,8 +1176,8 @@ describe('P4c + P4d — a signup link that actually arrives', () => {
       // The real mailer this time: suppression, caps, a send row, a queued job.
       // Everything before this asserted on what a flow *owed*; this asserts that
       // a user with an inbox can finish signing up.
-      const redis = createRedis(process.env.CB_REDIS_URL ?? 'redis://127.0.0.1:56379');
-      const queueRedis = createRedis(process.env.CB_REDIS_URL ?? 'redis://127.0.0.1:56379');
+      const redis = createRedis(process.env.SH_REDIS_URL ?? 'redis://127.0.0.1:56379');
+      const queueRedis = createRedis(process.env.SH_REDIS_URL ?? 'redis://127.0.0.1:56379');
       const queue = createAuthEmailQueue(queueRedis);
       await queue.obliterate({ force: true }).catch(() => undefined);
       const stale = await redis.keys('cb:mail:*');
@@ -1205,10 +1205,10 @@ describe('P4c + P4d — a signup link that actually arrives', () => {
         expect(signup.statusCode).toBe(200);
 
         const sender = createEmailSender({
-          pool, from: 'auth@mail.corebase.co',
+          pool, from: 'auth@mail.steadhold.app',
           provider: createSmtpProvider({
-            host: process.env.CB_SMTP_HOST ?? '127.0.0.1',
-            port: Number(process.env.CB_SMTP_PORT ?? 51025),
+            host: process.env.SH_SMTP_HOST ?? '127.0.0.1',
+            port: Number(process.env.SH_SMTP_PORT ?? 51025),
             tls: 'off', timeoutMs: 8000 }),
         });
         const jobs = await queue.getJobs(['waiting', 'delayed']);
@@ -1294,7 +1294,7 @@ describe('P4e — refresh rotation', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.refresh_token).not.toBe(r0);
-    expect(body.refresh_token.startsWith('cb_rt_')).toBe(true);
+    expect(body.refresh_token.startsWith('sh_rt_')).toBe(true);
     expect(body.access_token).not.toBe(a0);
     expect(body.expires_in).toBe(3600);
 
@@ -1489,9 +1489,9 @@ describe('P4e — refresh rotation', () => {
 
     const answers = [];
     for (const token of [
-      'cb_rt_' + 'a'.repeat(43),          // well-formed and unknown
+      'sh_rt_' + 'a'.repeat(43),          // well-formed and unknown
       r0,                                  // spent (grace, but child is live → ok)
-      'cb_rt_short',                       // wrong shape
+      'sh_rt_short',                       // wrong shape
       'not-a-token-at-all',
     ]) {
       const res = await refresh(app, p, token);
@@ -1629,7 +1629,7 @@ describe('P4e — logout and sessions', () => {
       expect(current.user_agent).toBe('Second Device/1.0');
       expect(typeof current.created_at).toBe('string');
       // No tokens and no hashes in a list a user is shown.
-      expect(JSON.stringify(list)).not.toContain('cb_rt_');
+      expect(JSON.stringify(list)).not.toContain('sh_rt_');
       expect(Object.keys(current).sort()).toEqual([
         'created_at', 'current', 'id', 'ip', 'last_refreshed_at', 'user_agent',
       ]);
@@ -2268,7 +2268,7 @@ describe('P4g — /admin/users', () => {
     expect(res.json().app_metadata).toEqual({ plan: 'pro' });
     expect(res.json()).toHaveProperty('banned_until', null);
     // The allowlist still holds on this surface. service_role has no table grant
-    // on auth.users (D-315), and this route reaching it through corebase_auth
+    // on auth.users (D-315), and this route reaching it through steadhold_auth
     // must not become the way the hash escapes.
     expect(JSON.stringify(res.json())).not.toContain('scrypt$');
     expect(JSON.stringify(res.json())).not.toContain('encrypted_password');
@@ -2472,7 +2472,7 @@ describe('P4g — /admin/users', () => {
                    raw_app_meta_data as am, email_confirmed_at as confirmed, deleted_at as deleted
               from auth.users where id = $1`, [ids[0]]);
         const row = rows[0]!;
-        // The id survives — the developer's own tables reference it and Corebase
+        // The id survives — the developer's own tables reference it and Steadhold
         // does not cascade into app schemas (Flow 10 step 3). Everything else is
         // gone: "deleted" that leaves a password hash and a full profile behind
         // is not deletion in any sense a user would recognise.

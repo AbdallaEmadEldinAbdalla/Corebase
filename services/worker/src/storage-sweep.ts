@@ -1,6 +1,6 @@
 import { Client, type Pool } from 'pg';
-import type { S3 } from '@corebase/s3';
-import { SECRET_NAMES, type SecretStore } from '@corebase/secrets';
+import type { S3 } from '@steadhold/s3';
+import { SECRET_NAMES, type SecretStore } from '@steadhold/secrets';
 
 /**
  * The storage reconciliation sweep (P6f, D-124 §5, D-017 §6).

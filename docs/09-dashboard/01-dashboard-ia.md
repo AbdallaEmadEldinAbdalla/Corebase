@@ -2,13 +2,13 @@
 
 ## Purpose
 
-The complete information architecture of `app.corebase.com`: route map, navigation model, stack and data layer, the project overview page, the paused-project experience, and the V1 page cut-list. The dashboard is a pure client of the [platform API](../02-control-plane/02-platform-api.md) — it holds no state of its own and calls no customer database directly (every DB-touching feature goes through the platform API's audited admin path, defined in [table editor](02-table-editor.md), D-132). Proposal §39–40 adopted; §90's principles made concrete.
+The complete information architecture of `app.steadhold.dev`: route map, navigation model, stack and data layer, the project overview page, the paused-project experience, and the V1 page cut-list. The dashboard is a pure client of the [platform API](../02-control-plane/02-platform-api.md) — it holds no state of its own and calls no customer database directly (every DB-touching feature goes through the platform API's audited admin path, defined in [table editor](02-table-editor.md), D-132). Proposal §39–40 adopted; §90's principles made concrete.
 
 ## Design
 
 ### Stack (D-025, extended)
 
-- **Framework:** Next.js (App Router). Server components render page shells and static chrome; anything data-driven is a client component. No API routes in the dashboard — the platform API at `api.corebase.com/v1` is the only backend (no BFF layer, see D-130).
+- **Framework:** Next.js (App Router). Server components render page shells and static chrome; anything data-driven is a client component. No API routes in the dashboard — the platform API at `api.steadhold.dev/v1` is the only backend (no BFF layer, see D-130).
 - **UI:** Tailwind + shadcn/ui. shadcn components are vendored (copied in), so there is no design-system dependency to chase.
 - **State/data layer:** **TanStack Query** against the platform API. Query keys mirror API resources (`['org', slug]`, `['project', ref]`, `['project', ref, 'tables']`); mutations invalidate the affected keys; `staleTime` defaults to 30 s with refetch-on-focus. No Redux/global store — the server cache *is* the app state; the only client-only state is UI ephemera (open panels, unsaved editor buffers), kept in component state or `localStorage`.
 - **Auth:** control-plane **session cookies** (httpOnly, CSRF double-submit) exactly as specified in the [platform API](../02-control-plane/02-platform-api.md) (D-062). The dashboard never sees a token; `fetch` sends credentials, a 401 redirects to `/login?next=…`. Dashboard login is a platform account — entirely distinct from customer-app auth ([auth architecture](../05-auth/01-auth-architecture.md)).
@@ -16,7 +16,7 @@ The complete information architecture of `app.corebase.com`: route map, navigati
 ### Route map
 
 ```
-app.corebase.com
+app.steadhold.dev
 ├─ /                                → redirect: last-visited org, else /login
 ├─ /login  /signup  /verify-email  /forgot-password  /reset-password
 ├─ /accept-invite/[token]           → org invitation acceptance

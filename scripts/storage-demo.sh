@@ -9,12 +9,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-API="${CB_DEMO_API:-http://127.0.0.1:8099}"
-TOKEN="${CB_STATIC_TOKEN:-local-dev-only-not-a-production-credential}"
-PORT="${CB_DEMO_PORT:-8125}"
+API="${SH_DEMO_API:-http://127.0.0.1:8099}"
+TOKEN="${SH_STATIC_TOKEN:-local-dev-only-not-a-production-credential}"
+PORT="${SH_DEMO_PORT:-8125}"
 ORIGIN="http://127.0.0.1:$PORT"
-DOMAIN="${CB_PROJECT_DOMAIN:-localhost}"
-NAME="${CB_DEMO_PROJECT:-storage-demo}"
+DOMAIN="${SH_PROJECT_DOMAIN:-localhost}"
+NAME="${SH_DEMO_PROJECT:-storage-demo}"
 
 say() { printf '  %s\n' "$*"; }
 jq_py() { python3 -c "import json,sys; $1"; }
@@ -38,9 +38,9 @@ ORG="$(curl -fsS "$API/v1/orgs" -H "authorization: Bearer $TOKEN" \
 [ -n "$ORG" ] || { echo "✗ the bootstrap user belongs to no organization" >&2; exit 1; }
 
 REF="$(curl -fsS "$API/v1/projects?limit=100&org_id=$ORG" -H "authorization: Bearer $TOKEN" \
-       | CB_NAME="$NAME" python3 -c "
+       | SH_NAME="$NAME" python3 -c "
 import json, os, sys
-want = os.environ['CB_NAME']
+want = os.environ['SH_NAME']
 for p in json.load(sys.stdin).get('projects', []):
     if p.get('name') == want:
         print(p['ref']); break
@@ -116,9 +116,9 @@ printf '%s' "$SQL" | psql "$DIRECT" -q -v ON_ERROR_STOP=1 2>&1 | grep -v 'alread
 say "✓ applied over the project's own DATABASE_URL"
 
 echo "▸ two users"
-PROJECT_ID="$(docker exec -i cb-control-db psql -U corebase -d corebase_control -qAtc \
+PROJECT_ID="$(docker exec -i sh-control-db psql -U steadhold -d steadhold_control -qAtc \
   "select id from projects where ref = '$REF'")"
-docker exec -i cb-control-db psql -U corebase -d corebase_control -qAtc \
+docker exec -i sh-control-db psql -U steadhold -d steadhold_control -qAtc \
   "insert into project_auth_config (project_id, autoconfirm, site_url)
    values ('$PROJECT_ID', true, '$ORIGIN')
    on conflict (project_id) do update set autoconfirm = true, site_url = '$ORIGIN'" >/dev/null
@@ -162,7 +162,7 @@ cat > "$ROOT/demo/storage/config.js" <<CFGEOF
 // The **anon** key only, and for storage that matters more than anywhere else: a
 // service_role key here would let any visitor read every user's private files,
 // because service_role bypasses RLS by role attribute (D-082).
-window.COREBASE_DEMO = {
+window.STEADHOLD_DEMO = {
   ref: '$REF',
   anonKey: '$ANON',
 };

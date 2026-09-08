@@ -8,7 +8,7 @@
  * in the URL fragment. So a `redirect_to` that can be pointed at an arbitrary host
  * is not an open-redirect annoyance, it is a credential-exfiltration primitive
  * with our sending domain's reputation attached: mail arrives from a reputable
- * source, the link genuinely goes to `<ref>.corebase.co`, and the tokens end up
+ * source, the link genuinely goes to `<ref>.steadhold.app`, and the tokens end up
  * somewhere else.
  *
  * Two rules follow, and both are the unforgiving direction:

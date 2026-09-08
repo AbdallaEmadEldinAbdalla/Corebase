@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { sign as signJwt, type Claims } from '@corebase/jwt';
+import { sign as signJwt, type Claims } from '@steadhold/jwt';
 import type { ProjectContext } from './context.ts';
 
 /**
@@ -18,11 +18,11 @@ export const ACCESS_TTL_MIN = 300;
 export const ACCESS_TTL_MAX = 86_400;
 
 /**
- * `cb_rt_` prefix, and it is not decoration: prefixes make a leaked token
+ * `sh_rt_` prefix, and it is not decoration: prefixes make a leaked token
  * greppable by secret scanners, which is the difference between finding one in a
  * public repository and not.
  */
-export const REFRESH_PREFIX = 'cb_rt_';
+export const REFRESH_PREFIX = 'sh_rt_';
 
 /**
  * The rotation grace window (D-112).
@@ -120,7 +120,7 @@ export const looksLikeRefreshToken = (v: unknown): v is string =>
  *
  * No prefix, unlike a refresh token: this value travels in a URL, and 32 bytes of
  * base64url is already 43 characters of query string. It is also short-lived and
- * single-use, so the secret-scanner argument that justifies `cb_rt_` buys much
+ * single-use, so the secret-scanner argument that justifies `sh_rt_` buys much
  * less here.
  *
  * 32 bytes from a CSPRNG, which is the same strength as the refresh token,

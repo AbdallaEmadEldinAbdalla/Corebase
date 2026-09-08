@@ -5,13 +5,13 @@ import type { Client } from 'pg';
  * (P4b).
  *
  * Not to be confused with `modules/auth/store.ts`, which is the **control
- * plane's** user store — the people who log in to the Corebase dashboard. These
+ * plane's** user store — the people who log in to the Steadhold dashboard. These
  * are the end users of a customer's application, they live in the customer's own
  * database, and the two must never share code or a connection. The separate
  * directory is the reminder: I overwrote the control-plane store once while
  * writing this file.
  *
- * Every query here runs as `corebase_auth` on a physically separate database
+ * Every query here runs as `steadhold_auth` on a physically separate database
  * (D-009), which is where tenant separation actually comes from — there is no
  * cross-project table to leak through, so no query needs a `project_id` predicate
  * and none has one. Wanting one means the connection is wrong, not the query.
@@ -775,7 +775,7 @@ export async function adminUpdateUser(
  * Flow 10's soft delete, in one transaction.
  *
  * Soft, not hard, and the tombstone is the point: rows in the customer's own
- * tables reference `auth.users(id)`, and Corebase does not cascade into app
+ * tables reference `auth.users(id)`, and Steadhold does not cascade into app
  * schemas (their FK semantics are theirs). A hard delete would either break those
  * references or require us to decide what happens to a customer's data, and
  * neither is ours to do.

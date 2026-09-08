@@ -25,7 +25,7 @@ Trigger to start: V1 launched, first ~2–4 weeks of feedback triaged.
 |---|---|---|
 | OAuth: Google + GitHub | The single most-requested auth feature everywhere; flow already specced | [oauth & future](../05-auth/05-oauth-and-future.md) |
 | Magic links | Rides on existing one-time-token infra | same |
-| `corebase db diff` | Shadow-DB diffing (D-028) | [migrations](../03-database-platform/04-migrations.md) |
+| `steadhold db diff` | Shadow-DB diffing (D-028) | [migrations](../03-database-platform/04-migrations.md) |
 | Extension allowlist round 2 | Promote the V1.1 candidates: postgis (variant image) and pg_cron (D-078; pgvector already ships in V1) | [extensions](../03-database-platform/06-extensions-and-upgrades.md) |
 | Custom SMTP per project | Projects send from their own domain | [email infra](../05-auth/04-email-infrastructure.md) |
 | SDK/CLI polish wave | Beta feedback batch; `--json` everywhere; typegen improvements | [cli spec](../10-cli-and-sdk/01-cli-spec.md) |

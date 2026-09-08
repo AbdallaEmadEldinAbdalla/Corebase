@@ -10,8 +10,8 @@ import type { ControlPlaneStore } from './modules/control-plane/store.ts';
  * Skipped when it is not reachable, so `pnpm test` still works offline — but the
  * T4 done-signal requires these to run.
  */
-const URL_ = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
+const URL_ = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
 
 let pool: Pool;
 let store: ControlPlaneStore;

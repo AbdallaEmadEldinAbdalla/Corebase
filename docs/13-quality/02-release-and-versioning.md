@@ -2,7 +2,7 @@
 
 ## Purpose
 
-What Corebase promises not to break, surface by surface, and the protocol for the times it must. A BaaS has an unusual number of public surfaces — two APIs, an SDK, a CLI, a Postgres version, and (easy to forget) the SQL helper functions customers embed in their own RLS policies. Each gets an explicit versioning policy here, because "we version the API" (proposal §60, D-039) is only one row of the table. This doc also fixes the release cadence, the changelog discipline, and the feature-flag mechanism for risky platform changes.
+What Steadhold promises not to break, surface by surface, and the protocol for the times it must. A BaaS has an unusual number of public surfaces — two APIs, an SDK, a CLI, a Postgres version, and (easy to forget) the SQL helper functions customers embed in their own RLS policies. Each gets an explicit versioning policy here, because "we version the API" (proposal §60, D-039) is only one row of the table. This doc also fixes the release cadence, the changelog discipline, and the feature-flag mechanism for risky platform changes.
 
 ## Design
 
@@ -12,8 +12,8 @@ What Corebase promises not to break, surface by surface, and the protocol for th
 |---|---|---|---|
 | Platform API `/v1` | URL-versioned (D-039) | Only via `/v2`; deprecation protocol D-153 | below |
 | Data API `/rest/v1` | Pinned to embedded PostgREST behavior (D-011) | PostgREST major bumps = customer-visible; fleet-staged with per-project pin (D-154) | below |
-| SDK `@corebase/core` | semver | Majors only; min-supported-API handshake | below |
-| CLI `corebase` | semver | Majors only; warns when outdated | below |
+| SDK `@steadhold/core` | semver | Majors only; min-supported-API handshake | below |
+| CLI `steadhold` | semver | Majors only; warns when outdated | below |
 | Postgres | One major fleet-wide, PG 17 at launch (D-037) | Fleet upgrade per playbook | [extensions & upgrades](../03-database-platform/06-extensions-and-upgrades.md) |
 | Auth schema + helper functions (`auth.uid()` …) | Treated as public API | Same protocol as `/v1` (D-153) | below — the one everyone forgets |
 | Internal services | None | Anytime; deployed atomically | below |
@@ -47,7 +47,7 @@ What Corebase promises not to break, surface by surface, and the protocol for th
 
 ### Data API `/rest/v1` (D-011 implication)
 
-The filter/embed/RPC surface is **largely pinned to the embedded PostgREST's behavior** — that was the point of D-011 (inherit a decade of edge cases, offer a Supabase-compatible mental model). The honest consequence: **a PostgREST major upgrade is a customer-visible change to `/rest/v1`**, even though Corebase wrote none of the changed code. Corebase therefore cannot silently roll PostgREST majors across the fleet.
+The filter/embed/RPC surface is **largely pinned to the embedded PostgREST's behavior** — that was the point of D-011 (inherit a decade of edge cases, offer a Supabase-compatible mental model). The honest consequence: **a PostgREST major upgrade is a customer-visible change to `/rest/v1`**, even though Steadhold wrote none of the changed code. Steadhold therefore cannot silently roll PostgREST majors across the fleet.
 
 **Mechanism (D-154): PostgREST version bumps are fleet-staged with a project-level pin during the transition.** Concretely:
 
@@ -56,15 +56,15 @@ The filter/embed/RPC surface is **largely pinned to the embedded PostgREST's beh
 - On a PostgREST major bump: new projects get the new tag immediately; existing projects keep the old tag (pinned); the changelog + dashboard announce the migration window with the upstream breaking-change list; projects are rolled in batches (canaries first), with a customer-visible "defer until <window end>" control for projects that need time.
 - At window end (same 6-month ceiling as D-153), remaining pins are rolled forward on a announced date. Pins do not outlive the window — a permanently heterogeneous PostgREST fleet would recreate the problem D-037 exists to prevent.
 - PostgREST **minor/patch** upgrades that upstream documents as non-breaking roll fleet-wide without pinning, changelog-noted.
-- Corebase-added surface at the gateway (key validation, rate-limit headers, error envelope) follows the `/v1` table above, not PostgREST's cycle.
+- Steadhold-added surface at the gateway (key validation, rate-limit headers, error envelope) follows the `/v1` table above, not PostgREST's cycle.
 
-### SDK (`@corebase/core`)
+### SDK (`@steadhold/core`)
 
-**semver, breaking only in majors.** Additive in minors, fixes in patches. The SDK sends `X-Corebase-Client: core-js/<version>` on every request; the platform API answers with a warning header when the client version is below the **minimum-supported-API line**, and the SDK surfaces it once per process (console warning, never a hard fail mid-flight). Hard minimum enforcement (426-style rejection) is reserved for security-critical cases only. Each SDK major documents which platform API versions it speaks; the previous major receives security fixes for 12 months after the next major ships.
+**semver, breaking only in majors.** Additive in minors, fixes in patches. The SDK sends `X-Steadhold-Client: core-js/<version>` on every request; the platform API answers with a warning header when the client version is below the **minimum-supported-API line**, and the SDK surfaces it once per process (console warning, never a hard fail mid-flight). Hard minimum enforcement (426-style rejection) is reserved for security-critical cases only. Each SDK major documents which platform API versions it speaks; the previous major receives security fixes for 12 months after the next major ships.
 
-### CLI (`corebase`)
+### CLI (`steadhold`)
 
-**semver**, distributed via npm (D-026). Same client-header handshake as the SDK. The CLI additionally **checks for newer versions** (against the npm registry, at most once per 24h, cached, disable-able via config/env for CI) and prints a one-line warning when outdated. Commands whose *file formats* are contracts — migration filenames, `corebase export` tarball layout (D-004), `corebase.json` — version those formats explicitly: a format change is a CLI major.
+**semver**, distributed via npm (D-026). Same client-header handshake as the SDK. The CLI additionally **checks for newer versions** (against the npm registry, at most once per 24h, cached, disable-able via config/env for CI) and prints a one-line warning when outdated. Commands whose *file formats* are contracts — migration filenames, `steadhold export` tarball layout (D-004), `steadhold.json` — version those formats explicitly: a format change is a CLI major.
 
 ### Postgres
 
@@ -86,7 +86,7 @@ Everything behind the public surfaces — monolith module boundaries, worker job
 HTTP/1.1 200 OK
 Deprecation: @1767225600
 Sunset: Sat, 04 Jul 2026 00:00:00 GMT
-Link: <https://corebase.co/changelog/2026-01-deprecate-legacy-keys>; rel="deprecation"
+Link: <https://steadhold.app/changelog/2026-01-deprecate-legacy-keys>; rel="deprecation"
 X-Request-ID: req_01hv…
 ```
 
@@ -94,7 +94,7 @@ Gateway metrics count every response that carried a `Deprecation` header, tagged
 
 ### Release artifacts and platform version numbers
 
-Customers see per-surface versions (the table above); internally there is exactly **one deployable platform artifact per release** — the monolith + worker image set, tagged `platform/vYYYY.MM.DD-<sha>` (calendar-ish because the platform itself is not semver: it has no importable API, so semver would be theater). The tag is what staging promotes to prod, what the changelog anchors to, what `X-Corebase-Platform` returns on `/health`, and what a rollback rolls back to. Rollbacks follow the same gate as forward deploys (golden path + isolation green on the rolled-back artifact) — an old artifact is not presumed safe just because it once shipped; the fleet state around it has changed.
+Customers see per-surface versions (the table above); internally there is exactly **one deployable platform artifact per release** — the monolith + worker image set, tagged `platform/vYYYY.MM.DD-<sha>` (calendar-ish because the platform itself is not semver: it has no importable API, so semver would be theater). The tag is what staging promotes to prod, what the changelog anchors to, what `X-Steadhold-Platform` returns on `/health`, and what a rollback rolls back to. Rollbacks follow the same gate as forward deploys (golden path + isolation green on the rolled-back artifact) — an old artifact is not presumed safe just because it once shipped; the fleet state around it has changed.
 
 ### Release cadence & changelog discipline
 
@@ -112,7 +112,7 @@ Customers see per-surface versions (the table above); internally there is exactl
 |---|---|---|---|
 | Platform API `/v1` | API owner + one reviewer | 6 months (D-153) | Deprecation+Sunset headers, changelog, usage floor |
 | Data API `/rest/v1` (PostgREST-inherited) | Platform team, on PostgREST major | 6-month pin window (D-154) | Per-project image pin, staged fleet roll |
-| Data API (Corebase gateway surface) | API owner + one reviewer | 6 months | Same as `/v1` |
+| Data API (Steadhold gateway surface) | API owner + one reviewer | 6 months | Same as `/v1` |
 | SDK | SDK owner | Next major, migration guide | semver major |
 | CLI (incl. export/migration formats) | CLI owner | Next major, migration guide | semver major |
 | Postgres major | Eng lead, scheduled program | Announced window per playbook | [Upgrade playbook](../03-database-platform/06-extensions-and-upgrades.md) |
@@ -122,7 +122,7 @@ Customers see per-surface versions (the table above); internally there is exactl
 ## Decisions
 
 - **D-153 — Nothing is removed or broken within `/v1` (or any surface bound to its regime) except via the deprecation protocol: `Deprecation` + `Sunset` headers, a dated changelog entry naming the replacement, a minimum 6-month window, and usage monitoring below an agreed floor (plus outreach) before removal, which ships as its own flagged release.** *(Rationale: §60/D-039 said "no breaking changes without versioning" but left the exit path undefined; an explicit protocol converts "we promise" into a checkable procedure and keeps the changelog honest.)*
-- **D-154 — PostgREST major upgrades are treated as customer-visible `/rest/v1` changes and rolled via fleet staging with a per-project pin: `project_databases.postgrest_image_tag` selects the project's PostgREST image during a bounded (≤6 months) transition window, after which remaining pins roll forward on an announced date; minors/patches roll fleet-wide unpinned.** *(Rationale: D-011 outsources the query surface, so upstream majors change Corebase's contract whether we like it or not; per-project pinning during a bounded window gives customers migration time without recreating the permanent fleet heterogeneity D-037 forbids.)*
+- **D-154 — PostgREST major upgrades are treated as customer-visible `/rest/v1` changes and rolled via fleet staging with a per-project pin: `project_databases.postgrest_image_tag` selects the project's PostgREST image during a bounded (≤6 months) transition window, after which remaining pins roll forward on an announced date; minors/patches roll fleet-wide unpinned.** *(Rationale: D-011 outsources the query surface, so upstream majors change Steadhold's contract whether we like it or not; per-project pinning during a bounded window gives customers migration time without recreating the permanent fleet heterogeneity D-037 forbids.)*
 
 ## Open Questions
 

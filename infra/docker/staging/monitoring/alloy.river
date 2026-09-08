@@ -1,6 +1,6 @@
 // Grafana Alloy: the shipper D-147 names. In production it discovers Docker
 // json-file logs on each node; locally the platform services run as host
-// processes, so it tails the files they are pointed at with CB_LOG_FILE.
+// processes, so it tails the files they are pointed at with SH_LOG_FILE.
 //
 // The label discipline is the point and it matches production exactly: labels are
 // only service/level (and node/project_ref/container for tenant streams). request_id

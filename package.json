@@ -1,5 +1,5 @@
 {
-  "name": "corebase",
+  "name": "steadhold",
   "private": true,
   "packageManager": "pnpm@9.12.0",
   "engines": {
@@ -12,7 +12,7 @@
     "lint": "turbo run lint",
     "dev": "turbo run dev --parallel",
     "test:unit": "turbo run test:unit",
-    "dev:dashboard": "pnpm --filter @corebase/dashboard dev"
+    "dev:dashboard": "pnpm --filter @steadhold/dashboard dev"
   },
   "devDependencies": {
     "turbo": "^2.1.3",

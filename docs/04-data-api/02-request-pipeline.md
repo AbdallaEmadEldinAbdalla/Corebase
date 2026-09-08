@@ -12,7 +12,7 @@ The hop-by-hop trace of a data-plane request — from a client's `fetch` to RLS-
  client            Cloudflare          gateway (app node)                 data node (project triplet)
    │                   │                     │                                  │
    │ GET /rest/v1/todos?done=eq.false        │                                  │
-   │ Host: abck3xw7….corebase.co             │                                  │
+   │ Host: abck3xw7….steadhold.app           │                                  │
    │ apikey: <anon JWT>                      │                                  │
    │ Authorization: Bearer <user JWT>        │                                  │
    ├──── TLS ─────────►│                     │                                  │
@@ -56,7 +56,7 @@ What the gateway did **not** do: no control-plane query, no session lookup, no S
 
 | # | Hop | Does | Failure → response |
 |---|---|---|---|
-| 1 | Cloudflare | client TLS (`*.corebase.co` wildcard), DDoS scrub, WAF basics; no caching of `/rest/*` (dynamic, bypass rule) | origin unreachable → CF 52x (edge-styled) |
+| 1 | Cloudflare | client TLS (`*.steadhold.app` wildcard), DDoS scrub, WAF basics; no caching of `/rest/*` (dynamic, bypass rule) | origin unreachable → CF 52x (edge-styled) |
 | 2 | Caddy (app node) | origin TLS (D-050), authenticated origin pulls (direct-to-origin blocked), forward to gateway on loopback | monolith down → 502 (Caddy) |
 | 3 | Gateway: project resolution | `Host` → ref → routing-table entry `{project_id, node_ip, ports, status, JWKS, tier}` — in-memory, control-plane-independent (D-051) | unknown ref → **404** `project_not_found`; `soft_deleted`/`deleting` → **410** `project_deleted`; suspended → **403** `project_suspended` |
 | 4 | Gateway: apikey validation | header present, structurally a JWT, ES256 signature valid against cached project JWKS (by `kid`), `ref` claim matches the resolved project, key hash not in revocation set | missing/malformed → **401** `missing_api_key`; bad signature / wrong ref / revoked → **401** `invalid_api_key` |
@@ -108,7 +108,7 @@ Targets for the full `/rest/v1` pipeline, intra-region (client in EU, project in
 | Response path back | 2 ms | 10 ms | |
 | **End-to-end target** | **≤ 20 ms origin / ≤ 50 ms total** | **≤ 250 ms** | origin = Caddy-in to Caddy-out, our SLO surface |
 
-Two SLOs fall out: **origin processing ≤ 20 ms p50 / ≤ 100 ms p99** (what we control and alert on) and **client-observed ≤ 50 ms p50 intra-region** (what we advertise). The budget's structural point: everything Corebase added around PostgREST (hops 3–7) costs ~1.5 ms p50 — the gateway must stay cheap enough that nobody is ever tempted to bypass it.
+Two SLOs fall out: **origin processing ≤ 20 ms p50 / ≤ 100 ms p99** (what we control and alert on) and **client-observed ≤ 50 ms p50 intra-region** (what we advertise). The budget's structural point: everything Steadhold added around PostgREST (hops 3–7) costs ~1.5 ms p50 — the gateway must stay cheap enough that nobody is ever tempted to bypass it.
 
 ### What is cached where, and how it invalidates
 
@@ -138,7 +138,7 @@ Cloudflare (CF-Ray: 8f2…)                      recorded, not reused
         └─ embedded in error envelope bodies
 ```
 
-The Postgres leg is the piece most stacks skip: PostgREST exposes request headers to SQL as the `request.headers` GUC, and the provision-time `pre-request` function (configured `db-pre-request = "corebase.pre_request"`, see [01-rest-api-design.md](01-rest-api-design.md)) promotes the request ID into `application_name` via `set_config(..., true)` — transaction-local, so it cannot bleed across pooled connections. Result: one `grep 01JDXAMPLE` in Loki returns the gateway line, the PostgREST line, and the exact Postgres statements of a single customer request. Auth/storage module requests do the same via `SET LOCAL application_name` on their pooler connections.
+The Postgres leg is the piece most stacks skip: PostgREST exposes request headers to SQL as the `request.headers` GUC, and the provision-time `pre-request` function (configured `db-pre-request = "steadhold.pre_request"`, see [01-rest-api-design.md](01-rest-api-design.md)) promotes the request ID into `application_name` via `set_config(..., true)` — transaction-local, so it cannot bleed across pooled connections. Result: one `grep 01JDXAMPLE` in Loki returns the gateway line, the PostgREST line, and the exact Postgres statements of a single customer request. Auth/storage module requests do the same via `SET LOCAL application_name` on their pooler connections.
 
 ## Decisions
 

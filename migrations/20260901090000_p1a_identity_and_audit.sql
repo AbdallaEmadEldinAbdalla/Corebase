@@ -16,7 +16,7 @@ CREATE TABLE users (                                                 -- §55
   password_hash  text,                    -- NULL when identity is OAuth-only
   email_verified boolean NOT NULL DEFAULT false,
   display_name   text,
-  is_staff       boolean NOT NULL DEFAULT false,  -- Corebase operators; gates admin API
+  is_staff       boolean NOT NULL DEFAULT false,  -- Steadhold operators; gates admin API
   disabled_at    timestamptz,             -- abuse suspension without deletion
   created_at     timestamptz NOT NULL DEFAULT now(),
   updated_at     timestamptz NOT NULL DEFAULT now()
@@ -114,7 +114,7 @@ REVOKE UPDATE, DELETE, TRUNCATE ON audit_logs FROM PUBLIC;
 -- actual wall is a least-privilege application role that does not own the
 -- schema, which is P1b's job; this makes the guarantee real for everything
 -- reaching the database through the application in the meantime.
-CREATE OR REPLACE FUNCTION corebase_audit_is_append_only() RETURNS trigger
+CREATE OR REPLACE FUNCTION steadhold_audit_is_append_only() RETURNS trigger
   LANGUAGE plpgsql AS $$
 BEGIN
   RAISE EXCEPTION 'audit_logs is append-only: % is not permitted', TG_OP
@@ -123,7 +123,7 @@ END $$;
 
 CREATE TRIGGER audit_logs_append_only
   BEFORE UPDATE OR DELETE ON audit_logs
-  FOR EACH STATEMENT EXECUTE FUNCTION corebase_audit_is_append_only();
+  FOR EACH STATEMENT EXECUTE FUNCTION steadhold_audit_is_append_only();
 
 -- ── the bootstrap org gains an owner ────────────────────────────────────────
 -- Milestone 0 ran with one hardcoded org and no users at all. Phase 1's model
@@ -132,12 +132,12 @@ CREATE TRIGGER audit_logs_append_only
 -- The password hash is deliberately absent: this account cannot log in until
 -- someone sets a password through the API.
 INSERT INTO users (email, display_name, email_verified)
-VALUES ('dev@corebase.local', 'Development Owner', true)
+VALUES ('dev@steadhold.local', 'Development Owner', true)
 ON CONFLICT (email) DO NOTHING;
 
 INSERT INTO organization_members (organization_id, user_id, role)
 SELECT o.id, u.id, 'owner'
   FROM organizations o
   CROSS JOIN users u
- WHERE o.slug = 'dev' AND u.email = 'dev@corebase.local'
+ WHERE o.slug = 'dev' AND u.email = 'dev@steadhold.local'
 ON CONFLICT (organization_id, user_id) DO NOTHING;

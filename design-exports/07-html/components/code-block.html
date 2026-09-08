@@ -3,18 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>code-block — Corebase</title>
+<title>code-block — Steadhold</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap">
 <link rel="stylesheet" href="../tokens.css">
 <link rel="stylesheet" href="../components.css">
 </head>
 <body>
-<div class="ref-toggle"><button class="cb-btn cb-btn--secondary cb-btn--sm" onclick="cbToggle()">Theme: <span class="js-theme-label">Light</span></button></div>
+<div class="ref-toggle"><button class="sh-btn sh-btn--secondary sh-btn--sm" onclick="cbToggle()">Theme: <span class="js-theme-label">Light</span></button></div>
 <main class="ref-main">
   <h1 class="ref-item__name">code-block</h1>
   <p class="ref-sub">Mono on the code surface in both themes.</p>
   <div class="ref-demo">
-<div class="cb-code"><div class="cb-code__header"><span class="cb-code__lang">SQL</span><button class="cb-code__copy">copy</button></div><pre><span class="k">select</span> ref, status, created_at
+<div class="sh-code"><div class="sh-code__header"><span class="sh-code__lang">SQL</span><button class="sh-code__copy">copy</button></div><pre><span class="k">select</span> ref, status, created_at
 <span class="k">from</span> projects
 <span class="k">where</span> status = <span class="s">'READY'</span>;
 <span class="k">order by</span> created_at <span class="k">desc</span>;
@@ -24,7 +24,7 @@
 </main>
 <script>
 (function(){
-  var r=document.documentElement, K='cb-theme';
+  var r=document.documentElement, K='sh-theme';
   try{var s=localStorage.getItem(K); if(s) r.setAttribute('data-theme',s);}catch(e){}
   window.cbToggle=function(){
     var cur=r.getAttribute('data-theme');

@@ -124,7 +124,7 @@ def make_handler(prefixes, upstream, domain, directory):
 def serve(prefixes, port, directory=None):
     """Serve `directory` (default: the caller's cwd) with `prefixes` forwarded."""
     directory = directory or os.getcwd()
-    upstream = os.environ.get("CB_DEMO_API", "http://127.0.0.1:8099")
-    domain = os.environ.get("CB_PROJECT_DOMAIN", "localhost")
+    upstream = os.environ.get("SH_DEMO_API", "http://127.0.0.1:8099")
+    domain = os.environ.get("SH_PROJECT_DOMAIN", "localhost")
     handler = make_handler(tuple(prefixes), upstream, domain, directory)
     ThreadingHTTPServer(("127.0.0.1", port), handler).serve_forever()

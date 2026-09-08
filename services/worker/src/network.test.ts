@@ -12,7 +12,7 @@ describe('P2a — the project network', () => {
   };
 
   it('derives one network per project, distinct from the container name', () => {
-    expect(networkName('abcdefghijklmnopqrst')).toBe('cb-abcdefghijklmnopqrst-net');
+    expect(networkName('abcdefghijklmnopqrst')).toBe('sh-abcdefghijklmnopqrst-net');
     // A network and a container may not collide: Docker keeps separate namespaces,
     // but the operator reading `docker ps` and `docker network ls` does not.
     expect(networkName(args.ref)).not.toBe(containerName(args.ref));

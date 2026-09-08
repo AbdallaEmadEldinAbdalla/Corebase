@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { Registry, Counter, Histogram } from '@corebase/metrics';
+import { Registry, Counter, Histogram } from '@steadhold/metrics';
 
 /**
  * Control-plane API metrics (T9 seed).
@@ -13,13 +13,13 @@ import { Registry, Counter, Histogram } from '@corebase/metrics';
 export const registry = new Registry();
 
 export const requestsTotal = registry.register(new Counter({
-  name: 'corebase_api_requests_total',
+  name: 'steadhold_api_requests_total',
   help: 'Control-plane API requests, by method, route pattern and status class.',
   labelNames: ['method', 'route', 'status'],
 }));
 
 export const requestSeconds = registry.register(new Histogram({
-  name: 'corebase_api_request_seconds',
+  name: 'steadhold_api_request_seconds',
   help: 'Control-plane API request duration.',
   labelNames: ['method', 'route'],
   buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5],

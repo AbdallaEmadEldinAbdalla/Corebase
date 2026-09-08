@@ -15,7 +15,7 @@ import { Client } from 'pg';
  * would produce a database that quietly has no API-facing privilege levels.
  */
 export const IMAGE_ROLES = [
-  'anon', 'authenticated', 'service_role', 'authenticator', 'corebase_admin',
+  'anon', 'authenticated', 'service_role', 'authenticator', 'steadhold_admin',
   // P2b: the pooler's identity. Present as a passwordless LOGIN role in the
   // image; the worker sets its password at provision time (D-074).
   'pgbouncer_auth',
@@ -24,7 +24,7 @@ export const IMAGE_ROLES = [
   // role with table privileges in the `auth` schema, which is what keeps
   // `auth.users.encrypted_password` out of reach of every role a customer's API
   // traffic can arrive as, service_role included.
-  'corebase_auth',
+  'steadhold_auth',
 ];
 
 /** Roles the control plane owns and creates at provision time. */
@@ -34,7 +34,7 @@ export const DEVELOPER_ROLE = 'developer';
 export const POOLER_AUTH_ROLE = 'pgbouncer_auth';
 
 /** The auth module's own login role (P4a, D-110). */
-export const AUTH_ROLE = 'corebase_auth';
+export const AUTH_ROLE = 'steadhold_auth';
 
 export interface AdminTarget {
   host: string;

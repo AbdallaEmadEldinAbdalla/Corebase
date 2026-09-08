@@ -4,9 +4,9 @@ import { join } from 'node:path';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { createEnvelope } from '@corebase/crypto';
-import { createSecretStore } from '@corebase/secrets';
-import { createRedis, createQueue, type Redis, type Queue, type ProvisioningJobData } from '@corebase/queue';
+import { createEnvelope } from '@steadhold/crypto';
+import { createSecretStore } from '@steadhold/secrets';
+import { createRedis, createQueue, type Redis, type Queue, type ProvisioningJobData } from '@steadhold/queue';
 import { createDocker, type Docker } from './docker.ts';
 import { buildSagas } from './jobs/sagas.ts';
 import { registerNode, volumeNameFor } from './placement.ts';
@@ -20,13 +20,13 @@ import type { SagaStep, SagaContext } from './jobs/runner.ts';
  * two that must NOT be auto-repaired. The second group matters more — a
  * reconciler that deletes an orphaned volume is worse than no reconciler.
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
-const REDIS = process.env.CB_REDIS_URL ?? 'redis://127.0.0.1:56379';
-const CERT_DIR = process.env.CB_DOCKER_CERT_DIR
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
+const REDIS = process.env.SH_REDIS_URL ?? 'redis://127.0.0.1:56379';
+const CERT_DIR = process.env.SH_DOCKER_CERT_DIR
   ?? join(process.cwd(), '../../infra/docker/staging/certs');
-const HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
+const HOST = process.env.SH_DOCKER_HOST ?? '127.0.0.1';
+const PORT = Number(process.env.SH_DOCKER_PORT ?? 2376);
 const SECRET = 'test-bootstrap-secret-0123456789';
 
 let pool: Pool; let docker: Docker; let orgId: string; let kekDir: string;
@@ -36,7 +36,7 @@ let up = false; let reason = '';
 
 beforeAll(async () => {
   pool = new Pool({ connectionString: DB, max: 6, connectionTimeoutMillis: 1500 });
-  kekDir = mkdtempSync(join(tmpdir(), 'cb-kek-t8-'));
+  kekDir = mkdtempSync(join(tmpdir(), 'sh-kek-t8-'));
   writeFileSync(join(kekDir, 'kek_2026_08.key'), randomBytes(32));
   try {
     await pool.query('select last_reconcile from nodes limit 0');
@@ -118,13 +118,13 @@ const mkRef = () => 'r' + String(Date.now() % 100000) + String(++seq).padStart(1
  */
 const PROVISION: string[] = buildSagas({
   pool: undefined as never, docker: undefined as never, secrets: undefined as never,
-  bootstrapSecret: SECRET, projectDomain: 'corebase.test',
+  bootstrapSecret: SECRET, projectDomain: 'steadhold.test',
 }).provision_project!.map((s: SagaStep<SagaContext>) => s.name);
 
 async function runSteps(jobType: string, projectId: string, names: string[]) {
   const sagas = buildSagas({
     pool, docker, secrets, bootstrapSecret: SECRET, healthTimeoutMs: 60_000,
-    projectDomain: 'corebase.test',
+    projectDomain: 'steadhold.test',
   });
   const steps = sagas[jobType]!;
   const job = { id: 'j', project_id: projectId } as unknown as JobRecord;
@@ -375,7 +375,7 @@ describe('T8 — unlabelled residue', () => {
   t('reports a labelled volume with no row', async () => {
     // Volumes created before the label existed, or by hand during an incident.
     await registerNode(pool, { hostname: 'data-1', ramTotalMb: 16384, diskTotalGb: 200, address: HOST });
-    const stray = 'cb-stray-manual-pgdata';
+    const stray = 'sh-stray-manual-pgdata';
     await docker.createVolume(stray, { [LABEL_MANAGED]: 'true' });
     try {
       const report = await reconciler().reconcileOnce();

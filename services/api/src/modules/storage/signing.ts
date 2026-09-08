@@ -1,16 +1,16 @@
 import { createHmac, hkdfSync, randomBytes, timingSafeEqual } from 'node:crypto';
-import type { SecretStore } from '@corebase/secrets';
-import { SECRET_NAMES } from '@corebase/secrets';
+import type { SecretStore } from '@steadhold/secrets';
+import { SECRET_NAMES } from '@steadhold/secrets';
 
 /**
  * Signed URLs (P6d, storage API §3).
  *
  * ## Ours, not the object store's
  *
- * These are Corebase-HMAC tokens verified by this service, **not** presigned
+ * These are Steadhold-HMAC tokens verified by this service, **not** presigned
  * store URLs. Three reasons, and each one is load-bearing:
  *
- * 1. They work through `<ref>.corebase.co`, so a customer's links do not point
+ * 1. They work through `<ref>.steadhold.app`, so a customer's links do not point
  *    at a third party's hostname.
  * 2. They survive rotation of the store credential — a presigned URL is signed
  *    *with* that credential and dies the moment it rotates, which would make
@@ -27,7 +27,7 @@ import { SECRET_NAMES } from '@corebase/secrets';
  * symmetric verifier held only by this service. So the key is derived from a
  * per-project master secret:
  *
- *     storage_signing_key = HKDF-SHA256(ikm = master, info = "corebase/storage/v1", salt = kid)
+ *     storage_signing_key = HKDF-SHA256(ikm = master, info = "steadhold/storage/v1", salt = kid)
  *
  * Deriving rather than storing a second key means rotation is a new `kid` — a
  * one-word change — and the blast radius stays per project, which is the same
@@ -49,7 +49,7 @@ export const DEFAULT_EXPIRY_SECONDS = 3600;
 export const MAX_EXPIRY_SECONDS = 604_800;
 
 /** The current derivation label. Bumping it invalidates every token at once. */
-const HKDF_INFO = 'corebase/storage/v1';
+const HKDF_INFO = 'steadhold/storage/v1';
 
 /**
  * The `kid` new tokens are signed under.

@@ -177,7 +177,7 @@ export function createS3(cfg: S3Config) {
      * A presigned PUT the client uses to upload **directly to the store**.
      *
      * The one place raw store presigning appears (D-122). Every other capability
-     * we hand out is a Corebase-signed token this service verifies; here the
+     * we hand out is a Steadhold-signed token this service verifies; here the
      * client genuinely must talk to the store, so the credential has to be one
      * the store recognises.
      *
@@ -469,25 +469,25 @@ export const decodeXml = (s: string) => s
  *
  * Getting this wrong is a 30-second timeout that looks exactly like a wrong secret
  * or a firewall, which is why the two are separate variables rather than one
- * variable and a hope. `CB_BACKUP_S3_CONTROL_ENDPOINT` falls back to the
+ * variable and a hope. `SH_BACKUP_S3_CONTROL_ENDPOINT` falls back to the
  * project-facing one, so a production config that sets only the latter is correct
  * by default.
  */
 export function s3FromEnv(env = process.env): S3Config | undefined {
-  const endpoint = env['CB_BACKUP_S3_CONTROL_ENDPOINT'] ?? env['CB_BACKUP_S3_ENDPOINT'];
-  const bucket = env['CB_BACKUP_S3_BUCKET'];
-  const key = env['CB_BACKUP_S3_KEY'];
-  const secret = env['CB_BACKUP_S3_SECRET'];
+  const endpoint = env['SH_BACKUP_S3_CONTROL_ENDPOINT'] ?? env['SH_BACKUP_S3_ENDPOINT'];
+  const bucket = env['SH_BACKUP_S3_BUCKET'];
+  const key = env['SH_BACKUP_S3_KEY'];
+  const secret = env['SH_BACKUP_S3_SECRET'];
   if (!endpoint || !bucket || !key || !secret) return undefined;
   return {
     endpoint, bucket, key, secret,
-    port: Number(env['CB_BACKUP_S3_CONTROL_PORT'] ?? env['CB_BACKUP_S3_PORT'] ?? 443),
-    region: env['CB_BACKUP_S3_REGION'] === 'auto'
+    port: Number(env['SH_BACKUP_S3_CONTROL_PORT'] ?? env['SH_BACKUP_S3_PORT'] ?? 443),
+    region: env['SH_BACKUP_S3_REGION'] === 'auto'
       // SigV4 needs a real region in the credential scope, and R2 wants
       // `auto` in the config but signs with `us-east-1`. Sending `auto` here
       // produces a SignatureDoesNotMatch that reads like a wrong secret.
-      ? 'us-east-1' : (env['CB_BACKUP_S3_REGION'] ?? 'us-east-1'),
-    uriStyle: env['CB_BACKUP_S3_URI_STYLE'] === 'host' ? 'host' : 'path',
-    verifyTls: env['CB_BACKUP_S3_VERIFY_TLS'] !== 'n',
+      ? 'us-east-1' : (env['SH_BACKUP_S3_REGION'] ?? 'us-east-1'),
+    uriStyle: env['SH_BACKUP_S3_URI_STYLE'] === 'host' ? 'host' : 'path',
+    verifyTls: env['SH_BACKUP_S3_VERIFY_TLS'] !== 'n',
   };
 }

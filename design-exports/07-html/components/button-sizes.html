@@ -3,25 +3,25 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>button-sizes — Corebase</title>
+<title>button-sizes — Steadhold</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap">
 <link rel="stylesheet" href="../tokens.css">
 <link rel="stylesheet" href="../components.css">
 </head>
 <body>
-<div class="ref-toggle"><button class="cb-btn cb-btn--secondary cb-btn--sm" onclick="cbToggle()">Theme: <span class="js-theme-label">Light</span></button></div>
+<div class="ref-toggle"><button class="sh-btn sh-btn--secondary sh-btn--sm" onclick="cbToggle()">Theme: <span class="js-theme-label">Light</span></button></div>
 <main class="ref-main">
   <h1 class="ref-item__name">button-sizes</h1>
   <p class="ref-sub">Heights 32 / 40 / 48. Labels hug: padding 12 / 16 / 20.</p>
   <div class="ref-demo">
-<div class="ref-labelled"><span>sm · 32</span><button class="cb-btn cb-btn--sm">Button</button></div>
-<div class="ref-labelled"><span>md · 40</span><button class="cb-btn">Button</button></div>
-<div class="ref-labelled"><span>lg · 48</span><button class="cb-btn cb-btn--lg">Button</button></div>
+<div class="ref-labelled"><span>sm · 32</span><button class="sh-btn sh-btn--sm">Button</button></div>
+<div class="ref-labelled"><span>md · 40</span><button class="sh-btn">Button</button></div>
+<div class="ref-labelled"><span>lg · 48</span><button class="sh-btn sh-btn--lg">Button</button></div>
   </div>
 </main>
 <script>
 (function(){
-  var r=document.documentElement, K='cb-theme';
+  var r=document.documentElement, K='sh-theme';
   try{var s=localStorage.getItem(K); if(s) r.setAttribute('data-theme',s);}catch(e){}
   window.cbToggle=function(){
     var cur=r.getAttribute('data-theme');

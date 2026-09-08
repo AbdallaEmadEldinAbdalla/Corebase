@@ -1,5 +1,5 @@
 import type { Pool } from 'pg';
-import { toJwk } from '@corebase/jwt';
+import { toJwk } from '@steadhold/jwt';
 
 /**
  * The routing table (P5c, D-051): everything the hot path needs about a project,

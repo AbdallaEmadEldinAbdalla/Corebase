@@ -11,12 +11,12 @@ scrape_configs:
   # host.docker.internal: the API and worker run as host processes in local
   # staging, not containers. In production they are containers on the node and
   # come from http_sd like everything else.
-  - job_name: corebase-api
+  - job_name: steadhold-api
     static_configs:
       - targets: ['host.docker.internal:8099']
         labels: { service: api }
 
-  - job_name: corebase-worker
+  - job_name: steadhold-worker
     static_configs:
       - targets: ['host.docker.internal:9101']
         labels: { service: worker }

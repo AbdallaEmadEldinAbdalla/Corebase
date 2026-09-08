@@ -35,10 +35,10 @@ function LoginSkeleton() {
   return (
     <div className="auth">
       <div className="auth__panel" aria-busy="true">
-        <div className="cb-skeleton" style={{ width: 140, height: 24 }} />
-        <div className="cb-skeleton" style={{ width: '100%', height: 40, marginTop: 24 }} />
-        <div className="cb-skeleton" style={{ width: '100%', height: 40, marginTop: 16 }} />
-        <div className="cb-skeleton" style={{ width: '100%', height: 48, marginTop: 24 }} />
+        <div className="sh-skeleton" style={{ width: 140, height: 24 }} />
+        <div className="sh-skeleton" style={{ width: '100%', height: 40, marginTop: 24 }} />
+        <div className="sh-skeleton" style={{ width: '100%', height: 40, marginTop: 16 }} />
+        <div className="sh-skeleton" style={{ width: '100%', height: 48, marginTop: 24 }} />
       </div>
     </div>
   );
@@ -85,7 +85,7 @@ function LoginForm() {
       <div className="auth__panel">
         <div className="auth__brand">
           <Logo size={26} />
-          Corebase
+          Steadhold
         </div>
         <h1 className="auth__title">Sign in</h1>
         <p className="auth__sub">
@@ -93,23 +93,23 @@ function LoginForm() {
         </p>
 
         {error ? (
-          <div style={{ marginBottom: 'var(--cb-space-4)' }}>
+          <div style={{ marginBottom: 'var(--sh-space-4)' }}>
             <ErrorSurface error={error} title={rateLimited ? 'Too many attempts' : 'Sign-in failed'} />
           </div>
         ) : null}
 
         <form onSubmit={submit} className="stack">
-          <div className="cb-field">
-            <label className="cb-label" htmlFor="email">Email</label>
-            <input className="cb-input" id="email" type="email" autoComplete="email"
+          <div className="sh-field">
+            <label className="sh-label" htmlFor="email">Email</label>
+            <input className="sh-input" id="email" type="email" autoComplete="email"
                    required value={email} onChange={(e) => setEmail(e.target.value)} />
           </div>
-          <div className="cb-field">
-            <label className="cb-label" htmlFor="password">Password</label>
-            <input className="cb-input" id="password" type="password" autoComplete="current-password"
+          <div className="sh-field">
+            <label className="sh-label" htmlFor="password">Password</label>
+            <input className="sh-input" id="password" type="password" autoComplete="current-password"
                    required value={password} onChange={(e) => setPassword(e.target.value)} />
           </div>
-          <button className="cb-btn cb-btn--lg" type="submit" disabled={busy}>
+          <button className="sh-btn sh-btn--lg" type="submit" disabled={busy}>
             {busy ? 'Signing in…' : 'Sign in'}
           </button>
         </form>

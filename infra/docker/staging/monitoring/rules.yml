@@ -1,14 +1,14 @@
 # The alert the plan asks for by name, plus the two that would page first in
 # practice. Thresholds are the alert catalog's (docs/11-infrastructure/03).
 groups:
-  - name: corebase-provisioning
+  - name: steadhold-provisioning
     interval: 5s
     rules:
       # "Provisioning job stuck: any job >10 min in non-terminal state" — one
       # comparison, because the worker exports the age of the oldest such job
       # rather than making the alert reconstruct it from states and timestamps.
       - alert: ProvisioningJobStuck
-        expr: corebase_provisioning_oldest_nonterminal_job_seconds > 600
+        expr: steadhold_provisioning_oldest_nonterminal_job_seconds > 600
         for: 1m
         labels: { severity: page }
         annotations:
@@ -20,7 +20,7 @@ groups:
       # The bin-packer stops at 85% (D-090); passing it means the accounting is
       # wrong, not that the node is busy.
       - alert: NodeRamReservedRatioHigh
-        expr: corebase_node_ram_reserved_ratio > 0.85
+        expr: steadhold_node_ram_reserved_ratio > 0.85
         for: 5m
         labels: { severity: warn }
         annotations:
@@ -28,7 +28,7 @@ groups:
 
       # A reconciler nobody notices has stopped is worse than no reconciler.
       - alert: ReconciliationStale
-        expr: time() - corebase_reconcile_last_success_timestamp_seconds > 900
+        expr: time() - steadhold_reconcile_last_success_timestamp_seconds > 900
         for: 1m
         labels: { severity: warn }
         annotations:
@@ -38,7 +38,7 @@ groups:
   # A project whose WAL is not reaching object storage keeps serving, keeps
   # saying `ready`, and stops being recoverable. Nothing about that is visible
   # from the outside, which is the entire reason these exist.
-  - name: corebase-backups
+  - name: steadhold-backups
     interval: 15s
     rules:
       # >5 min is the RPO promise (D-148) already broken, not an early warning.
@@ -48,7 +48,7 @@ groups:
       # Free, the naive definition sits every healthy idle project permanently on
       # this line and the alert becomes noise nobody reads.
       - alert: WalArchiveLagWarn
-        expr: corebase_backup_wal_archive_lag_seconds > 300
+        expr: steadhold_backup_wal_archive_lag_seconds > 300
         for: 1m
         labels: { severity: warn }
         annotations:
@@ -58,7 +58,7 @@ groups:
             This project's PITR window has stopped advancing.
 
       - alert: WalArchiveLagCritical
-        expr: corebase_backup_wal_archive_lag_seconds > 900
+        expr: steadhold_backup_wal_archive_lag_seconds > 900
         for: 1m
         labels: { severity: page }
         annotations:
@@ -67,7 +67,7 @@ groups:
       # A different question from lag, and one lag cannot answer: a project can
       # have nothing waiting and a repo whose credentials expired last week.
       - alert: BackupRepoUnreachable
-        expr: corebase_backup_check_ok == 0
+        expr: steadhold_backup_check_ok == 0
         for: 5m
         labels: { severity: page }
         annotations:
@@ -84,7 +84,7 @@ groups:
       # pointed at the wrong one of those stays green through exactly the failure
       # it exists to catch (D-277).
       - alert: BackupLastSuccessStale
-        expr: time() - corebase_backup_last_success_ts > 93600
+        expr: time() - steadhold_backup_last_success_ts > 93600
         for: 5m
         labels: { severity: page }
         annotations:
@@ -96,7 +96,7 @@ groups:
       # re-verify, and the project stays at the front of the verification queue
       # until one passes.
       - alert: RestoreVerificationFailed
-        expr: increase(corebase_restore_verifications_total{result="failed"}[6h]) > 0
+        expr: increase(steadhold_restore_verifications_total{result="failed"}[6h]) > 0
         for: 1m
         labels: { severity: page }
         annotations:
@@ -110,7 +110,7 @@ groups:
       # likelier failure — a scheduler that stopped looks exactly like a fleet
       # whose backups are all fine.
       - alert: RestoreVerificationCoverageLow
-        expr: corebase_projects_restore_verified_ratio < 0.95
+        expr: steadhold_projects_restore_verified_ratio < 0.95
         for: 1h
         labels: { severity: warn }
         annotations:
@@ -122,7 +122,7 @@ groups:
       # which is silence: this is the repo or the database saying no, and the run
       # row carries the reason.
       - alert: BackupRunFailed
-        expr: increase(corebase_backup_runs_total{outcome="failed"}[1h]) > 0
+        expr: increase(steadhold_backup_runs_total{outcome="failed"}[1h]) > 0
         for: 1m
         labels: { severity: page }
         annotations:

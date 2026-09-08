@@ -2,9 +2,9 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
 import { join } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
-import { createSmtpProvider, render, EmailSendError } from '@corebase/email';
+import { createSmtpProvider, render, EmailSendError } from '@steadhold/email';
 import { createEmailSender, friendlyFrom } from './email-sender.ts';
-import type { AuthEmailJobData } from '@corebase/queue';
+import type { AuthEmailJobData } from '@steadhold/queue';
 
 /**
  * P4d — a message that actually leaves the process.
@@ -36,11 +36,11 @@ function loadMailEnv(): void {
 }
 loadMailEnv();
 
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
-const SMTP_HOST = process.env.CB_SMTP_HOST ?? '127.0.0.1';
-const SMTP_PORT = Number(process.env.CB_SMTP_PORT ?? 51025);
-const MAILPIT = process.env.CB_MAILPIT_API ?? 'http://127.0.0.1:58025';
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
+const SMTP_HOST = process.env.SH_SMTP_HOST ?? '127.0.0.1';
+const SMTP_PORT = Number(process.env.SH_SMTP_PORT ?? 51025);
+const MAILPIT = process.env.SH_MAILPIT_API ?? 'http://127.0.0.1:58025';
 
 let pool: Pool; let orgId: string; let up = false; let reason = '';
 
@@ -143,7 +143,7 @@ const provider = () => createSmtpProvider({
 
 const sender = (over: Partial<Parameters<typeof createEmailSender>[0]> = {}) =>
   createEmailSender({
-    pool, provider: provider(), from: 'auth@mail.corebase.co', ...over });
+    pool, provider: provider(), from: 'auth@mail.steadhold.app', ...over });
 
 const job = (p: { id: string; ref: string }, over: Partial<AuthEmailJobData> = {}): AuthEmailJobData => ({
   delivery_id: `confirmation_${++seq}`,
@@ -171,10 +171,10 @@ describe('P4d — a real SMTP send', () => {
     const msg = await waitForMail((m) => m.To[0]?.Address === 'user@example.test');
     expect(msg.Subject).toBe('Confirm your email address');
     // The project's name in the friendly-from: a verification mail from an
-    // unrecognised "Corebase" for an app called Acme reads like phishing, which
+    // unrecognised "Steadhold" for an app called Acme reads like phishing, which
     // is both a support burden and a complaint-rate problem.
-    expect(msg.From.Name).toBe('Acme (via Corebase)');
-    expect(msg.From.Address).toBe('auth@mail.corebase.co');
+    expect(msg.From.Name).toBe('Acme (via Steadhold)');
+    expect(msg.From.Address).toBe('auth@mail.steadhold.app');
 
     const raw = await source(msg.ID);
     // multipart/alternative with text *first*: a client picks the last part it
@@ -206,7 +206,7 @@ describe('P4d — a real SMTP send', () => {
     // A raw non-ASCII byte in a header is not merely non-compliant: several
     // providers reject the message and some rewrite it, so the mail either
     // bounces or arrives mangled. RFC 2047 is what makes this arrive readable.
-    expect(msg.From.Name).toBe('Café — Ünicode ✉ (via Corebase)');
+    expect(msg.From.Name).toBe('Café — Ünicode ✉ (via Steadhold)');
     const raw = await source(msg.ID);
     expect(raw).toContain('=?UTF-8?B?');
   });
@@ -256,7 +256,7 @@ describe('P4d — a real SMTP send', () => {
     expect(msg.To).toHaveLength(1);
     // And the name arrives as one quoted string rather than as a header the
     // attacker got to shape.
-    expect(msg.From.Name).toContain('(via Corebase)');
+    expect(msg.From.Name).toContain('(via Steadhold)');
     expect(msg.From.Name).not.toContain('\n');
   });
 });
@@ -286,7 +286,7 @@ describe('P4d — idempotency and failure', () => {
     // what a provider restart looks like, and dropping a verification mail for
     // one would be the wrong trade.
     const s = createEmailSender({
-      pool, from: 'auth@mail.corebase.co',
+      pool, from: 'auth@mail.steadhold.app',
       provider: createSmtpProvider({ host: '127.0.0.1', port: 1, tls: 'off', timeoutMs: 2000 }),
     });
     await expect(s.handle(d, 0)).rejects.toThrow(EmailSendError);
@@ -304,7 +304,7 @@ describe('P4d — idempotency and failure', () => {
     await queueRow(d);
     const dead: string[] = [];
     const s = createEmailSender({
-      pool, from: 'auth@mail.corebase.co',
+      pool, from: 'auth@mail.steadhold.app',
       provider: createSmtpProvider({ host: '127.0.0.1', port: 1, tls: 'off', timeoutMs: 2000 }),
       onDeadLetter: (data, error) => dead.push(`${data.delivery_id}:${error}`),
     });
@@ -342,7 +342,7 @@ describe('P4d — idempotency and failure', () => {
     const d = job(p, { to: 'creds@example.test' });
     await queueRow(d);
     const s = createEmailSender({
-      pool, from: 'auth@mail.corebase.co',
+      pool, from: 'auth@mail.steadhold.app',
       provider: createSmtpProvider({
         host: SMTP_HOST, port: SMTP_PORT, tls: 'off', user: 'someone', password: 'secret' }),
     });
@@ -357,9 +357,9 @@ describe('P4d — idempotency and failure', () => {
 
 describe('P4d — the friendly-from', () => {
   it('names the project and still says it is us', () => {
-    // Claiming to *be* Acme while sending from mail.corebase.co is what DMARC
+    // Claiming to *be* Acme while sending from mail.steadhold.app is what DMARC
     // alignment checks exist to catch.
-    expect(friendlyFrom('Acme')).toBe('Acme (via Corebase)');
-    expect(friendlyFrom(undefined)).toBe('Corebase Auth');
+    expect(friendlyFrom('Acme')).toBe('Acme (via Steadhold)');
+    expect(friendlyFrom(undefined)).toBe('Steadhold Auth');
   });
 });

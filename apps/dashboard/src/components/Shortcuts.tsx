@@ -49,27 +49,27 @@ export function Shortcuts({ open, onClose }: { open: boolean; onClose: () => voi
   return (
     <div className="layer layer--center"
          onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="cb-dialog" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts"
+      <div className="sh-dialog" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts"
            tabIndex={-1} ref={dialog} style={{ width: 460 }}>
-        <div className="cb-dialog__title">Keyboard shortcuts</div>
-        <div className="cb-dialog__text">
+        <div className="sh-dialog__title">Keyboard shortcuts</div>
+        <div className="sh-dialog__text">
           Everything here also lives in the command palette.
         </div>
         {GROUPS.map((g) => (
-          <div key={g.title} style={{ marginBottom: 'var(--cb-space-4)' }}>
+          <div key={g.title} style={{ marginBottom: 'var(--sh-space-4)' }}>
             <div className="palette__group" style={{ padding: '0 0 6px' }}>{g.title}</div>
             {g.keys.map(([k, what]) => (
               <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 12, height: 30 }}>
                 <span style={{ width: 78, flex: 'none' }}>
                   {k.split(' ').map((part) => <span className="kbd" key={part} style={{ marginRight: 4 }}>{part}</span>)}
                 </span>
-                <span style={{ font: 'var(--cb-body-s)', color: 'var(--cb-text-secondary)' }}>{what}</span>
+                <span style={{ font: 'var(--sh-body-s)', color: 'var(--sh-text-secondary)' }}>{what}</span>
               </div>
             ))}
           </div>
         ))}
-        <div className="cb-dialog__footer" style={{ display: 'flex', justifyContent: 'flex-end' }}>
-          <button type="button" className="cb-btn cb-btn--secondary" onClick={onClose}>Close</button>
+        <div className="sh-dialog__footer" style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <button type="button" className="sh-btn sh-btn--secondary" onClick={onClose}>Close</button>
         </div>
       </div>
     </div>

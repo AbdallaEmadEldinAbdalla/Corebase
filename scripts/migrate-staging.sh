@@ -4,5 +4,5 @@
 # no-op on re-run.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-export CB_CONTROL_DATABASE_URL="${CB_CONTROL_DATABASE_URL:-postgres://corebase:controlpass@127.0.0.1:55433/corebase_control}"
+export SH_CONTROL_DATABASE_URL="${SH_CONTROL_DATABASE_URL:-postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control}"
 node --experimental-strip-types packages/migrate/src/cli.ts migrations

@@ -6,7 +6,7 @@ import {
 } from './backup.ts';
 
 const repo: RepoTarget = {
-  endpoint: 'store.example', port: 9000, bucket: 'cb-backups',
+  endpoint: 'store.example', port: 9000, bucket: 'sh-backups',
   key: 'AKIA', secret: 's3cr3t', region: 'auto', uriStyle: 'path', verifyTls: false,
 };
 const base = {
@@ -19,20 +19,20 @@ describe('repo target from the environment', () => {
     // A partial configuration is how a fleet ends up with projects whose
     // archiving has been failing since they were created: archive_command retries
     // forever and nothing else looks.
-    expect(repoTargetFromEnv({ CB_BACKUP_S3_ENDPOINT: 'h' })).toBeUndefined();
+    expect(repoTargetFromEnv({ SH_BACKUP_S3_ENDPOINT: 'h' })).toBeUndefined();
     expect(repoTargetFromEnv({
-      CB_BACKUP_S3_ENDPOINT: 'h', CB_BACKUP_S3_BUCKET: 'b', CB_BACKUP_S3_KEY: 'k',
+      SH_BACKUP_S3_ENDPOINT: 'h', SH_BACKUP_S3_BUCKET: 'b', SH_BACKUP_S3_KEY: 'k',
     })).toBeUndefined();
     expect(repoTargetFromEnv({
-      CB_BACKUP_S3_ENDPOINT: 'h', CB_BACKUP_S3_BUCKET: 'b',
-      CB_BACKUP_S3_KEY: 'k', CB_BACKUP_S3_SECRET: 's',
+      SH_BACKUP_S3_ENDPOINT: 'h', SH_BACKUP_S3_BUCKET: 'b',
+      SH_BACKUP_S3_KEY: 'k', SH_BACKUP_S3_SECRET: 's',
     })).toBeDefined();
   });
 
   it('defaults the port to 443, because S3 is TLS-only here', () => {
     const t = repoTargetFromEnv({
-      CB_BACKUP_S3_ENDPOINT: 'h', CB_BACKUP_S3_BUCKET: 'b',
-      CB_BACKUP_S3_KEY: 'k', CB_BACKUP_S3_SECRET: 's',
+      SH_BACKUP_S3_ENDPOINT: 'h', SH_BACKUP_S3_BUCKET: 'b',
+      SH_BACKUP_S3_KEY: 'k', SH_BACKUP_S3_SECRET: 's',
     })!;
     expect(t.port).toBe(443);
     expect(t.verifyTls).toBe(true);

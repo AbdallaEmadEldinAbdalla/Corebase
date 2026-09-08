@@ -4,9 +4,9 @@ import { join } from 'node:path';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { createEnvelope } from '@corebase/crypto';
-import { createSecretStore, SECRET_NAMES } from '@corebase/secrets';
-import { createRedis, createQueue, type Redis, type Queue, type ProvisioningJobData } from '@corebase/queue';
+import { createEnvelope } from '@steadhold/crypto';
+import { createSecretStore, SECRET_NAMES } from '@steadhold/secrets';
+import { createRedis, createQueue, type Redis, type Queue, type ProvisioningJobData } from '@steadhold/queue';
 import { createDocker, type Docker } from './docker.ts';
 import { buildSagas } from './jobs/sagas.ts';
 import { registerNode, volumeNameFor } from './placement.ts';
@@ -20,13 +20,13 @@ import type { SagaStep, SagaContext } from './jobs/runner.ts';
  * them, and the interesting assertions are about what is *still there* after the
  * reversible phase and what is *gone* after the irreversible one.
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
-const REDIS = process.env.CB_REDIS_URL ?? 'redis://127.0.0.1:56379';
-const CERT_DIR = process.env.CB_DOCKER_CERT_DIR
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
+const REDIS = process.env.SH_REDIS_URL ?? 'redis://127.0.0.1:56379';
+const CERT_DIR = process.env.SH_DOCKER_CERT_DIR
   ?? join(process.cwd(), '../../infra/docker/staging/certs');
-const HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
+const HOST = process.env.SH_DOCKER_HOST ?? '127.0.0.1';
+const PORT = Number(process.env.SH_DOCKER_PORT ?? 2376);
 const SECRET = 'test-bootstrap-secret-0123456789';
 
 let pool: Pool; let docker: Docker; let orgId: string; let kekDir: string;
@@ -36,7 +36,7 @@ let up = false; let reason = '';
 
 beforeAll(async () => {
   pool = new Pool({ connectionString: DB, max: 6, connectionTimeoutMillis: 1500 });
-  kekDir = mkdtempSync(join(tmpdir(), 'cb-kek-t7-'));
+  kekDir = mkdtempSync(join(tmpdir(), 'sh-kek-t7-'));
   writeFileSync(join(kekDir, 'kek_2026_08.key'), randomBytes(32));
   try {
     await pool.query('select 1');
@@ -103,7 +103,7 @@ const t = (n: string, fn: () => Promise<void>, ms = 120_000) =>
     await fn();
   }, ms);
 
-/** Every cb-* volume on the node, via the raw Engine API list. */
+/** Every sh-* volume on the node, via the raw Engine API list. */
 async function listProjectVolumes(): Promise<string[]> {
   const seen: string[] = [];
   for (const c of await docker.listContainers()) {
@@ -147,7 +147,7 @@ async function mkProject(plan = 'free') {
 const names = (kind: 'provision_project' | 'delete_project' | 'purge_project'): string[] =>
   buildSagas({
     pool: undefined as never, docker: undefined as never, secrets: undefined as never,
-    bootstrapSecret: SECRET, projectDomain: 'corebase.test',
+    bootstrapSecret: SECRET, projectDomain: 'steadhold.test',
   })[kind]!.map((s: SagaStep<SagaContext>) => s.name);
 
 const PROVISION = names('provision_project');
@@ -160,7 +160,7 @@ async function runSteps(
 ) {
   const sagas = buildSagas({
     pool, docker, secrets, bootstrapSecret: SECRET, healthTimeoutMs: 60_000,
-    projectDomain: 'corebase.test', softDeleteWindow: '7 days', ...extra,
+    projectDomain: 'steadhold.test', softDeleteWindow: '7 days', ...extra,
   });
   const steps = sagas[jobType]!;
   const logs: string[] = [];

@@ -2,8 +2,8 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
 import { buildApp } from './app.ts';
 import { createPgStore, ensureBootstrapOrg } from './modules/control-plane/store.pg.ts';
-import { readProjectAudit } from '@corebase/audit';
-import { decodeId } from '@corebase/types';
+import { readProjectAudit } from '@steadhold/audit';
+import { decodeId } from '@steadhold/types';
 
 /**
  * P1b: "every mutating endpoint writes an audit row" is a Phase-1 exit criterion,
@@ -13,8 +13,8 @@ import { decodeId } from '@corebase/types';
  * and fails when one appears that is not on the audited list. A new endpoint then
  * cannot merge without either an audit row or a deliberate, visible exemption.
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
 const TOKEN = 'audit-token';
 const auth = { authorization: `Bearer ${TOKEN}` };
 
@@ -27,7 +27,7 @@ beforeAll(async () => {
   try {
     const organizationId = await ensureBootstrapOrg(pool);
     const { rows } = await pool.query<{ id: string }>(
-      `select id from users where email = 'dev@corebase.local'`);
+      `select id from users where email = 'dev@steadhold.local'`);
     actorUserId = rows[0]?.id ?? null;
     store = createPgStore({ pool, organizationId });
     up = true;

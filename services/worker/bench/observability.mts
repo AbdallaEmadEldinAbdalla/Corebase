@@ -10,7 +10,7 @@
  *
  * Usage:
  *   ./scripts/staging.sh up && ./scripts/dev.sh          # in another terminal
- *   pnpm --filter @corebase/worker observability
+ *   pnpm --filter @steadhold/worker observability
  */
 import { Pool } from 'pg';
 
@@ -18,12 +18,12 @@ const API = `http://127.0.0.1:${process.env.PORT ?? 8099}`;
 const PROM = `http://127.0.0.1:${process.env.PROMETHEUS_PORT ?? 9090}`;
 const LOKI = `http://127.0.0.1:${process.env.LOKI_PORT ?? 3100}`;
 const GRAFANA = `http://127.0.0.1:${process.env.GRAFANA_PORT ?? 3001}`;
-const TOKEN = process.env.CB_STATIC_TOKEN ?? 'observability-harness-token-long-enough';
-const COUNT = Number(process.env.CB_OBS_COUNT ?? 20);
+const TOKEN = process.env.SH_STATIC_TOKEN ?? 'observability-harness-token-long-enough';
+const COUNT = Number(process.env.SH_OBS_COUNT ?? 20);
 
 const pool = new Pool({
-  connectionString: process.env.CB_CONTROL_DATABASE_URL
-    ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control',
+  connectionString: process.env.SH_CONTROL_DATABASE_URL
+    ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control',
   max: 4,
 });
 const auth = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
@@ -72,7 +72,7 @@ async function main() {
   check('api /health', (await fetch(`${API}/health`).catch(() => null))?.ok === true);
   check('api /metrics', (await fetch(`${API}/metrics`).catch(() => null))?.ok === true);
   check('worker /metrics',
-    (await fetch(`http://127.0.0.1:${process.env.CB_METRICS_PORT ?? 9101}/metrics`)
+    (await fetch(`http://127.0.0.1:${process.env.SH_METRICS_PORT ?? 9101}/metrics`)
       .catch(() => null))?.ok === true);
   check('prometheus healthy', (await fetch(`${PROM}/-/healthy`).catch(() => null))?.ok === true);
   check('loki ready', (await fetch(`${LOKI}/ready`).catch(() => null))?.ok === true);
@@ -86,10 +86,10 @@ async function main() {
   // ── Prometheus is actually scraping our two services ─────────────────────
   console.log('\n▸ scrape targets');
   const targetsUp = await waitFor('both services scraped as up', async () => {
-    const up = await promQuery('up{job=~"corebase-.*"}');
+    const up = await promQuery('up{job=~"steadhold-.*"}');
     return up.length >= 2 && up.every((t) => t.value[1] === '1');
   }, 30_000);
-  const upTargets = await promQuery('up{job=~"corebase-.*"}');
+  const upTargets = await promQuery('up{job=~"steadhold-.*"}');
   check('api and worker scraped', targetsUp,
     upTargets.map((t) => `${t.metric['job']}=${t.value[1]}`).join(' '));
 
@@ -122,7 +122,7 @@ async function main() {
   // five minutes, so a `before` reading can come from the *previous* worker's
   // now-stale series and produce a nonsense difference. Assert what the panel
   // shows instead.
-  const HIST = 'sum(corebase_provisioning_job_seconds_count' +
+  const HIST = 'sum(steadhold_provisioning_job_seconds_count' +
     '{job_type="provision_project",outcome="succeeded"})';
   const counted = await waitFor('histogram observations arrived',
     async () => ((await promScalar(HIST)) ?? 0) >= COUNT, 90_000);
@@ -130,31 +130,31 @@ async function main() {
     `${await promScalar(HIST)} successful observations`);
 
   const p50 = await promScalar(
-    'histogram_quantile(0.5, sum by (le) (rate(corebase_provisioning_job_seconds_bucket{outcome="succeeded"}[5m])))');
+    'histogram_quantile(0.5, sum by (le) (rate(steadhold_provisioning_job_seconds_bucket{outcome="succeeded"}[5m])))');
   check('p50 is a plausible duration', typeof p50 === 'number' && p50 > 0 && p50 < 60,
     `p50 ≈ ${p50?.toFixed(2)}s`);
 
   const succeeded = await promScalar(
-    'sum(corebase_provisioning_jobs_total{outcome="succeeded"})');
+    'sum(steadhold_provisioning_jobs_total{outcome="succeeded"})');
   check('job counter separates outcomes', (succeeded ?? 0) >= COUNT,
     `succeeded=${succeeded}`);
 
-  const ratio = await promScalar('max(corebase_node_ram_reserved_ratio)');
-  const booked = await promScalar('max(corebase_node_ram_reserved_mb)');
+  const ratio = await promScalar('max(steadhold_node_ram_reserved_ratio)');
+  const booked = await promScalar('max(steadhold_node_ram_reserved_mb)');
   check('node RAM booking is exported', typeof ratio === 'number' && ratio > 0,
     `${booked} MB = ${((ratio ?? 0) * 100).toFixed(1)}% of the node`);
 
   const stepFamilies = await promQuery(
-    'count by (step) (corebase_provisioning_step_seconds_count)');
+    'count by (step) (steadhold_provisioning_step_seconds_count)');
   check('per-step durations are exported', stepFamilies.length >= 8,
     `${stepFamilies.length} steps`);
 
   // ── the two label rules that keep Prometheus alive ───────────────────────
   console.log('\n▸ cardinality discipline (D-146)');
-  const withRef = await promQuery('{__name__=~"corebase_.*", project_ref!=""}');
-  check('no corebase metric carries project_ref', withRef.length === 0,
+  const withRef = await promQuery('{__name__=~"steadhold_.*", project_ref!=""}');
+  check('no steadhold metric carries project_ref', withRef.length === 0,
     withRef.length ? `LEAK: ${withRef.length} series` : 'per-project questions go to logs');
-  const apiSeries = await promQuery('count(corebase_api_requests_total)');
+  const apiSeries = await promQuery('count(steadhold_api_requests_total)');
   const apiCount = apiSeries[0] ? Number(apiSeries[0].value[1]) : 0;
   check('api request series stay bounded', apiCount > 0 && apiCount < 40,
     `${apiCount} series across method × route × status class`);
@@ -215,9 +215,9 @@ async function main() {
     [stuck[0]!.id, `stuck_probe_${Date.now()}`]);
 
   const aged = await waitFor('gauge reflects the aged job', async () =>
-    ((await promScalar('corebase_provisioning_oldest_nonterminal_job_seconds')) ?? 0) > 600, 45_000);
+    ((await promScalar('steadhold_provisioning_oldest_nonterminal_job_seconds')) ?? 0) > 600, 45_000);
   check('oldest-job gauge crosses the threshold', aged,
-    `${Math.round((await promScalar('corebase_provisioning_oldest_nonterminal_job_seconds')) ?? 0)}s`);
+    `${Math.round((await promScalar('steadhold_provisioning_oldest_nonterminal_job_seconds')) ?? 0)}s`);
 
   const fired = await waitFor('ProvisioningJobStuck fires', async () => {
     const r = await fetch(`${PROM}/api/v1/rules`).then((x) => x.json() as Promise<{
@@ -244,7 +244,7 @@ async function main() {
 
   // ── the dashboard exists and its panel query resolves ───────────────────
   console.log('\n▸ dashboard');
-  const dash = await fetch(`${GRAFANA}/api/dashboards/uid/corebase-provisioning`)
+  const dash = await fetch(`${GRAFANA}/api/dashboards/uid/steadhold-provisioning`)
     .then((r) => (r.ok ? r.json() as Promise<{ dashboard: { title: string; panels: unknown[] } }> : null))
     .catch(() => null);
   check('provisioned dashboard is present', dash !== null,

@@ -1,6 +1,6 @@
 import type { Pool } from 'pg';
-import type { Queue, ProvisioningJobData } from '@corebase/queue';
-import { enqueueProvisioning } from '@corebase/queue';
+import type { Queue, ProvisioningJobData } from '@steadhold/queue';
+import { enqueueProvisioning } from '@steadhold/queue';
 import type { Docker } from './docker.ts';
 import { containerName, LABEL_MANAGED, LABEL_REF, LABEL_ROLE } from './container-spec.ts';
 import { PLAN_RAM_MB, volumeNameFor } from './placement.ts';
@@ -310,7 +310,7 @@ export function createReconciler(opts: ReconcileOptions) {
       for (const v of volumes) {
         const ref = v.Labels?.[LABEL_REF];
         if (ref && placedRefs.has(ref)) continue;
-        if (!ref && !v.Name.startsWith('cb-')) {
+        if (!ref && !v.Name.startsWith('sh-')) {
           // Unlabelled and not ours by name. Reported, never removed — it is
           // still somebody's bytes, and the point of this class is that a human
           // decides.
@@ -319,7 +319,7 @@ export function createReconciler(opts: ReconcileOptions) {
           });
           drift.push({
             class: 'orphan_volume', action: 'alert_only',
-            detail: `volume ${v.Name} has no Corebase label and no matching name — ` +
+            detail: `volume ${v.Name} has no Steadhold label and no matching name — ` +
               'likely a container started without a mount; occupies disk forever',
           });
           continue;

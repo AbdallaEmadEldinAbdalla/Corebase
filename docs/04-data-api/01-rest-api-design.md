@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The data API is the surface most Corebase code never touches: per D-011, each project runs its own embedded **PostgREST** instance, and Corebase's engineering goes into the gateway around it. This doc does two things: (1) documents the build-vs-embed analysis behind D-011 properly, including what embedding costs us and the trigger that would reopen the decision; (2) specifies the developer-facing API contract Corebase commits to — the URL shape, filter grammar, pagination, embedding, upsert, and RPC semantics — plus the operational glue (schema-cache reloads, per-project PostgREST configuration, versioning stance). The critique that forced this design is [critical review §2.2](../00-foundation/03-critical-review.md): "automatically expose tables as an API" hides an entire product.
+The data API is the surface most Steadhold code never touches: per D-011, each project runs its own embedded **PostgREST** instance, and Steadhold's engineering goes into the gateway around it. This doc does two things: (1) documents the build-vs-embed analysis behind D-011 properly, including what embedding costs us and the trigger that would reopen the decision; (2) specifies the developer-facing API contract Steadhold commits to — the URL shape, filter grammar, pagination, embedding, upsert, and RPC semantics — plus the operational glue (schema-cache reloads, per-project PostgREST configuration, versioning stance). The critique that forced this design is [critical review §2.2](../00-foundation/03-critical-review.md): "automatically expose tables as an API" hides an entire product.
 
 ## Design
 
@@ -26,24 +26,24 @@ Honest estimate for a from-scratch implementation reaching *compatible* parity: 
 
 | Cost | Reality | Mitigation |
 |---|---|---|
-| Haskell binary opacity | Nobody on the team writes Haskell; we cannot hot-patch PostgREST, only configure it, file upstream issues, or carry patches we can't confidently author | Treat PostgREST as a black-box appliance with a pinned version; all Corebase-specific behavior lives in the gateway or in SQL (roles, RLS, `pre-request` function) — both fully ours |
+| Haskell binary opacity | Nobody on the team writes Haskell; we cannot hot-patch PostgREST, only configure it, file upstream issues, or carry patches we can't confidently author | Treat PostgREST as a black-box appliance with a pinned version; all Steadhold-specific behavior lives in the gateway or in SQL (roles, RLS, `pre-request` function) — both fully ours |
 | Config constraints | Behavior is tunable only through the exposed config surface; per-request dynamic behavior (per-plan row caps, billing hooks) can't be injected mid-query | The SQL escape hatch (`db-pre-request`, role settings like `statement_timeout`, RLS itself) covers most needs; the gateway covers the rest before/after the proxy hop |
 | Version coupling | Our public API surface tracks upstream releases; an upstream breaking change becomes our migration project | Pin one PostgREST version fleet-wide (same logic as D-037 for Postgres); absorb upstream majors deliberately, behind the `/rest/v1` contract (D-102) |
 | Per-project RAM | One PostgREST process per project (D-009 triplet) costs ~40–80 MB RSS each — real money in the density math | Counted in the [cost model](../12-business/01-cost-model.md) and node sizing ([postgres provisioning](../03-database-platform/01-postgres-provisioning.md)); paused projects (D-008) drop the whole triplet |
 
-**Conclusion: D-011 stands — embed PostgREST, one instance per project.** A second-order benefit is deliberate: the API is Supabase-compatible at the mental-model level, which lowers the cost of migrating *to* Corebase (D-001 portability lane, in reverse).
+**Conclusion: D-011 stands — embed PostgREST, one instance per project.** A second-order benefit is deliberate: the API is Supabase-compatible at the mental-model level, which lowers the cost of migrating *to* Steadhold (D-001 portability lane, in reverse).
 
 **Revisit trigger for D-011:** reopen the decision if (a) a P0 security or correctness fix is blocked on upstream for more than two weeks with no carryable patch, or (b) a feature required by the roadmap needs a fork rather than gateway/SQL-level composition. Until then, no wrapper code that reimplements PostgREST behavior "just in case."
 
 ### The developer-facing contract
 
-Everything below is what Corebase publicly commits to for V1. It is PostgREST semantics, restated as *our* contract — if we ever swapped the engine, this section is what must keep working.
+Everything below is what Steadhold publicly commits to for V1. It is PostgREST semantics, restated as *our* contract — if we ever swapped the engine, this section is what must keep working.
 
 **URL shape**
 
 ```text
-https://<ref>.corebase.co/rest/v1/<table-or-view>     — tables and views in the exposed schema
-https://<ref>.corebase.co/rest/v1/rpc/<function>      — database functions
+https://<ref>.steadhold.app/rest/v1/<table-or-view>     — tables and views in the exposed schema
+https://<ref>.steadhold.app/rest/v1/rpc/<function>      — database functions
 ```
 
 `<ref>` is the immutable project slug ([data model](../02-control-plane/01-data-model.md)). Every request carries `apikey: <anon-or-service_role JWT>` and optionally `Authorization: Bearer <user JWT>` — the dual-header pattern specified in [api-keys-and-roles](03-api-keys-and-roles.md). The exposed schema in V1 is `public` (OQ-101 tracks opening this up).
@@ -126,20 +126,20 @@ Named arguments from the JSON body; `IMMUTABLE`/`STABLE` functions are also call
 
 ### Schema-cache reload on DDL
 
-PostgREST caches the catalog (tables, FKs, functions). Stale cache after DDL is the classic embedded-PostgREST failure ("I created the table, the API 404s"). Corebase makes reload automatic and source-agnostic (**D-100**): the base schema applied at provision time (lifecycle step *d* in [system architecture](../01-architecture/01-system-architecture.md)) installs an event trigger:
+PostgREST caches the catalog (tables, FKs, functions). Stale cache after DDL is the classic embedded-PostgREST failure ("I created the table, the API 404s"). Steadhold makes reload automatic and source-agnostic (**D-100**): the base schema applied at provision time (lifecycle step *d* in [system architecture](../01-architecture/01-system-architecture.md)) installs an event trigger:
 
 ```sql
-CREATE OR REPLACE FUNCTION corebase.pgrst_ddl_watch() RETURNS event_trigger AS $$
+CREATE OR REPLACE FUNCTION steadhold.pgrst_ddl_watch() RETURNS event_trigger AS $$
 BEGIN
   NOTIFY pgrst, 'reload schema';
 END; $$ LANGUAGE plpgsql;
 
 CREATE EVENT TRIGGER pgrst_ddl_watch ON ddl_command_end
-  EXECUTE FUNCTION corebase.pgrst_ddl_watch();
+  EXECUTE FUNCTION steadhold.pgrst_ddl_watch();
 -- plus a companion trigger on sql_drop for DROP statements
 ```
 
-PostgREST runs with `db-channel-enabled = true` and `LISTEN`s on the `pgrst` channel — possible only because it connects **directly** to Postgres, not through the transaction pooler (D-101 below; `LISTEN` does not survive transaction pooling, which by itself settles the connection topology). The consequence: the dashboard table editor, `corebase db push`, and a developer in raw `psql` all get cache reloads for free — no code path in Corebase needs to remember to poke PostgREST. `SIGUSR1` to the container remains the reconciler's out-of-band fallback if the trigger is ever dropped, and `NOTIFY pgrst, 'reload config'` / `SIGUSR2` reloads configuration (used by key rotation, [api-keys-and-roles](03-api-keys-and-roles.md)).
+PostgREST runs with `db-channel-enabled = true` and `LISTEN`s on the `pgrst` channel — possible only because it connects **directly** to Postgres, not through the transaction pooler (D-101 below; `LISTEN` does not survive transaction pooling, which by itself settles the connection topology). The consequence: the dashboard table editor, `steadhold db push`, and a developer in raw `psql` all get cache reloads for free — no code path in Steadhold needs to remember to poke PostgREST. `SIGUSR1` to the container remains the reconciler's out-of-band fallback if the trigger is ever dropped, and `NOTIFY pgrst, 'reload config'` / `SIGUSR2` reloads configuration (used by key rotation, [api-keys-and-roles](03-api-keys-and-roles.md)).
 
 ### PostgREST configuration template (rendered per project by the provisioner)
 
@@ -159,7 +159,7 @@ jwt-cache-max-lifetime = 3600
 
 db-channel-enabled = true       # LISTEN pgrst — schema reload (D-100)
 db-channel         = "pgrst"
-db-pre-request     = "corebase.pre_request"        # request-ID → application_name (D-105)
+db-pre-request     = "steadhold.pre_request"        # request-ID → application_name (D-105)
 db-prepared-statements = true   # safe: direct connection, not the txn pooler
 db-max-rows        = 1000
 db-extra-search-path = "public, extensions"

@@ -15,8 +15,8 @@ import { createPgStore, ensureBootstrapOrg } from './modules/control-plane/store
  * CSRF ones, because that rule differs by credential and a route that gets it
  * wrong is exploitable rather than merely broken.
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
 const PASSWORD = 'a-perfectly-fine-password';
 
 let pool: Pool; let up = false; let reason = '';
@@ -36,7 +36,7 @@ beforeAll(async () => {
 afterAll(async () => { await pool?.end(); });
 
 let seq = 0;
-const email = () => `p1c-${Date.now()}-${++seq}@corebase.test`;
+const email = () => `p1c-${Date.now()}-${++seq}@steadhold.test`;
 
 function app() {
   return buildApp({
@@ -68,7 +68,7 @@ async function signup(a = app(), addr = email()) {
     method: 'POST', url: '/v1/auth/signup',
     payload: { email: addr, password: PASSWORD, display_name: 'Test User' },
   });
-  const cookie = /cb_session=([^;]+)/.exec(String(res.headers['set-cookie'] ?? ''))?.[1];
+  const cookie = /sh_session=([^;]+)/.exec(String(res.headers['set-cookie'] ?? ''))?.[1];
   return { res, addr, cookie, csrf: (res.json() as { csrf_token: string }).csrf_token, app: a };
 }
 
@@ -164,7 +164,7 @@ describe('P1c — login', () => {
     // The bootstrap owner is seeded without a hash on purpose.
     const res = await app().inject({
       method: 'POST', url: '/v1/auth/login',
-      payload: { email: 'dev@corebase.local', password: PASSWORD } });
+      payload: { email: 'dev@steadhold.local', password: PASSWORD } });
     expect(res.statusCode).toBe(401);
     expect(res.json().error.message).toBe('Email or password is incorrect.');
   });

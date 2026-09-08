@@ -1,5 +1,5 @@
-import type { Project, ProjectStatus, JobPayload } from '@corebase/types';
-import type { Actor } from '@corebase/audit';
+import type { Project, ProjectStatus, JobPayload } from '@steadhold/types';
+import type { Actor } from '@steadhold/audit';
 
 /**
  * What a ready project exposes to its owner (platform-api contract). Assembled

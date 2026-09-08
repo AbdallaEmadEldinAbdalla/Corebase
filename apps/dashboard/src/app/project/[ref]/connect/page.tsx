@@ -32,7 +32,7 @@ type TabId = (typeof TABS)[number]['id'];
 export default function ConnectPage({ params }: { params: Promise<{ ref: string }> }) {
   const { ref } = use(params);
   return (
-    <Suspense fallback={<div className="wrap"><div className="cb-skeleton" style={{ height: 300 }} /></div>}>
+    <Suspense fallback={<div className="wrap"><div className="sh-skeleton" style={{ height: 300 }} /></div>}>
       <Connect projectRef={ref} />
     </Suspense>
   );
@@ -76,13 +76,13 @@ function Connect({ projectRef }: { projectRef: string }) {
 
       {q.isLoading ? (
         <div className="card"><div className="card__body">
-          <div className="cb-skeleton" style={{ height: 36, width: 280 }} />
-          <div className="cb-skeleton" style={{ height: 120, marginTop: 16 }} />
+          <div className="sh-skeleton" style={{ height: 36, width: 280 }} />
+          <div className="sh-skeleton" style={{ height: 120, marginTop: 16 }} />
         </div></div>
       ) : !db?.connection_strings ? (
-        <div className="emptywrap"><div className="cb-empty">
-          <div className="cb-empty__title">No credentials yet</div>
-          <div className="cb-empty__text">
+        <div className="emptywrap"><div className="sh-empty">
+          <div className="sh-empty__title">No credentials yet</div>
+          <div className="sh-empty__text">
             {p && ['creating', 'provisioning', 'configuring'].includes(p.status)
               ? 'The database is still being set up. This page fills in when it is ready.'
               : 'The API returns connection strings only when it can decrypt the stored credential.'}
@@ -90,19 +90,19 @@ function Connect({ projectRef }: { projectRef: string }) {
         </div></div>
       ) : (
         <>
-          <div className="cb-tabs" role="tablist" aria-label="Connection format">
+          <div className="sh-tabs" role="tablist" aria-label="Connection format">
             {TABS.map((t) => (
-              <button key={t.id} type="button" role="tab" className="cb-tab"
+              <button key={t.id} type="button" role="tab" className="sh-tab"
                 aria-selected={tab === t.id}
                 onClick={() => setTab(t.id)}>{t.label}</button>
             ))}
           </div>
 
-          <div style={{ marginTop: 'var(--cb-space-4)' }}>
+          <div style={{ marginTop: 'var(--sh-space-4)' }}>
             <Snippet tab={tab} db={db} name={p?.name ?? projectRef} />
           </div>
 
-          <section className="section" style={{ marginTop: 'var(--cb-space-8)' }}>
+          <section className="section" style={{ marginTop: 'var(--sh-space-8)' }}>
             <div className="section__head">
               <h2 className="section__title">Which one do I use?</h2>
             </div>
@@ -194,10 +194,10 @@ function Snippet({ tab, db, name }: { tab: TabId; db: DatabaseInfo; name: string
 
   const { lang, text } = body[tab];
   return (
-    <div className="cb-code codeblock">
-      <div className="cb-code__header">
-        <span className="cb-code__lang">{lang}</span>
-        <button type="button" className="cb-code__copy"
+    <div className="sh-code codeblock">
+      <div className="sh-code__header">
+        <span className="sh-code__lang">{lang}</span>
+        <button type="button" className="sh-code__copy"
           onClick={() => { void navigator.clipboard?.writeText(text); }}
           aria-hidden="true" tabIndex={-1} style={{ visibility: 'hidden' }}>copy</button>
         {/* The real control, so the copy goes through the toast layer. */}

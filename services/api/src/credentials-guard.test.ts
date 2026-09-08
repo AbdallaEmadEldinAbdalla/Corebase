@@ -6,12 +6,12 @@ import { buildApp } from './app.ts';
 /**
  * Two guards against classes of bug this codebase has already produced once each.
  *
- * The first is a default credential. `CB_STATIC_TOKEN` used to fall back to the
+ * The first is a default credential. `SH_STATIC_TOKEN` used to fall back to the
  * literal string `dev-token`, so an API deployed with no configuration accepted
  * `Authorization: Bearer dev-token` as the bootstrap *owner* — no expiry, no
  * revocation, full rights. That is the same mistake the project refuses elsewhere
  * on purpose: the bootstrap user has no password (P1a), `trust` auth is banned
- * (D-185), `corebase_app` is created NOLOGIN (D-216). It got in through a `??`.
+ * (D-185), `steadhold_app` is created NOLOGIN (D-216). It got in through a `??`.
  *
  * The second is an unmetered expensive operation. Every scrypt call costs 64 MiB
  * (D-211), and signup is the one unauthenticated endpoint that makes one.
@@ -35,7 +35,7 @@ describe('no default credentials anywhere in the API', () => {
   });
 
   it('no source file gives a credential-shaped variable a fallback value', () => {
-    // The shape of the original bug: `process.env.CB_X ?? '<literal>'` where X is a
+    // The shape of the original bug: `process.env.SH_X ?? '<literal>'` where X is a
     // secret. Catching the shape rather than the one literal is the point — the
     // next one will have a different string.
     const offenders: string[] = [];

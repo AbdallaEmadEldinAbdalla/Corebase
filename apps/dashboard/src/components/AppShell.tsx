@@ -68,13 +68,13 @@ export function AppShell({ children, orgSlug, projectRef, nav }: {
   return (
     <div className={`shell${nav ? '' : ' shell--noNav'}`}>
       <header className="bar">
-        <Link href="/" aria-label="Corebase home"
+        <Link href="/" aria-label="Steadhold home"
               style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none' }}>
           <Logo size={22} />
         </Link>
         <Crumbs {...(orgSlug ? { orgSlug } : {})} {...(projectRef ? { projectRef } : {})} />
         <span className="bar__spacer" />
-        <button type="button" className="cb-btn cb-btn--secondary cb-btn--sm"
+        <button type="button" className="sh-btn sh-btn--secondary sh-btn--sm"
                 onClick={openPalette}
                 aria-label="Open command palette">
           Search <span className="kbd" style={{ marginLeft: 6 }}>{metaLabel}</span>
@@ -126,12 +126,12 @@ function Crumbs({ orgSlug, projectRef }: { orgSlug?: string; projectRef?: string
                         onSelect={() => { rememberOrg(o.slug); router.push(`/org/${o.slug}`); close(); }}>
                 <OrgAvatar name={o.name} size={18} />
                 <span>{o.name}</span>
-                <span style={{ marginLeft: 'auto', font: 'var(--cb-caption)', color: 'var(--cb-text-muted)' }}>
+                <span style={{ marginLeft: 'auto', font: 'var(--sh-caption)', color: 'var(--sh-text-muted)' }}>
                   {o.role}
                 </span>
               </MenuItem>
             ))}
-            <div className="cb-menu__sep" />
+            <div className="sh-menu__sep" />
             <MenuItem onSelect={() => { router.push('/new-org'); close(); }}>
               + New organization
             </MenuItem>
@@ -167,7 +167,7 @@ function Crumbs({ orgSlug, projectRef }: { orgSlug?: string; projectRef?: string
                       <span style={{ marginLeft: 'auto' }}><ProjectStateBadge status={p.status} compact /></span>
                     </MenuItem>
                   ))}
-                  <div className="cb-menu__sep" />
+                  <div className="sh-menu__sep" />
                   <MenuItem onSelect={() => { router.push(`/org/${orgSlug}`); close(); }}>
                     All projects
                   </MenuItem>
@@ -202,16 +202,16 @@ function AccountMenu() {
       {(close) => (
         <>
           {email ? (
-            <div style={{ padding: '8px 12px', font: 'var(--cb-body-s)', color: 'var(--cb-text-secondary)' }}>
+            <div style={{ padding: '8px 12px', font: 'var(--sh-body-s)', color: 'var(--sh-text-secondary)' }}>
               {email}
             </div>
           ) : null}
-          <div className="cb-menu__sep" />
+          <div className="sh-menu__sep" />
           <MenuItem onSelect={() => { close(); window.dispatchEvent(new Event('cb:shortcuts')); }}>
             Keyboard shortcuts <span className="palette__hint">?</span>
           </MenuItem>
           <ThemeItems />
-          <div className="cb-menu__sep" />
+          <div className="sh-menu__sep" />
           <MenuItem tone="danger" onSelect={async () => {
             close();
             const { api, clearCsrfToken } = await import('../lib/api.ts');
@@ -234,7 +234,7 @@ function ThemeItems() {
   const [choice, setChoice] = useState<'light' | 'dark' | 'system'>('system');
   useEffect(() => {
     try {
-      const s = localStorage.getItem('cb-theme');
+      const s = localStorage.getItem('sh-theme');
       setChoice(s === 'dark' || s === 'light' ? s : 'system');
     } catch { /* private mode */ }
   }, []);
@@ -243,8 +243,8 @@ function ThemeItems() {
     setChoice(next);
     const root = document.documentElement;
     try {
-      if (next === 'system') { localStorage.removeItem('cb-theme'); root.removeAttribute('data-theme'); }
-      else { localStorage.setItem('cb-theme', next); root.setAttribute('data-theme', next); }
+      if (next === 'system') { localStorage.removeItem('sh-theme'); root.removeAttribute('data-theme'); }
+      else { localStorage.setItem('sh-theme', next); root.setAttribute('data-theme', next); }
     } catch { /* private mode: still applies for this page */ }
   };
 
@@ -254,7 +254,7 @@ function ThemeItems() {
       {(['light', 'dark', 'system'] as const).map((t) => (
         <MenuItem key={t} active={choice === t} onSelect={() => apply(t)}>
           <span style={{ textTransform: 'capitalize' }}>{t}</span>
-          {choice === t ? <span className="cb-menu__check" aria-hidden="true">✓</span> : null}
+          {choice === t ? <span className="sh-menu__check" aria-hidden="true">✓</span> : null}
         </MenuItem>
       ))}
     </>
@@ -269,7 +269,7 @@ export function NavItem({ href, children, current, icon }: {
   icon?: string;
 }) {
   return (
-    <Link className="cb-nav-item" href={href} {...(current ? { 'aria-current': 'page' as const } : {})}>
+    <Link className="sh-nav-item" href={href} {...(current ? { 'aria-current': 'page' as const } : {})}>
       <SectionIcon name={icon ?? ''} />
       {children}
     </Link>

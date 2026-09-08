@@ -6,8 +6,8 @@ import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { createEnvelope } from '@corebase/crypto';
-import { createSecretStore, SECRET_NAMES } from '@corebase/secrets';
+import { createEnvelope } from '@steadhold/crypto';
+import { createSecretStore, SECRET_NAMES } from '@steadhold/secrets';
 import { createDocker, type Docker } from './docker.ts';
 import { buildSagas } from './jobs/sagas.ts';
 import { registerNode } from './placement.ts';
@@ -28,12 +28,12 @@ import type { SagaStep, SagaContext } from './jobs/runner.ts';
  * when archiving actually breaks, and goes back when it is fixed. A monitored
  * metric that never changes is indistinguishable from a healthy fleet.
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
-const CERT_DIR = process.env.CB_DOCKER_CERT_DIR
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
+const CERT_DIR = process.env.SH_DOCKER_CERT_DIR
   ?? join(process.cwd(), '../../infra/docker/staging/certs');
-const HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
+const HOST = process.env.SH_DOCKER_HOST ?? '127.0.0.1';
+const PORT = Number(process.env.SH_DOCKER_PORT ?? 2376);
 const SECRET = 'test-bootstrap-secret-0123456789';
 const MONITORING = join(process.cwd(), '../../infra/docker/staging/monitoring');
 const run = promisify(execFile);
@@ -54,7 +54,7 @@ let up = false; let reason = '';
 beforeAll(async () => {
   loadBackupEnv();
   pool = new Pool({ connectionString: DB, max: 6, connectionTimeoutMillis: 1500 });
-  kekDir = mkdtempSync(join(tmpdir(), 'cb-kek-p3b-'));
+  kekDir = mkdtempSync(join(tmpdir(), 'sh-kek-p3b-'));
   writeFileSync(join(kekDir, 'kek_2026_09.key'), randomBytes(32));
   try {
     await pool.query('select 1');
@@ -278,7 +278,7 @@ describe('P3b — EXIT CRITERION: break archiving and watch the number move', ()
       const cipherPass = (await secrets.get(p.id, SECRET_NAMES.backupCipherPass))!;
       await writeConf(docker, p.container, renderPgbackrestConf({
         projectId: p.id, plan: 'free', cipherPass,
-        repo: { ...repo, bucket: 'corebase-backups-that-do-not-exist' },
+        repo: { ...repo, bucket: 'steadhold-backups-that-do-not-exist' },
       }));
 
       const c = await adminClient(p.port, p.id);
@@ -367,7 +367,7 @@ describe('P3b — the alert rules themselves', () => {
     // Two places hold these numbers — the scan and the alert file — and they have
     // to agree or the dashboard and the pager tell different stories.
     const rules = readFileSync(join(MONITORING, 'rules.yml'), 'utf8');
-    expect(rules).toContain(`corebase_backup_wal_archive_lag_seconds > ${ARCHIVE_LADDER.warn}`);
-    expect(rules).toContain(`corebase_backup_wal_archive_lag_seconds > ${ARCHIVE_LADDER.critical}`);
+    expect(rules).toContain(`steadhold_backup_wal_archive_lag_seconds > ${ARCHIVE_LADDER.warn}`);
+    expect(rules).toContain(`steadhold_backup_wal_archive_lag_seconds > ${ARCHIVE_LADDER.critical}`);
   });
 });

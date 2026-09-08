@@ -3,7 +3,7 @@ import { Pool } from 'pg';
 import {
   createRedis, createQueue, enqueueProvisioning, enqueueRecovery, recoveryJobId,
   type Redis, type Queue, type ProvisioningJobData,
-} from '@corebase/queue';
+} from '@steadhold/queue';
 import { createJobRepo } from './jobs/repo.ts';
 import { createRunner } from './jobs/runner.ts';
 import { createSweeper } from './sweeper.ts';
@@ -13,8 +13,8 @@ import type { SagaStep, SagaContext } from './jobs/runner.ts';
  * T5b integration: real Postgres + real Redis from the T2 staging stack.
  * Skipped when either is unreachable; the T5b done-signal requires them.
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
-const REDIS = process.env.CB_REDIS_URL ?? 'redis://127.0.0.1:56379';
+const DB = process.env.SH_CONTROL_DATABASE_URL ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
+const REDIS = process.env.SH_REDIS_URL ?? 'redis://127.0.0.1:56379';
 
 let pool: Pool; let redis: Redis; let queue: Queue<ProvisioningJobData>;
 let repo: ReturnType<typeof createJobRepo>; let orgId: string; let up = false;

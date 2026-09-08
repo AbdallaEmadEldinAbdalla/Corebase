@@ -28,15 +28,15 @@ import { Trend, Rate } from 'k6/metrics';
  * the *relative* one, and it lives in gateway-overhead.js.
  */
 
-const BASE = __ENV.CB_LOAD_BASE_URL;
-const HOST = __ENV.CB_LOAD_HOST;
-const ANON = __ENV.CB_LOAD_ANON_KEY;
-const USER = __ENV.CB_LOAD_USER_TOKEN;
-const SERVICE = __ENV.CB_LOAD_SERVICE_KEY;
+const BASE = __ENV.SH_LOAD_BASE_URL;
+const HOST = __ENV.SH_LOAD_HOST;
+const ANON = __ENV.SH_LOAD_ANON_KEY;
+const USER = __ENV.SH_LOAD_USER_TOKEN;
+const SERVICE = __ENV.SH_LOAD_SERVICE_KEY;
 
-const readLatency = new Trend('cb_read_latency', true);
-const writeLatency = new Trend('cb_write_latency', true);
-const rlsCorrect = new Rate('cb_rls_correct');
+const readLatency = new Trend('sh_read_latency', true);
+const writeLatency = new Trend('sh_write_latency', true);
+const rlsCorrect = new Rate('sh_rls_correct');
 
 export const options = {
   // k6's exported summary carries only p(90) and p(95) by default, and the budget
@@ -48,23 +48,23 @@ export const options = {
     // load-testing work and needs a production-shaped node to mean anything.
     smoke: {
       executor: 'constant-vus',
-      vus: Number(__ENV.CB_LOAD_VUS || 10),
-      duration: __ENV.CB_LOAD_DURATION || '30s',
+      vus: Number(__ENV.SH_LOAD_VUS || 10),
+      duration: __ENV.SH_LOAD_DURATION || '30s',
     },
   },
   thresholds: {
     // The doc's origin SLO. Recorded as `abortOnFail: false` so a slow runner
     // reports the number rather than killing the run — the runner script decides
     // what blocks, and it distinguishes "slow machine" from "regression".
-    'cb_read_latency': ['p(50)<20', 'p(99)<100'],
-    'cb_write_latency': ['p(50)<40', 'p(99)<200'],
+    'sh_read_latency': ['p(50)<20', 'p(99)<100'],
+    'sh_write_latency': ['p(50)<40', 'p(99)<200'],
     // Sustained error rate ≈ 0. This one is not hardware-dependent and is
     // therefore enforced everywhere: a 500 under 10 VUs is a bug at any speed.
     'http_req_failed': ['rate<0.01'],
     // Every response must also be *correct*. A gateway that 200s with the wrong
     // rows would sail through a latency test, and the fastest possible
     // implementation of this API is one that returns nothing.
-    'cb_rls_correct': ['rate>0.99'],
+    'sh_rls_correct': ['rate>0.99'],
   },
 };
 
@@ -79,7 +79,7 @@ export default function () {
   // ── the read path: a simple indexed single-table query, which is what the
   // budget's row is measured against ───────────────────────────────────────────
   const read = http.get(
-    `${BASE}/rest/v1/bench?select=id,body&owner=eq.${__ENV.CB_LOAD_OWNER}&limit=20`,
+    `${BASE}/rest/v1/bench?select=id,body&owner=eq.${__ENV.SH_LOAD_OWNER}&limit=20`,
     { headers: headers(USER), tags: { path: 'read' } });
   readLatency.add(read.timings.duration);
 
@@ -93,7 +93,7 @@ export default function () {
   // a write-heavy smoke would measure Postgres's WAL rather than the pipeline ──
   if (__ITER % 10 === 0) {
     const write = http.post(`${BASE}/rest/v1/bench`,
-      JSON.stringify({ owner: __ENV.CB_LOAD_OWNER, body: `k6-${__VU}-${__ITER}` }),
+      JSON.stringify({ owner: __ENV.SH_LOAD_OWNER, body: `k6-${__VU}-${__ITER}` }),
       { headers: headers(USER), tags: { path: 'write' } });
     writeLatency.add(write.timings.duration);
     rlsCorrect.add(check(write, { 'write 2xx': (r) => r.status >= 200 && r.status < 300 }));

@@ -20,8 +20,8 @@
  *               is only safe because every step is check-then-act.
  *
  * Usage (staging up, migrated, image seeded):
- *   pnpm --filter @corebase/worker kill-matrix
- *   CB_KM_ONLY=start_container pnpm --filter @corebase/worker kill-matrix
+ *   pnpm --filter @steadhold/worker kill-matrix
+ *   SH_KM_ONLY=start_container pnpm --filter @steadhold/worker kill-matrix
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { join, resolve } from 'node:path';
@@ -33,48 +33,48 @@ import {
 } from '../bench/staging-env.mts';
 
 const ROOT = resolve(import.meta.dirname, '../../..');
-const PORT = Number(process.env.CB_KM_API_PORT ?? 8097);
+const PORT = Number(process.env.SH_KM_API_PORT ?? 8097);
 const TOKEN = 'km-token-harness-token-long-enough-for-the-boot-check';
-const CONVERGE_BUDGET_MS = Number(process.env.CB_KM_CONVERGE_MS ?? 120_000);
-const CERT_DIR = process.env.CB_DOCKER_CERT_DIR ?? join(ROOT, 'infra/docker/staging/certs');
-const DOCKER_HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
-const DOCKER_PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
+const CONVERGE_BUDGET_MS = Number(process.env.SH_KM_CONVERGE_MS ?? 120_000);
+const CERT_DIR = process.env.SH_DOCKER_CERT_DIR ?? join(ROOT, 'infra/docker/staging/certs');
+const DOCKER_HOST = process.env.SH_DOCKER_HOST ?? '127.0.0.1';
+const DOCKER_PORT = Number(process.env.SH_DOCKER_PORT ?? 2376);
 
 /**
  * The object store. Without these, `configure_backups` refuses to finish
- * (`CB_REQUIRE_BACKUPS`) and every scenario dead-letters at 5/5 attempts having
+ * (`SH_REQUIRE_BACKUPS`) and every scenario dead-letters at 5/5 attempts having
  * completed five steps — which is what this drill has been doing since P3a added
  * that step, reporting it as "DID NOT CONVERGE" with the actual error four lines
  * out of reach.
  */
 const backupEnv = backupStoreEnv(ROOT);
-if (!backupEnv['CB_BACKUP_S3_ENDPOINT']) {
+if (!backupEnv['SH_BACKUP_S3_ENDPOINT']) {
   // Loud and up front. A drill that runs for twenty minutes and then reports
   // eleven mysterious failures is worse than one that refuses to start.
   throw new Error(
     'no object-store settings found at infra/docker/staging/backup-store.env — '
     + 'run ./scripts/staging.sh backup-store. Every scenario provisions a project, '
-    + 'and provisioning requires a backup repo (CB_REQUIRE_BACKUPS).');
+    + 'and provisioning requires a backup repo (SH_REQUIRE_BACKUPS).');
 }
 
 const env = {
   ...process.env,
   ...backupEnv,
-  CB_CONTROL_DATABASE_URL: appDatabaseUrl(ROOT),
-  CB_REDIS_URL: process.env.CB_REDIS_URL ?? 'redis://127.0.0.1:56379',
-  CB_DOCKER_HOST: DOCKER_HOST,
-  CB_DOCKER_PORT: String(DOCKER_PORT),
-  CB_DOCKER_CERT_DIR: CERT_DIR,
-  CB_KEK_DIR: process.env.CB_KEK_DIR ?? join(ROOT, 'infra/docker/staging/kek.d'),
-  CB_BOOTSTRAP_SECRET: process.env.CB_BOOTSTRAP_SECRET ?? 'km-bootstrap-secret-0123456789',
-  CB_PROJECT_DOMAIN: process.env.CB_PROJECT_DOMAIN ?? 'localhost',
-  CB_PG_PORT_MIN: process.env.CB_PG_PORT_MIN ?? '5433',
-  CB_PG_PORT_MAX: process.env.CB_PG_PORT_MAX ?? '5462',
-  CB_NODE_RAM_MB: process.env.CB_NODE_RAM_MB ?? '16384',
-  CB_NODE_HOSTNAME: 'data-1',
-  CB_STATIC_TOKEN: TOKEN,
+  SH_CONTROL_DATABASE_URL: appDatabaseUrl(ROOT),
+  SH_REDIS_URL: process.env.SH_REDIS_URL ?? 'redis://127.0.0.1:56379',
+  SH_DOCKER_HOST: DOCKER_HOST,
+  SH_DOCKER_PORT: String(DOCKER_PORT),
+  SH_DOCKER_CERT_DIR: CERT_DIR,
+  SH_KEK_DIR: process.env.SH_KEK_DIR ?? join(ROOT, 'infra/docker/staging/kek.d'),
+  SH_BOOTSTRAP_SECRET: process.env.SH_BOOTSTRAP_SECRET ?? 'km-bootstrap-secret-0123456789',
+  SH_PROJECT_DOMAIN: process.env.SH_PROJECT_DOMAIN ?? 'localhost',
+  SH_PG_PORT_MIN: process.env.SH_PG_PORT_MIN ?? '5433',
+  SH_PG_PORT_MAX: process.env.SH_PG_PORT_MAX ?? '5462',
+  SH_NODE_RAM_MB: process.env.SH_NODE_RAM_MB ?? '16384',
+  SH_NODE_HOSTNAME: 'data-1',
+  SH_STATIC_TOKEN: TOKEN,
   PORT: String(PORT),
-  CB_METRICS_PORT: process.env.CB_METRICS_PORT ?? '9114',
+  SH_METRICS_PORT: process.env.SH_METRICS_PORT ?? '9114',
 };
 
 const pool = new Pool({ connectionString: ownerDatabaseUrl(), max: 6 });
@@ -198,9 +198,9 @@ async function checkInvariants(ref: string, projectId: string): Promise<Invarian
   const problems: string[] = [];
 
   const containers = (await listContainers())
-    .filter((c) => c.Names.some((n) => n === `/cb-${ref}`)).length;
+    .filter((c) => c.Names.some((n) => n === `/sh-${ref}`)).length;
   const volumes = ((await listVolumes()).Volumes ?? [])
-    .filter((v) => v.Name === `cb-${ref}-pgdata`).length;
+    .filter((v) => v.Name === `sh-${ref}-pgdata`).length;
 
   const { rows } = await pool.query<{
     placements: number; secrets: number; booked: number; status: string;
@@ -220,8 +220,8 @@ async function checkInvariants(ref: string, projectId: string): Promise<Invarian
     [projectId]);
   const r = rows[0]!;
 
-  if (containers !== 1) problems.push(`${containers} containers named cb-${ref} (want 1)`);
-  if (volumes !== 1) problems.push(`${volumes} volumes named cb-${ref}-pgdata (want 1)`);
+  if (containers !== 1) problems.push(`${containers} containers named sh-${ref} (want 1)`);
+  if (volumes !== 1) problems.push(`${volumes} volumes named sh-${ref}-pgdata (want 1)`);
   if (r.placements !== 1) problems.push(`${r.placements} project_databases rows (want 1)`);
   // Duplication, not a total. This checked for exactly 3 — the number a project
   // had at Milestone 0 — and a project now legitimately carries 11: the pooler's
@@ -316,14 +316,14 @@ async function resetWorld(): Promise<void> {
     'truncate provisioning_jobs, project_secrets, project_databases, projects, nodes cascade');
   // Redis too: a leftover delivery for a truncated row would be dropped by the
   // runner ("no row of record"), which is correct but muddies the measurement.
-  const { createRedis, createQueue } = await import('@corebase/queue');
-  const redis = createRedis(env.CB_REDIS_URL!);
+  const { createRedis, createQueue } = await import('@steadhold/queue');
+  const redis = createRedis(env.SH_REDIS_URL!);
   const q = createQueue(redis);
   await q.obliterate({ force: true }).catch(() => {});
   await q.close(); await redis.quit();
 
   for (const c of await listContainers()) {
-    if (!c.Names.some((n) => n.startsWith('/cb-'))) continue;
+    if (!c.Names.some((n) => n.startsWith('/sh-'))) continue;
     const name = c.Names[0]!.slice(1);
     await new Promise<void>((res) => {
       const req = httpsRequest({ host: DOCKER_HOST, port: DOCKER_PORT, method: 'DELETE',
@@ -332,7 +332,7 @@ async function resetWorld(): Promise<void> {
     });
   }
   for (const v of (await listVolumes()).Volumes ?? []) {
-    if (!v.Name.startsWith('cb-')) continue;
+    if (!v.Name.startsWith('sh-')) continue;
     await new Promise<void>((res) => {
       const req = httpsRequest({ host: DOCKER_HOST, port: DOCKER_PORT, method: 'DELETE',
         path: `/volumes/${v.Name}`, ...tls }, (r) => { r.resume(); r.on('end', () => res()); });
@@ -467,7 +467,7 @@ async function runScenario(sc: Scenario, i: number, total: number): Promise<Resu
     console.log(`ok  resumed in ${(convergeMs / 1000).toFixed(1)}s  ` +
       `(re-ran ${resumedSteps.length} step${resumedSteps.length === 1 ? '' : 's'})`);
   }
-  if (process.env.CB_KM_TIMELINE) {
+  if (process.env.SH_KM_TIMELINE) {
     // What the restarted worker did, and when. The gap before the first claim is
     // the recovery latency, and it is the number worth watching.
     for (const t of w2.timeline) {
@@ -481,9 +481,9 @@ async function runScenario(sc: Scenario, i: number, total: number): Promise<Resu
 }
 
 async function main() {
-  const only = process.env.CB_KM_ONLY;
+  const only = process.env.SH_KM_ONLY;
   const scenarios = only ? SCENARIOS.filter((s) => s.name.includes(only)) : SCENARIOS;
-  if (scenarios.length === 0) throw new Error(`CB_KM_ONLY=${only} matched no scenario`);
+  if (scenarios.length === 0) throw new Error(`SH_KM_ONLY=${only} matched no scenario`);
 
   console.log(`▸ T6 — kill matrix: SIGKILL at ${scenarios.length} points in the provisioning saga\n`);
   await startApi();

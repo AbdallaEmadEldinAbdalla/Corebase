@@ -10,7 +10,7 @@
 
 export interface OutgoingMessage {
   from: string;
-  /** A display name, so a recipient sees whose app is talking (`"Acme (via Corebase)"`). */
+  /** A display name, so a recipient sees whose app is talking (`"Acme (via Steadhold)"`). */
   fromName?: string | undefined;
   to: string;
   subject: string;

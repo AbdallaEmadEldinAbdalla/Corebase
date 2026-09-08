@@ -1,6 +1,6 @@
 import type { FastifyRequest } from 'fastify';
-import { ERROR_CODES } from '@corebase/types';
-import type { Actor } from '@corebase/audit';
+import { ERROR_CODES } from '@steadhold/types';
+import type { Actor } from '@steadhold/audit';
 import { ApiError } from './errors.ts';
 import {
   SESSION_COOKIE, CSRF_HEADER, csrfOk, readCookie,

@@ -19,7 +19,7 @@ import type { Client } from 'pg';
  *     hard error, not a silent divergence between environments.
  */
 
-const ADVISORY_LOCK_KEY = 4_919_268_001; // arbitrary, fixed: 'corebase migrate'
+const ADVISORY_LOCK_KEY = 4_919_268_001; // arbitrary, fixed: 'steadhold migrate'
 
 export interface MigrationFile {
   filename: string;

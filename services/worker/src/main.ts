@@ -1,8 +1,8 @@
 import { Pool } from 'pg';
 import {
   createRedis, createQueue, createWorker, createAuthEmailWorker,
-} from '@corebase/queue';
-import { createSmtpProvider } from '@corebase/email';
+} from '@steadhold/queue';
+import { createSmtpProvider } from '@steadhold/email';
 import { createEmailSender } from './email-sender.ts';
 import { dueForRetirement, retire as retireKey } from './key-rotation.ts';
 import { emailSendsTotal, emailFailuresTotal } from './metrics.ts';
@@ -11,8 +11,8 @@ import { createRunner } from './jobs/runner.ts';
 import { buildSagas, superuserCandidates } from './jobs/sagas.ts';
 import { registerNode } from './placement.ts';
 import { createDocker } from './docker.ts';
-import { createEnvelope } from '@corebase/crypto';
-import { createSecretStore, SECRET_NAMES } from '@corebase/secrets';
+import { createEnvelope } from '@steadhold/crypto';
+import { createSecretStore, SECRET_NAMES } from '@steadhold/secrets';
 import { createSweeper } from './sweeper.ts';
 import { createPurgeScan } from './purge-scan.ts';
 import { createIdleScan } from './idle-scan.ts';
@@ -22,7 +22,7 @@ import { createBackupScan } from './backup-scan.ts';
 import { createRestoreExpiry, restoreTtlHours } from './restore-expiry.ts';
 import { createRepoDestroy, REPO_RETENTION_DAYS } from './repo-destroy.ts';
 import { createStorageSweep } from './storage-sweep.ts';
-import { createS3, s3FromEnv } from '@corebase/s3';
+import { createS3, s3FromEnv } from '@steadhold/s3';
 import { createVerifyScan } from './verify-scan.ts';
 import { createReconciler } from './reconcile.ts';
 import {
@@ -32,10 +32,10 @@ import {
   backupWalLastArchivedTs,
 } from './metrics.ts';
 
-const dbUrl = process.env.CB_CONTROL_DATABASE_URL;
-const redisUrl = process.env.CB_REDIS_URL;
+const dbUrl = process.env.SH_CONTROL_DATABASE_URL;
+const redisUrl = process.env.SH_REDIS_URL;
 if (!dbUrl || !redisUrl) {
-  console.error('CB_CONTROL_DATABASE_URL and CB_REDIS_URL are both required.');
+  console.error('SH_CONTROL_DATABASE_URL and SH_REDIS_URL are both required.');
   process.exit(2);
 }
 
@@ -54,24 +54,24 @@ const repo = createJobRepo(pool);
  * startup. P2 moves registration to the node's own bootstrap.
  */
 const nodeRegistration = {
-  hostname: process.env.CB_NODE_HOSTNAME ?? 'data-node-local',
-  ramTotalMb: Number(process.env.CB_NODE_RAM_MB ?? 4096),
-  diskTotalGb: Number(process.env.CB_NODE_DISK_GB ?? 100),
+  hostname: process.env.SH_NODE_HOSTNAME ?? 'data-node-local',
+  ramTotalMb: Number(process.env.SH_NODE_RAM_MB ?? 4096),
+  diskTotalGb: Number(process.env.SH_NODE_DISK_GB ?? 100),
   // How the control plane reaches this node's project ports. Defaults to the
   // Docker host because in every current topology the Engine API and the project
   // ports live on the same address.
-  address: process.env.CB_NODE_ADDRESS ?? process.env.CB_DOCKER_HOST ?? '127.0.0.1',
-  labels: { managed_by: 'worker', environment: process.env.CB_ENV ?? 'staging' },
+  address: process.env.SH_NODE_ADDRESS ?? process.env.SH_DOCKER_HOST ?? '127.0.0.1',
+  labels: { managed_by: 'worker', environment: process.env.SH_ENV ?? 'staging' },
 };
 const nodeId = await registerNode(pool, nodeRegistration);
-log('info', 'node registered', { nodeId, hostname: process.env.CB_NODE_HOSTNAME ?? 'data-node-local' });
+log('info', 'node registered', { nodeId, hostname: process.env.SH_NODE_HOSTNAME ?? 'data-node-local' });
 
-const dockerHost = process.env.CB_DOCKER_HOST;
-const dockerCertDir = process.env.CB_DOCKER_CERT_DIR;
+const dockerHost = process.env.SH_DOCKER_HOST;
+const dockerCertDir = process.env.SH_DOCKER_CERT_DIR;
 const docker = dockerHost && dockerCertDir
   ? createDocker({
       host: dockerHost,
-      port: Number(process.env.CB_DOCKER_PORT ?? 2376),
+      port: Number(process.env.SH_DOCKER_PORT ?? 2376),
       certDir: dockerCertDir,
     })
   : undefined;
@@ -84,15 +84,15 @@ if (docker) {
 
 // The KEK is not optional: without it, credentials cannot be stored, and a
 // project provisioned without credentials is a project nobody can connect to.
-const kekDir = process.env.CB_KEK_DIR;
+const kekDir = process.env.SH_KEK_DIR;
 if (!kekDir) {
   throw new Error(
-    'CB_KEK_DIR is required — the control plane cannot store project credentials ' +
+    'SH_KEK_DIR is required — the control plane cannot store project credentials ' +
     'without its master key (D-035/D-075)');
 }
 const envelope = createEnvelope({
   kekDir,
-  ...(process.env.CB_KEK_ID ? { kekId: process.env.CB_KEK_ID } : {}),
+  ...(process.env.SH_KEK_ID ? { kekId: process.env.SH_KEK_ID } : {}),
 });
 log('info', 'master key loaded', { kek_id: envelope.kekId });
 const secrets = createSecretStore(pool, envelope);
@@ -100,14 +100,14 @@ const secrets = createSecretStore(pool, envelope);
 const sagas = buildSagas({
   pool,
   secrets,
-  ...(process.env.CB_PROJECT_DOMAIN ? { projectDomain: process.env.CB_PROJECT_DOMAIN } : {}),
-  ...(process.env.CB_JWT_ISSUER ? { jwtIssuer: process.env.CB_JWT_ISSUER } : {}),
+  ...(process.env.SH_PROJECT_DOMAIN ? { projectDomain: process.env.SH_PROJECT_DOMAIN } : {}),
+  ...(process.env.SH_JWT_ISSUER ? { jwtIssuer: process.env.SH_JWT_ISSUER } : {}),
   ...(docker ? { docker } : {}),
-  bootstrapSecret: process.env.CB_BOOTSTRAP_SECRET ?? '',
-  healthTimeoutMs: Number(process.env.CB_HEALTH_TIMEOUT_MS ?? 60_000),
+  bootstrapSecret: process.env.SH_BOOTSTRAP_SECRET ?? '',
+  healthTimeoutMs: Number(process.env.SH_HEALTH_TIMEOUT_MS ?? 60_000),
   // D-038's recovery window. Shortened only in tests; a production value that
   // drifts short quietly removes the customer's ability to undo a deletion.
-  softDeleteWindow: process.env.CB_SOFT_DELETE_WINDOW ?? '7 days',
+  softDeleteWindow: process.env.SH_SOFT_DELETE_WINDOW ?? '7 days',
   /**
    * On by default now that a final backup is real (P3f).
    *
@@ -116,24 +116,24 @@ const sagas = buildSagas({
    * make deletion *fail* because there was no backup system to succeed with. It
    * defaults on because the failure it prevents is invisible: a recovery window
    * with nothing behind it looks exactly like a recovery window, right up to the
-   * moment someone needs it. `CB_REQUIRE_FINAL_BACKUP=false` is the deliberate
+   * moment someone needs it. `SH_REQUIRE_FINAL_BACKUP=false` is the deliberate
    * opt-out for a fleet with no object storage.
    */
-  requireFinalBackup: process.env.CB_REQUIRE_FINAL_BACKUP !== 'false',
+  requireFinalBackup: process.env.SH_REQUIRE_FINAL_BACKUP !== 'false',
   /**
    * On by default now that Phase 3 is complete (P3h).
    *
    * A project provisioned without a repo has no PITR, no final backup at delete,
    * and nothing behind its recovery window — and none of that is visible from the
    * outside, which is the whole reason the gate exists rather than a log line.
-   * `CB_REQUIRE_BACKUPS=false` is the deliberate opt-out for a fleet with no
-   * object storage; it is the same shape as CB_REQUIRE_FINAL_BACKUP's (D-299).
+   * `SH_REQUIRE_BACKUPS=false` is the deliberate opt-out for a fleet with no
+   * object storage; it is the same shape as SH_REQUIRE_FINAL_BACKUP's (D-299).
    */
-  requireBackups: process.env.CB_REQUIRE_BACKUPS !== 'false',
+  requireBackups: process.env.SH_REQUIRE_BACKUPS !== 'false',
 });
 const runner = createRunner({
   repo, sagas,
-  staleAfterMs: Number(process.env.CB_STALE_AFTER_MS ?? 30_000),
+  staleAfterMs: Number(process.env.SH_STALE_AFTER_MS ?? 30_000),
   log: (l, m, e) => log(l, m, e),
   onStep: (jobType, step, seconds) => stepSeconds.observe({ job_type: jobType, step }, seconds),
   onJob: (jobType, outcome, seconds) => {
@@ -146,7 +146,7 @@ const runner = createRunner({
 // the runner will refuse to claim.
 const sweeper = createSweeper({
   repo, queue,
-  staleAfterMs: Number(process.env.CB_STALE_AFTER_MS ?? 30_000),
+  staleAfterMs: Number(process.env.SH_STALE_AFTER_MS ?? 30_000),
   log: (m, e) => log('info', m, e),
 });
 
@@ -163,33 +163,33 @@ worker.on('completed', (job) => log('info', 'delivery completed', { id: job.id }
  * provider. Sharing a queue puts one provider outage's worth of retrying email in
  * front of every project waiting to be created.
  *
- * Without `CB_SMTP_HOST` it does not run at all rather than running and failing
+ * Without `SH_SMTP_HOST` it does not run at all rather than running and failing
  * every job: a queue draining into three failed attempts each is worse than a
  * queue nobody is draining, because it burns the retry budget of mail that would
  * have been sent once the sender was configured.
  */
-const smtpHost = process.env.CB_SMTP_HOST;
+const smtpHost = process.env.SH_SMTP_HOST;
 let emailWorker: ReturnType<typeof createAuthEmailWorker> | undefined;
 if (smtpHost) {
-  const tlsMode = (process.env.CB_SMTP_TLS ?? 'starttls') as 'require' | 'starttls' | 'off';
+  const tlsMode = (process.env.SH_SMTP_TLS ?? 'starttls') as 'require' | 'starttls' | 'off';
   if (tlsMode === 'off' && process.env.NODE_ENV === 'production') {
     // A local sink is the only legitimate reason to send mail in clear, and a
     // production deployment that has it set is one where every verification link
     // on the platform is readable on the wire.
     throw new Error(
-      'CB_SMTP_TLS=off in production would send every auth email, and every '
+      'SH_SMTP_TLS=off in production would send every auth email, and every '
       + 'verification link in one, over an unencrypted connection.');
   }
   const sender = createEmailSender({
     pool,
     provider: createSmtpProvider({
       host: smtpHost,
-      port: Number(process.env.CB_SMTP_PORT ?? 587),
+      port: Number(process.env.SH_SMTP_PORT ?? 587),
       tls: tlsMode,
-      ...(process.env.CB_SMTP_USER ? { user: process.env.CB_SMTP_USER } : {}),
-      ...(process.env.CB_SMTP_PASSWORD ? { password: process.env.CB_SMTP_PASSWORD } : {}),
+      ...(process.env.SH_SMTP_USER ? { user: process.env.SH_SMTP_USER } : {}),
+      ...(process.env.SH_SMTP_PASSWORD ? { password: process.env.SH_SMTP_PASSWORD } : {}),
     }),
-    from: process.env.CB_MAIL_FROM ?? 'auth@mail.corebase.co',
+    from: process.env.SH_MAIL_FROM ?? 'auth@mail.steadhold.app',
     onDeadLetter: (data, error) => log('error', 'auth email dead-lettered', {
       // The person affected is a user who never got their verification mail and
       // has no way to tell anyone, so this is the loudest line available.
@@ -212,7 +212,7 @@ if (smtpHost) {
     id: job?.id, attempts: job?.attemptsMade, error: err.message }));
   log('info', 'auth email sender started', { host: smtpHost, tls: tlsMode });
 } else {
-  log('warn', 'no CB_SMTP_HOST — auth emails will queue and nothing will send them');
+  log('warn', 'no SH_SMTP_HOST — auth emails will queue and nothing will send them');
 }
 
 /**
@@ -233,7 +233,7 @@ let keyRetireTimer: NodeJS.Timeout | undefined;
 if (secrets) {
   const store = secrets;
   const rotationDeps = { pool, secrets: store, log: (m: string, e?: Record<string, unknown>) => log('info', m, e) };
-  const retireMs = Number(process.env.CB_KEY_RETIRE_SCAN_MS ?? 86_400_000);
+  const retireMs = Number(process.env.SH_KEY_RETIRE_SCAN_MS ?? 86_400_000);
   keyRetireTimer = setInterval(() => {
     void (async () => {
       for (const due of await dueForRetirement(rotationDeps)) {
@@ -248,7 +248,7 @@ if (secrets) {
 }
 
 // 10s locally; production runs the 5-minute reconciliation cadence of D-173
-const sweepMs = Number(process.env.CB_SWEEP_INTERVAL_MS ?? 10_000);
+const sweepMs = Number(process.env.SH_SWEEP_INTERVAL_MS ?? 10_000);
 const sweepTimer = setInterval(() => { void sweeper.sweepOnce().catch((e) =>
   log('error', 'sweep failed', { error: (e as Error).message })); }, sweepMs);
 
@@ -275,7 +275,7 @@ if (storeForSweep && secrets) {
     pool, secrets, s3: storeForSweep,
     log: (m, f) => log('info', m, f),
   });
-  const storageSweepMs = Number(process.env.CB_STORAGE_SWEEP_MS ?? 86_400_000);
+  const storageSweepMs = Number(process.env.SH_STORAGE_SWEEP_MS ?? 86_400_000);
   storageSweepTimer = setInterval(() => {
     void storageSweep.sweepOnce().then((r) => {
       // Logged every run, not only when it finds something: "the sweep ran and
@@ -304,7 +304,7 @@ if (storeForSweep && secrets) {
 // the window is measured in days, so scanning faster buys nothing and a slow
 // scan only delays reclaiming disk.
 const purgeScan = createPurgeScan({ pool, queue, log: (m, e) => log('info', m, e) });
-const purgeMs = Number(process.env.CB_PURGE_SCAN_MS ?? 3_600_000);
+const purgeMs = Number(process.env.SH_PURGE_SCAN_MS ?? 3_600_000);
 const purgeTimer = setInterval(() => { void purgeScan.scanOnce().catch((e) =>
   log('error', 'purge scan failed', { error: (e as Error).message })); }, purgeMs);
 
@@ -316,8 +316,8 @@ const purgeTimer = setInterval(() => { void purgeScan.scanOnce().catch((e) =>
 // asks the project's own database who is connected. Without a store it does not
 // run at all rather than running blind: a scan that cannot tell active from idle
 // would pause projects that are in use.
-const idleDays = Number(process.env.CB_IDLE_PAUSE_DAYS ?? 7);
-const idleMs = Number(process.env.CB_IDLE_SCAN_MS ?? 3_600_000);
+const idleDays = Number(process.env.SH_IDLE_PAUSE_DAYS ?? 7);
+const idleMs = Number(process.env.SH_IDLE_SCAN_MS ?? 3_600_000);
 let idleTimer: NodeJS.Timeout | undefined;
 if (secrets) {
   const idleScan = createIdleScan({
@@ -336,7 +336,7 @@ if (secrets) {
 // The disk ladder (P2e, D-073). Every 10 minutes by default: the billing sample is
 // six-hourly, but the ladder is a safety mechanism and a project can fill 500 MB in
 // far less than six hours. Cheap — one query per project.
-const diskMs = Number(process.env.CB_DISK_SCAN_MS ?? 600_000);
+const diskMs = Number(process.env.SH_DISK_SCAN_MS ?? 600_000);
 let diskTimer: NodeJS.Timeout | undefined;
 if (secrets) {
   const store = secrets;
@@ -345,7 +345,7 @@ if (secrets) {
     void diskScan.scanOnce({
       developerSecretFor: (projectId) => store.get(projectId, SECRET_NAMES.developer),
       superuserPasswordsFor: (projectId) => superuserCandidates(
-        { pool, secrets: store, bootstrapSecret: process.env.CB_BOOTSTRAP_SECRET } as never,
+        { pool, secrets: store, bootstrapSecret: process.env.SH_BOOTSTRAP_SECRET } as never,
         projectId),
     }).catch((e) => log('error', 'disk scan failed', { error: (e as Error).message }));
   }, diskMs);
@@ -364,13 +364,13 @@ if (secrets) {
  * that every two minutes for every project would be the monitoring generating most
  * of the WAL it monitors.
  */
-const walMs = Number(process.env.CB_WAL_SCAN_MS ?? 120_000);
+const walMs = Number(process.env.SH_WAL_SCAN_MS ?? 120_000);
 let walTimer: NodeJS.Timeout | undefined;
 if (secrets) {
   const store = secrets;
   const walScan = createWalScan({
     pool, docker,
-    checkIntervalMs: Number(process.env.CB_BACKUP_CHECK_MS ?? 900_000),
+    checkIntervalMs: Number(process.env.SH_BACKUP_CHECK_MS ?? 900_000),
     log: (l, m, e) => log(l, m, e),
     onSample: ({ ref, node, sample, state }) => {
       backupWalArchiveLagSeconds.set({ node, project_ref: ref }, sample.lagSeconds);
@@ -385,7 +385,7 @@ if (secrets) {
   walTimer = setInterval(() => {
     void walScan.scanOnce({
       superuserPasswordsFor: (projectId) => superuserCandidates(
-        { pool, secrets: store, bootstrapSecret: process.env.CB_BOOTSTRAP_SECRET } as never,
+        { pool, secrets: store, bootstrapSecret: process.env.SH_BOOTSTRAP_SECRET } as never,
         projectId),
     }).then((r) => {
       // The gauge is set from the row rather than the check's return value so it
@@ -414,12 +414,12 @@ if (secrets) {
  * schedule itself is the day-keyed idempotency key, not this interval: looking
  * twelve times an hour and enqueueing once a day is the point.
  */
-const backupScanMs = Number(process.env.CB_BACKUP_SCAN_MS ?? 300_000);
+const backupScanMs = Number(process.env.SH_BACKUP_SCAN_MS ?? 300_000);
 let backupTimer: NodeJS.Timeout | undefined;
 {
   const backupScan = createBackupScan({
     pool, queue,
-    ...(process.env.CB_BACKUP_WINDOW_ALWAYS === 'true'
+    ...(process.env.SH_BACKUP_WINDOW_ALWAYS === 'true'
       ? { window: { startHour: 0, endHour: 24 } } : {}),
     log: (m, e) => log('info', m, e),
   });
@@ -466,7 +466,7 @@ const backupGaugeTimer = setInterval(() => {
  * less often either — a copy that outlives its deadline by hours is capacity spent
  * on a database nobody queries, which is the thing the deadline exists to stop.
  */
-const restoreExpiryMs = Number(process.env.CB_RESTORE_EXPIRY_SCAN_MS ?? 600_000);
+const restoreExpiryMs = Number(process.env.SH_RESTORE_EXPIRY_SCAN_MS ?? 600_000);
 const restoreExpiry = createRestoreExpiry({
   pool, queue, log: (m, e) => log('info', m, e) });
 const restoreExpiryTimer = setInterval(() => {
@@ -481,7 +481,7 @@ const restoreExpiryTimer = setInterval(() => {
  * hourly sweep means a repo that *cannot* be destroyed is retried often enough for
  * its stored error to be current when someone looks.
  */
-const repoDestroyMs = Number(process.env.CB_REPO_DESTROY_SCAN_MS ?? 3_600_000);
+const repoDestroyMs = Number(process.env.SH_REPO_DESTROY_SCAN_MS ?? 3_600_000);
 const repoDestroy = createRepoDestroy({ pool, log: (l, m, e) => log(l, m, e) });
 const repoDestroyTimer = setInterval(() => {
   void repoDestroy.scanOnce()
@@ -501,12 +501,12 @@ const repoDestroyTimer = setInterval(() => {
  * customer capacity (backups §7). Locally there is one node, which is recorded as
  * a substitute limitation rather than pretended away.
  */
-const verifyMs = Number(process.env.CB_VERIFY_SCAN_MS ?? 3_600_000);
+const verifyMs = Number(process.env.SH_VERIFY_SCAN_MS ?? 3_600_000);
 let verifyTimer: NodeJS.Timeout | undefined;
 if (docker) {
   const verifyScan = createVerifyScan({
     pool, docker, secrets,
-    batchSize: Number(process.env.CB_VERIFY_BATCH ?? 1),
+    batchSize: Number(process.env.SH_VERIFY_BATCH ?? 1),
     log: (l, m, e) => log(l, m, e),
   });
   verifyTimer = setInterval(() => {
@@ -519,12 +519,12 @@ if (docker) {
 // does not hit every node's Engine API at the same second. Container crashes are
 // Docker's restart policy to handle; this is the backstop that catches what the
 // policy did not, plus everything the control plane and the node disagree about.
-const reconcileMs = Number(process.env.CB_RECONCILE_INTERVAL_MS ?? 300_000);
+const reconcileMs = Number(process.env.SH_RECONCILE_INTERVAL_MS ?? 300_000);
 let reconcileTimer: NodeJS.Timeout | undefined;
 if (docker) {
   const reconciler = createReconciler({
     pool, docker, queue,
-    hostname: process.env.CB_NODE_HOSTNAME ?? 'data-node-local',
+    hostname: process.env.SH_NODE_HOSTNAME ?? 'data-node-local',
     log: (l, m, e) => log(l, m, e),
   });
   const jitter = () => reconcileMs * (0.85 + Math.random() * 0.3);
@@ -555,7 +555,7 @@ if (docker) {
 }
 
 registerControlPlaneCollectors(pool);
-const metricsPort = Number(process.env.CB_METRICS_PORT ?? 9101);
+const metricsPort = Number(process.env.SH_METRICS_PORT ?? 9101);
 const metricsServer = startMetricsServer(metricsPort);
 
 log('info', 'worker started', {

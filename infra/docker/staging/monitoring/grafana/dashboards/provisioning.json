@@ -1,8 +1,8 @@
 {
-  "uid": "corebase-provisioning",
-  "title": "Corebase \u00b7 Provisioning",
+  "uid": "steadhold-provisioning",
+  "title": "Steadhold \u00b7 Provisioning",
   "tags": [
-    "corebase",
+    "steadhold",
     "milestone-0"
   ],
   "timezone": "utc",
@@ -36,18 +36,18 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "corebase-prom"
+            "uid": "steadhold-prom"
           },
-          "expr": "histogram_quantile(0.5, sum by (le, job_type) (rate(corebase_provisioning_job_seconds_bucket{outcome=\"succeeded\"}[5m])))",
+          "expr": "histogram_quantile(0.5, sum by (le, job_type) (rate(steadhold_provisioning_job_seconds_bucket{outcome=\"succeeded\"}[5m])))",
           "legendFormat": "p50 {{job_type}}",
           "refId": "A"
         },
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "corebase-prom"
+            "uid": "steadhold-prom"
           },
-          "expr": "histogram_quantile(0.95, sum by (le, job_type) (rate(corebase_provisioning_job_seconds_bucket{outcome=\"succeeded\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, job_type) (rate(steadhold_provisioning_job_seconds_bucket{outcome=\"succeeded\"}[5m])))",
           "legendFormat": "p95 {{job_type}}",
           "refId": "B"
         }
@@ -68,9 +68,9 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "corebase-prom"
+            "uid": "steadhold-prom"
           },
-          "expr": "sum by (outcome) (corebase_provisioning_jobs_total)",
+          "expr": "sum by (outcome) (steadhold_provisioning_jobs_total)",
           "legendFormat": "{{outcome}}",
           "refId": "A"
         }
@@ -96,9 +96,9 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "corebase-prom"
+            "uid": "steadhold-prom"
           },
-          "expr": "histogram_quantile(0.95, sum by (le, step) (rate(corebase_provisioning_step_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, step) (rate(steadhold_provisioning_step_seconds_bucket[5m])))",
           "legendFormat": "{{step}}",
           "format": "table",
           "instant": true,
@@ -161,9 +161,9 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "corebase-prom"
+            "uid": "steadhold-prom"
           },
-          "expr": "corebase_node_ram_reserved_ratio",
+          "expr": "steadhold_node_ram_reserved_ratio",
           "legendFormat": "{{node}}",
           "refId": "A"
         }
@@ -201,9 +201,9 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "corebase-prom"
+            "uid": "steadhold-prom"
           },
-          "expr": "corebase_provisioning_oldest_nonterminal_job_seconds",
+          "expr": "steadhold_provisioning_oldest_nonterminal_job_seconds",
           "legendFormat": "oldest job",
           "refId": "A"
         }
@@ -229,7 +229,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "corebase-loki"
+            "uid": "steadhold-loki"
           },
           "expr": "{service=~\"api|worker\"}",
           "refId": "A"

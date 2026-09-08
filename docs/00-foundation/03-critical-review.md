@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The v0.1 architecture proposal (§1–124) is the founding document of Corebase. It is directionally strong and unusually disciplined about scope — and, like every founding document, naive in specific, dangerous places. This review grades it section-by-section: what is sound (build on it), what is naive (the corpus corrects it), what is missing (the corpus adds it), and where it contradicts itself (the decision log resolves it).
+The v0.1 architecture proposal (§1–124) is the founding document of Steadhold. It is directionally strong and unusually disciplined about scope — and, like every founding document, naive in specific, dangerous places. This review grades it section-by-section: what is sound (build on it), what is naive (the corpus corrects it), what is missing (the corpus adds it), and where it contradicts itself (the decision log resolves it).
 
 **Verdict up front:** the proposal's instincts about *process* (control/data plane split, idempotent provisioning, modular monolith, "make one flow reliable before adding the next") are excellent. Its blind spots are *economic* (the cost of DB-per-project free tiers), *underestimation of subsystem depth* (the data API and auth are each entire products), and *operational hazards it lists as checkboxes* (WAL replication, backups, upgrades).
 
@@ -37,7 +37,7 @@ This is precisely why Supabase pauses inactive free projects, why Neon built sto
 
 Four HTTP verbs are listed as if the API layer were a phase-3 sprint. The real surface: a filtering grammar (`?id=eq.<id>` implies operators — eq, neq, gt, in, like, is, fts...), ordering, pagination with counts, resource embedding across foreign keys, upserts, bulk operations, RPC to database functions, schema reloading on DDL, prepared-statement handling through a pooler, and a security model where the API must impersonate database roles safely. PostgREST has spent ~10 years on these edge cases.
 
-**Correction:** **embed PostgREST per project rather than building the query layer** (D-011, analysis in [rest-api-design](../04-data-api/01-rest-api-design.md)). Corebase's engineering goes into the *gateway* around it (project resolution, key validation, rate limits) — the part that is genuinely Corebase-specific.
+**Correction:** **embed PostgREST per project rather than building the query layer** (D-011, analysis in [rest-api-design](../04-data-api/01-rest-api-design.md)). Steadhold's engineering goes into the *gateway* around it (project resolution, key validation, rate limits) — the part that is genuinely Steadhold-specific.
 
 ### 2.3 Auth is also an entire product (§16–18, §87)
 
@@ -61,7 +61,7 @@ Transaction-mode pooling (required for real multiplexing) breaks session state: 
 
 The proposal ships the Database API in Phase 3, Auth in Phase 4, and **RLS in Phase 6**. An auto-generated API without RLS is either (a) wide open, or (b) gated by an interim authorization layer that gets thrown away two phases later. Both are wrong: the API's security model *is* JWT→role→RLS; they are one system and must ship together.
 
-**Correction:** the [phase plan](../14-roadmap/01-phase-plan.md) reorders: Auth core (tokens) → Data API **with RLS from the first request**. There is never a moment where a Corebase API serves table data without policies.
+**Correction:** the [phase plan](../14-roadmap/01-phase-plan.md) reorders: Auth core (tokens) → Data API **with RLS from the first request**. There is never a moment where a Steadhold API serves table data without policies.
 
 ### 2.7 The multi-tenancy section contradicts itself mildly (§10)
 
@@ -76,7 +76,7 @@ The proposal ships the Database API in Phase 3, Auth in Phase 4, and **RLS in Ph
 | Missing topic | Why it matters | Where the corpus adds it |
 |---|---|---|
 | **Email infrastructure** | Auth cannot ship without deliverable email; abuse (spam via reset emails) is immediate | [05-auth/04](../05-auth/04-email-infrastructure.md) |
-| **TLS for per-project subdomains** | `<project>.corebase.co` needs wildcard certs + SNI routing; never mentioned | [01-architecture/04](../01-architecture/04-domain-and-region-model.md) |
+| **TLS for per-project subdomains** | `<project>.steadhold.app` needs wildcard certs + SNI routing; never mentioned | [01-architecture/04](../01-architecture/04-domain-and-region-model.md) |
 | **Postgres major-version upgrades** | Fleet-wide upgrades across thousands of DBs is a hard, recurring operation | [03-database-platform/06](../03-database-platform/06-extensions-and-upgrades.md) |
 | **Disk-full / resource-exhaustion handling** | A customer DB filling its disk is a *when*, not an *if*; also the realtime WAL hazard | [03-database-platform/01](../03-database-platform/01-postgres-provisioning.md), [15-risks/01](../15-risks/01-risk-register.md) |
 | **SQL-level isolation escapes** | RLS tests check the API path; `COPY TO PROGRAM`, untrusted extensions, `dblink`, file FDWs are DB-level escapes on shared nodes | [06-security/01](../06-security/01-threat-model.md) |
@@ -91,7 +91,7 @@ The proposal ships the Database API in Phase 3, Auth in Phase 4, and **RLS in Ph
 
 | # | Contradiction | Resolution |
 |---|---|---|
-| C-1 | "Portability first" (§3.4) vs a proprietary auth/user schema and platform-specific RLS helpers (`auth.uid()`) | Portability = *exportability with documented mappings*, not schema-neutrality. `corebase export` ships in V1 (D-004); helper functions documented as plain SQL any Postgres can run. |
+| C-1 | "Portability first" (§3.4) vs a proprietary auth/user schema and platform-specific RLS helpers (`auth.uid()`) | Portability = *exportability with documented mappings*, not schema-neutrality. `steadhold export` ships in V1 (D-004); helper functions documented as plain SQL any Postgres can run. |
 | C-2 | "Open source core" as a principle (§3.3) vs total absence from V1 scope (§81) and no license position (§113) | OSS is a *strategy with a trigger condition*, not a V1 deliverable: code structured for later opening; license analysis done now (D-034); public release deferred until the platform stabilizes. |
 | C-3 | "Avoid building a massive gateway" (§25) vs the gateway's own requirement list (routing, TLS, rate limiting, auth, project resolution, versioning, request IDs, logging) | The *edge* concerns (TLS, DDoS, some routing) go to Cloudflare + Caddy; only project resolution/key validation/rate limiting is custom code (D-016). "Don't build a gateway" really means "don't build Envoy." |
 | C-4 | "Database per project" (§10) vs "instances on a shared node" (same section) | Container-per-project on shared nodes (D-009) — dedicated *instance*, shared *hardware*, cgroup-enforced boundaries. |

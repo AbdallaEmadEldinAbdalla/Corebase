@@ -1,6 +1,6 @@
 import type { Pool } from 'pg';
-import type { Queue, ProvisioningJobData } from '@corebase/queue';
-import { enqueueProvisioning } from '@corebase/queue';
+import type { Queue, ProvisioningJobData } from '@steadhold/queue';
+import { enqueueProvisioning } from '@steadhold/queue';
 
 /**
  * A restored copy has a deadline (P3e, backups §4 step 7).
@@ -53,7 +53,7 @@ export const RESTORE_TTL_HOURS_MAX = 168;
  * the customer could look at it, which is indistinguishable from the feature being
  * broken.
  */
-export function restoreTtlHours(raw: string | undefined = process.env['CB_RESTORE_TTL_HOURS']): number {
+export function restoreTtlHours(raw: string | undefined = process.env['SH_RESTORE_TTL_HOURS']): number {
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed <= 0) return RESTORE_TTL_HOURS_DEFAULT;
   return Math.min(RESTORE_TTL_HOURS_MAX, Math.max(1, Math.floor(parsed)));

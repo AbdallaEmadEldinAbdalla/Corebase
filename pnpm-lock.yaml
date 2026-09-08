@@ -20,7 +20,7 @@ importers:
 
   apps/dashboard:
     dependencies:
-      '@corebase/types':
+      '@steadhold/types':
         specifier: workspace:*
         version: link:../../packages/types
       '@tanstack/react-query':
@@ -58,7 +58,7 @@ importers:
         specifier: ^8.13.1
         version: 8.23.0
     devDependencies:
-      '@corebase/config':
+      '@steadhold/config':
         specifier: workspace:*
         version: link:../config
       '@types/node':
@@ -78,7 +78,7 @@ importers:
 
   packages/crypto:
     devDependencies:
-      '@corebase/config':
+      '@steadhold/config':
         specifier: workspace:*
         version: link:../config
       '@types/node':
@@ -93,7 +93,7 @@ importers:
 
   packages/email:
     devDependencies:
-      '@corebase/config':
+      '@steadhold/config':
         specifier: workspace:*
         version: link:../config
       '@types/node':
@@ -108,7 +108,7 @@ importers:
 
   packages/jwt:
     devDependencies:
-      '@corebase/config':
+      '@steadhold/config':
         specifier: workspace:*
         version: link:../config
       '@types/node':
@@ -123,7 +123,7 @@ importers:
 
   packages/metrics:
     devDependencies:
-      '@corebase/config':
+      '@steadhold/config':
         specifier: workspace:*
         version: link:../config
       '@types/node':
@@ -142,7 +142,7 @@ importers:
         specifier: ^8.13.1
         version: 8.23.0
     devDependencies:
-      '@corebase/config':
+      '@steadhold/config':
         specifier: workspace:*
         version: link:../config
       '@types/node':
@@ -160,7 +160,7 @@ importers:
 
   packages/queue:
     dependencies:
-      '@corebase/types':
+      '@steadhold/types':
         specifier: workspace:*
         version: link:../types
       bullmq:
@@ -170,7 +170,7 @@ importers:
         specifier: ^5.4.1
         version: 5.11.1
     devDependencies:
-      '@corebase/config':
+      '@steadhold/config':
         specifier: workspace:*
         version: link:../config
       '@types/node':
@@ -185,7 +185,7 @@ importers:
 
   packages/s3:
     devDependencies:
-      '@corebase/config':
+      '@steadhold/config':
         specifier: workspace:*
         version: link:../config
       '@types/node':
@@ -200,14 +200,14 @@ importers:
 
   packages/secrets:
     dependencies:
-      '@corebase/crypto':
+      '@steadhold/crypto':
         specifier: workspace:*
         version: link:../crypto
       pg:
         specifier: ^8.13.1
         version: 8.23.0
     devDependencies:
-      '@corebase/config':
+      '@steadhold/config':
         specifier: workspace:*
         version: link:../config
       '@types/node':
@@ -229,7 +229,7 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
     devDependencies:
-      '@corebase/config':
+      '@steadhold/config':
         specifier: workspace:*
         version: link:../config
       typescript:
@@ -241,31 +241,31 @@ importers:
 
   services/api:
     dependencies:
-      '@corebase/audit':
+      '@steadhold/audit':
         specifier: workspace:*
         version: link:../../packages/audit
-      '@corebase/crypto':
+      '@steadhold/crypto':
         specifier: workspace:*
         version: link:../../packages/crypto
-      '@corebase/email':
+      '@steadhold/email':
         specifier: workspace:*
         version: link:../../packages/email
-      '@corebase/jwt':
+      '@steadhold/jwt':
         specifier: workspace:*
         version: link:../../packages/jwt
-      '@corebase/metrics':
+      '@steadhold/metrics':
         specifier: workspace:*
         version: link:../../packages/metrics
-      '@corebase/queue':
+      '@steadhold/queue':
         specifier: workspace:*
         version: link:../../packages/queue
-      '@corebase/s3':
+      '@steadhold/s3':
         specifier: workspace:*
         version: link:../../packages/s3
-      '@corebase/secrets':
+      '@steadhold/secrets':
         specifier: workspace:*
         version: link:../../packages/secrets
-      '@corebase/types':
+      '@steadhold/types':
         specifier: workspace:*
         version: link:../../packages/types
       fastify:
@@ -278,7 +278,7 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
     devDependencies:
-      '@corebase/config':
+      '@steadhold/config':
         specifier: workspace:*
         version: link:../../packages/config
       '@types/node':
@@ -296,41 +296,41 @@ importers:
 
   services/worker:
     dependencies:
-      '@corebase/audit':
+      '@steadhold/audit':
         specifier: workspace:*
         version: link:../../packages/audit
-      '@corebase/crypto':
+      '@steadhold/crypto':
         specifier: workspace:*
         version: link:../../packages/crypto
-      '@corebase/email':
+      '@steadhold/email':
         specifier: workspace:*
         version: link:../../packages/email
-      '@corebase/jwt':
+      '@steadhold/jwt':
         specifier: workspace:*
         version: link:../../packages/jwt
-      '@corebase/metrics':
+      '@steadhold/metrics':
         specifier: workspace:*
         version: link:../../packages/metrics
-      '@corebase/queue':
+      '@steadhold/queue':
         specifier: workspace:*
         version: link:../../packages/queue
-      '@corebase/s3':
+      '@steadhold/s3':
         specifier: workspace:*
         version: link:../../packages/s3
-      '@corebase/secrets':
+      '@steadhold/secrets':
         specifier: workspace:*
         version: link:../../packages/secrets
-      '@corebase/types':
+      '@steadhold/types':
         specifier: workspace:*
         version: link:../../packages/types
       pg:
         specifier: ^8.13.1
         version: 8.23.0
     devDependencies:
-      '@corebase/api':
+      '@steadhold/api':
         specifier: workspace:*
         version: link:../api
-      '@corebase/config':
+      '@steadhold/config':
         specifier: workspace:*
         version: link:../../packages/config
       '@types/node':
@@ -351,29 +351,29 @@ importers:
 
   tests/isolation:
     dependencies:
-      '@corebase/api':
+      '@steadhold/api':
         specifier: workspace:*
         version: link:../../services/api
-      '@corebase/crypto':
+      '@steadhold/crypto':
         specifier: workspace:*
         version: link:../../packages/crypto
-      '@corebase/jwt':
+      '@steadhold/jwt':
         specifier: workspace:*
         version: link:../../packages/jwt
-      '@corebase/s3':
+      '@steadhold/s3':
         specifier: workspace:*
         version: link:../../packages/s3
-      '@corebase/secrets':
+      '@steadhold/secrets':
         specifier: workspace:*
         version: link:../../packages/secrets
-      '@corebase/worker':
+      '@steadhold/worker':
         specifier: workspace:*
         version: link:../../services/worker
       pg:
         specifier: ^8.13.1
         version: 8.23.0
     devDependencies:
-      '@corebase/config':
+      '@steadhold/config':
         specifier: workspace:*
         version: link:../../packages/config
       '@types/node':

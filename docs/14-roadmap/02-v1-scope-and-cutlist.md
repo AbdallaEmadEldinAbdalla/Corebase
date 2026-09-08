@@ -19,8 +19,8 @@ The binding definition of what V1 *is* and — more importantly — what it is *
 | Storage | Buckets (public/private), upload/download/list, signed URLs, RLS policies on objects, quotas | [07-storage](../07-storage/01-storage-architecture.md) |
 | Dashboard | Project overview + onboarding, table editor (UI→SQL), SQL editor w/ safety rails, auth users, storage browser, keys, logs, backups/restore | [09-dashboard](../09-dashboard/01-dashboard-ia.md) |
 | CLI | login/logout, init, link, status, dev (incl. stop/destroy), db push/pull/reset, migration new, **export**, projects, keys list, secrets, logs, gen types | [10-cli-and-sdk/01](../10-cli-and-sdk/01-cli-spec.md) |
-| Local dev | `corebase dev` Docker Compose stack with prod-parity paths | [10-cli-and-sdk/02](../10-cli-and-sdk/02-local-development.md) |
-| SDK | `@corebase/core`: database builder, auth, storage, generated types | [10-cli-and-sdk/03](../10-cli-and-sdk/03-sdk-spec.md) |
+| Local dev | `steadhold dev` Docker Compose stack with prod-parity paths | [10-cli-and-sdk/02](../10-cli-and-sdk/02-local-development.md) |
+| SDK | `@steadhold/core`: database builder, auth, storage, generated types | [10-cli-and-sdk/03](../10-cli-and-sdk/03-sdk-spec.md) |
 | Billing | Free/Pro plans live, Stripe, 3 metered dimensions, free-tier hard stops | [12-business/02](../12-business/02-pricing-and-plans.md) |
 | Ops | Single region (eu-central), observability stack, alert catalog, status page, DR posture per D-024 | [11-infrastructure](../11-infrastructure/01-infra-phases.md) |
 
@@ -56,9 +56,9 @@ All fifteen, automated as the golden-path e2e ([testing strategy](../13-quality/
 
 1. Create account · 2. Create project · 3. Get PostgreSQL (<60s) · 4. Create table · 5. Insert data · 6. Query via REST API · 7. Create auth user · 8. Authenticate · 9. Apply RLS and see it enforced · 10. Upload file · 11. Download file · 12. Use the SDK for 5–11 · 13. Run the stack locally · 14. Push migrations · 15. Restore a backup.
 
-Plus three Corebase-specific additions:
+Plus three Steadhold-specific additions:
 
-16. **Export the project** and restore it outside Corebase (D-004 proof) · 17. **Pause/resume** transparently (D-008 proof) · 18. Cross-tenant isolation suite green (D-002 proof).
+16. **Export the project** and restore it outside Steadhold (D-004 proof) · 17. **Pause/resume** transparently (D-008 proof) · 18. Cross-tenant isolation suite green (D-002 proof).
 
 ### The scope-change protocol
 
@@ -69,7 +69,7 @@ Plus three Corebase-specific additions:
 ## Decisions
 
 - **D-163 — The IN/OUT tables above are the binding V1 scope; changes go through the scope-change protocol.** *(Rationale: §116 — scope creep is the top business risk; a protocol beats willpower.)*
-- **D-164 — Launch checklist = §119's fifteen criteria + export, pause/resume, and isolation-suite additions (18 total), all automated.** *(Rationale: the three additions are exactly Corebase's declared lanes; launching without proving them means launching without the moat.)*
+- **D-164 — Launch checklist = §119's fifteen criteria + export, pause/resume, and isolation-suite additions (18 total), all automated.** *(Rationale: the three additions are exactly Steadhold's declared lanes; launching without proving them means launching without the moat.)*
 
 ## Open Questions
 

@@ -1,10 +1,12 @@
-# Corebase — Original Architecture Proposal (v0.1)
+# Steadhold — Original Architecture Proposal (v0.1)
 
 > Preserved as the founding reference. **Superseded by the corpus wherever they disagree (D-040).**
 > Formatting is condensed; section numbering (§1–124) is preserved and is what other docs cite.
+> **The product was called Corebase when this was written** (renamed 2026-09-08, D-407). The name
+> is updated throughout so the §-references stay usable as a spec; nothing else about the text moved.
 > Status: Initial Architecture Proposal · Category: Backend-as-a-Service · Inspiration: Supabase, Firebase, Turso, Fly.io
 
-**§1 Executive summary.** Corebase is a developer-focused BaaS providing everything to build/operate a modern app backend without manual infrastructure: PostgreSQL, auto-generated APIs, auth, authorization, RLS, object storage, realtime, secrets, logs, metrics, backups, migrations, API keys, local dev tooling, CLI, SDKs, dashboard. V1 should not reproduce every Supabase feature — establish a strong foundation and add capabilities progressively.
+**§1 Executive summary.** Steadhold is a developer-focused BaaS providing everything to build/operate a modern app backend without manual infrastructure: PostgreSQL, auto-generated APIs, auth, authorization, RLS, object storage, realtime, secrets, logs, metrics, backups, migrations, API keys, local dev tooling, CLI, SDKs, dashboard. V1 should not reproduce every Supabase feature — establish a strong foundation and add capabilities progressively.
 
 **§2 Product vision.** "The easiest way to deploy the backend of an application." From "I have an idea" to database/auth/API/storage/realtime ready and app connected — without understanding Kubernetes, replication, networking, reverse proxies, provisioning, object storage infra, auth infra, WebSockets, or backups.
 
@@ -12,11 +14,11 @@
 
 **§4 Target users.** Indie developers (SaaS, mobile, websites, internal tools, MVPs); startups (managed infra without DevOps hires); agencies (many client projects under one umbrella); enterprise later (SSO, SAML, SCIM, audit, private networking, compliance — not V1).
 
-**§5 Competitive positioning.** Not "a copy of Supabase" — a complete backend foundation around portability, simplicity, infra flexibility. Differentiators: simpler infrastructure, better portability, infra flexibility (shared/dedicated/serverless/edge later), first-class CLI (`corebase init/dev/db push/db pull/db reset/deploy/logs`).
+**§5 Competitive positioning.** Not "a copy of Supabase" — a complete backend foundation around portability, simplicity, infra flexibility. Differentiators: simpler infrastructure, better portability, infra flexibility (shared/dedicated/serverless/edge later), first-class CLI (`steadhold init/dev/db push/db pull/db reset/deploy/logs`).
 
-**§6 Core architecture.** Internet → Cloudflare → API Gateway → {Project API, Auth API, Storage API} → Corebase Control Plane → {Provisioner, Queue, Scheduler} → Infrastructure → {PostgreSQL, Storage, Realtime}.
+**§6 Core architecture.** Internet → Cloudflare → API Gateway → {Project API, Auth API, Storage API} → Steadhold Control Plane → {Provisioner, Queue, Scheduler} → Infrastructure → {PostgreSQL, Storage, Realtime}.
 
-**§7 Control plane vs data plane.** Control plane manages Corebase itself: users, orgs, projects, billing, provisioning, regions, credentials, config, deployments, infra state.
+**§7 Control plane vs data plane.** Control plane manages Steadhold itself: users, orgs, projects, billing, provisioning, regions, credentials, config, deployments, infra state.
 
 **§8 Data plane.** Handles customer traffic: PostgreSQL, REST API, Auth, Storage, Realtime, Functions. Separation allows independent scaling.
 
@@ -54,9 +56,9 @@
 
 **§25 API gateway.** Routing, TLS, rate limiting, authn, project resolution, versioning, request IDs, logging. Candidates: Envoy, Nginx, HAProxy, custom Go. Avoid building a massive gateway for V1.
 
-**§26 Internal services.** corebase-api/-auth/-storage/-realtime/-provisioner/-worker/-gateway — but don't microservice immediately; modular monolith first.
+**§26 Internal services.** steadhold-api/-auth/-storage/-realtime/-provisioner/-worker/-gateway — but don't microservice immediately; modular monolith first.
 
-**§27 Recommended initial backend.** One Corebase API (projects, orgs, billing, keys, provisioning, settings); separate services only when scaling requires.
+**§27 Recommended initial backend.** One Steadhold API (projects, orgs, billing, keys, provisioning, settings); separate services only when scaling requires.
 
 **§28 Provisioning system.** On project create: create project → assign ID → select region → allocate DB → generate credentials → configure DB/pooler/API/storage/auth/backups → READY.
 
@@ -88,13 +90,13 @@
 
 **§42 SQL editor.** Syntax highlighting, autocomplete, history, tabs, execution time, results, errors, saved queries; later explain/analyze/plans.
 
-**§43 Migration system.** `corebase migration create add_profiles` → `migrations/20260827130000_add_profiles.sql`; commands: db push/pull/reset/diff.
+**§43 Migration system.** `steadhold migration create add_profiles` → `migrations/20260827130000_add_profiles.sql`; commands: db push/pull/reset/diff.
 
-**§44 Local development.** `corebase init` / `corebase dev`; local stack: Postgres, Auth, Storage, API, Realtime. Docker Compose is an excellent start.
+**§44 Local development.** `steadhold init` / `steadhold dev`; local stack: Postgres, Auth, Storage, API, Realtime. Docker Compose is an excellent start.
 
 **§45 CLI.** login/logout, init, dev, project create/list/delete, db push/pull/reset/diff, functions deploy, logs, link, status.
 
-**§46 SDK.** `@corebase/core`: `createClient(URL, ANON_KEY)`; `.from("users").select("*")`; `auth.signInWithPassword`; `storage.from("avatars").upload`; `channel("messages").on(...).subscribe()`.
+**§46 SDK.** `@steadhold/core`: `createClient(URL, ANON_KEY)`; `.from("users").select("*")`; `auth.signInWithPassword`; `storage.from("avatars").upload`; `channel("messages").on(...).subscribe()`.
 
 **§47 API keys.** Public/anonymous key + service-role key; service role bypasses user-level restrictions only by design; treat as secret.
 
@@ -124,7 +126,7 @@
 
 **§60 API versioning.** `/api/v1`; no breaking changes without versioning.
 
-**§61 Domain architecture.** corebase.com; app.corebase.com; api.corebase.com; `<project-id>.corebase.co`; `<project-id>.storage.corebase.co`. Exact structure decided later.
+**§61 Domain architecture.** steadhold.dev; app.steadhold.dev; api.steadhold.dev; `<project-id>.steadhold.app`; `<project-id>.storage.steadhold.app`. Exact structure decided later.
 
 **§62 Region architecture.** us-east, us-west, eu-west, eu-central, ap-southeast, me-central; choose region at creation → provision there.
 
@@ -136,7 +138,7 @@
 
 **§66 Administrative access.** No routine engineer access to customer DBs. JIT access, audit logging, restricted roles, break-glass.
 
-**§67 Data encryption.** TLS client→Corebase→DB; encrypted object storage; secrets in encrypted secret manager.
+**§67 Data encryption.** TLS client→Steadhold→DB; encrypted object storage; secrets in encrypted secret manager.
 
 **§68 Reliability targets.** Define API/DB/storage/realtime uptime eventually (99.9/99.95/99.99). No SLA before infra supports it.
 
@@ -160,7 +162,7 @@
 
 **§78 Data retention.** Soft-deleted period before permanent deletion.
 
-**§79 Developer experience.** The most important feature. `npm install @corebase/core` → createClient → build immediately.
+**§79 Developer experience.** The most important feature. `npm install @steadhold/core` → createClient → build immediately.
 
 **§80 First five minutes.** Sign up → create project → copy credentials → install SDK → create table → insert → auth user → query. Target: first successful DB request < 5 minutes.
 
@@ -224,11 +226,11 @@
 
 **§110 Long-term platform.** Database, Auth, Storage, Realtime, Functions + observability + billing/usage as one platform.
 
-**§111 Ultimate product.** `corebase create` → complete production backend (DB, auth, storage, API, realtime, functions, queues, cron, observability, backups, CDN).
+**§111 Ultimate product.** `steadhold create` → complete production backend (DB, auth, storage, API, realtime, functions, queues, cron, observability, backups, CDN).
 
 **§112 Business model.** Free → Developer → Pro → Team → Enterprise; revenue correlates with infrastructure consumption (DB resources, storage, bandwidth, compute, requests, realtime, users, backups).
 
-**§113 Open-source strategy.** Corebase OSS (API, auth, storage, realtime, local dev) + Corebase Cloud (managed infra, billing, provisioning, multi-region, enterprise, cloud dashboard).
+**§113 Open-source strategy.** Steadhold OSS (API, auth, storage, realtime, local dev) + Steadhold Cloud (managed infra, billing, provisioning, multi-region, enterprise, cloud dashboard).
 
 **§114 Competitive moat.** Not cloning Supabase: efficient provisioning, excellent CLI/SDK, easy migration, better economics, fast provisioning/low latency, ecosystem.
 
@@ -242,12 +244,12 @@
 
 **§119 MVP success criteria.** A developer can: 1 create account, 2 create project, 3 get Postgres, 4 create table, 5 insert data, 6 query via API, 7 create auth user, 8 authenticate, 9 apply RLS, 10 upload file, 11 download file, 12 use SDK, 13 run locally, 14 push migrations, 15 restore a backup.
 
-**§120 Final architecture.** Cloudflare → API gateway → {Corebase API, Auth API, Storage API} → control-plane DB → provisioner queue → workers → {PostgreSQL, object storage, realtime} → observability.
+**§120 Final architecture.** Cloudflare → API gateway → {Steadhold API, Auth API, Storage API} → control-plane DB → provisioner queue → workers → {PostgreSQL, object storage, realtime} → observability.
 
 **§121 Most important rule.** Never confuse control plane with customer data plane; the split enables scaling, security, regional deployment, DR.
 
-**§122 First milestone.** Not "build Supabase" — "create a Corebase project and automatically receive a secure PostgreSQL backend." Flow: account → project → provisioner → Postgres → credentials → API endpoint → dashboard → first SQL query. Then auth, storage, RLS, realtime, functions.
+**§122 First milestone.** Not "build Supabase" — "create a Steadhold project and automatically receive a secure PostgreSQL backend." Flow: account → project → provisioner → Postgres → credentials → API endpoint → dashboard → first SQL query. Then auth, storage, RLS, realtime, functions.
 
-**§123 North star.** One command to a production backend: `corebase create my-app` → provisioned checklist → connection strings → `corebase dev`.
+**§123 North star.** One command to a production backend: `steadhold create my-app` → provisioned checklist → connection strings → `steadhold dev`.
 
-**§124 Final principle.** Win not by more features but by simpler, faster, more portable, more transparent, easier to operate. First goal: make one developer love Corebase. Then 10, 100, 1,000. Infrastructure evolves alongside users.
+**§124 Final principle.** Win not by more features but by simpler, faster, more portable, more transparent, easier to operate. First goal: make one developer love Steadhold. Then 10, 100, 1,000. Infrastructure evolves alongside users.

@@ -1,10 +1,10 @@
-# Corebase
+# Steadhold
 
 **The backend foundation for modern applications.**
 
-Corebase is a developer-focused Backend-as-a-Service: a developer creates a project and receives a production-ready backend — PostgreSQL, auto-generated APIs, authentication, row-level security, object storage, and (later) realtime — in minutes, without assembling infrastructure themselves.
+Steadhold is a developer-focused Backend-as-a-Service: a developer creates a project and receives a production-ready backend — PostgreSQL, auto-generated APIs, authentication, row-level security, object storage, and (later) realtime — in minutes, without assembling infrastructure themselves.
 
-> One command to get a production backend: `corebase create my-app`
+> One command to get a production backend: `steadhold create my-app`
 
 ## Status
 
@@ -58,7 +58,7 @@ Two of my own earlier mistakes surfaced here. Retention was set as a *count* of 
 
 Proving it works meant breaking it, and breaking it found something worse: pointing a project's repo at a bucket that did not exist made the **database restart its whole cluster**. pgBackRest's async archiver double-forks, which reparented its worker onto PID 1 — the postmaster — where a non-zero exit is indistinguishable from a crashed backend. An archiving failure had become an availability incident, which is exactly backwards.
 
-**Every project has an encrypted backup repo in object storage — and nothing has been restored from one yet.** Phase 3 leads with the backups doc's own rule: a backup that has not been restore-tested is treated as not existing. So what is true today is narrower than "backups work": each project gets its own pgBackRest repo under its own cipher-pass, and provisioning does not finish until `pgbackrest check` has forced a WAL switch and confirmed the segment landed. Point-in-time restore and the verification loop are the next two steps, and until they exist Corebase has an archive, not a recovery path.
+**Every project has an encrypted backup repo in object storage — and nothing has been restored from one yet.** Phase 3 leads with the backups doc's own rule: a backup that has not been restore-tested is treated as not existing. So what is true today is narrower than "backups work": each project gets its own pgBackRest repo under its own cipher-pass, and provisioning does not finish until `pgbackrest check` has forced a WAL switch and confirmed the segment landed. Point-in-time restore and the verification loop are the next two steps, and until they exist Steadhold has an archive, not a recovery path.
 
 Building it turned up that `initdb` was never given `--data-checksums`, which the restore-verification checks require. That absence is silent twice over: page corruption goes undetected, and a verification pass then reports a healthy restore of a rotting cluster — a backup system whose checks cannot fail is worse than none.
 
@@ -72,7 +72,7 @@ Building it turned up that `initdb` was never given `--data-checksums`, which th
 
 **Credentials rotate without breaking anything.** One `ALTER ROLE` replaces a project's database password: applications already connected keep working (Postgres only checks the password when a connection opens), a new connection with the old password is refused immediately, and **the connection pooler needs no reconfiguration at all** — it reads `pg_shadow` live, which is the reason `auth_query` was chosen over a credentials file. There is an opt-in flag to disconnect everything, documented as compromise response, because rotating alone does nothing about someone already holding a connection.
 
-**A deep review of everything built** produced eight fixes, recorded as D-240…D-245. Two are worth naming here: `CB_STATIC_TOKEN` defaulted to the literal string `dev-token`, so an API deployed with no configuration accepted that header as the bootstrap owner; and the data node answered *"all predefined address pools have been fully subnetted"* with three networks on it — a per-project-network design runs out of *addresses* at roughly ten projects while Phase 2 aims at a hundred.
+**A deep review of everything built** produced eight fixes, recorded as D-240…D-245. Two are worth naming here: `SH_STATIC_TOKEN` defaulted to the literal string `dev-token`, so an API deployed with no configuration accepted that header as the bootstrap owner; and the data node answered *"all predefined address pools have been fully subnetted"* with three networks on it — a per-project-network design runs out of *addresses* at roughly ten projects while Phase 2 aims at a hundred.
 
 **Phase 2 (the database platform) has started.** Every project now gets a **connection pooler** — PgBouncer in transaction mode on its own port — so `DATABASE_URL` is a string an application can actually point at: twelve concurrent clients share one Postgres backend. The pooler resolves credentials through a `SECURITY DEFINER` lookup that allowlists exactly one role, so the pooled port cannot reach `postgres` or any other internal role even if PgBouncer is fully compromised — checked by presenting the correct superuser password and being refused. It sits on a private per-project network added in the same phase, which is also what PostgREST will need in Phase 5.
 
@@ -102,7 +102,7 @@ Nothing sends the mail yet — that is the next step. The boundary is a handover
 
 Postmark is not built and the interface is. A client for a paid API with no account and no verified domain behind it would be untested code on the one path where failure is silent and reaches a user, so sending goes over SMTP to a Mailpit container — the same substitution MinIO makes for R2, and the shape per-project custom SMTP needs anyway. What a sink cannot test is deliverability, so the phase's SPF/DKIM/DMARC criterion is recorded as **unmet** rather than declared met against a container.
 
-Testing the hand-written SMTP client against a real listener earned its keep on the first run: **`Acme (via Corebase) <auth@…>` unquoted is not the name it looks like.** Parentheses delimit a comment in RFC 5322, so the sink reported the display name as "Acme" alone — and "via Corebase" is exactly the half that keeps us from claiming to *be* the customer while sending from our own domain. A mock would have agreed with whatever we sent it.
+Testing the hand-written SMTP client against a real listener earned its keep on the first run: **`Acme (via Steadhold) <auth@…>` unquoted is not the name it looks like.** Parentheses delimit a comment in RFC 5322, so the sink reported the display name as "Acme" alone — and "via Steadhold" is exactly the half that keeps us from claiming to *be* the customer while sending from our own domain. A mock would have agreed with whatever we sent it.
 
 Caps are checked at enqueue rather than at send, and suppression before caps — otherwise a mail-bomb aimed at an address we already refuse to write to consumes the project's whole hourly budget without one message going out, and the attacker denies the project its real mail for free. And idempotency lives in a database row rather than in the queue, because the thing that actually produces duplicate mail is a worker that sends successfully and dies before recording it.
 
@@ -136,9 +136,9 @@ The part worth keeping: fixing the race did **not** prove the fix. This machine'
 
 This surface deliberately breaks the rule every other one follows. It's authorised by the **service_role** key — the customer's own server-side credential, which can already read every row in the schema — so hiding whether a user id exists would protect nothing and would break a retrying import script that needs to tell "already gone" from "done". The corollary is that the key check is the *only* thing between the published anon key and every account on the project, so it runs first on all five routes and a test exercises all five. Disabling it, the anon key gets a 200.
 
-Deletion keeps the id and nothing else. The customer's own tables reference `auth.users(id)` under their foreign-key semantics and Corebase doesn't cascade into app schemas, so a hard delete would either break those references or force a decision about someone else's data. The address becomes `deleted+<id>@invalid` — valid syntax, reserved TLD, can never receive mail — which frees the real address for re-registration. Password, both metadata halves and the confirmation timestamp are scrubbed, and every session, refresh lineage and outstanding one-time token goes with them: **a deleted user whose recovery link still works is a deleted user who can be signed back in from an inbox.**
+Deletion keeps the id and nothing else. The customer's own tables reference `auth.users(id)` under their foreign-key semantics and Steadhold doesn't cascade into app schemas, so a hard delete would either break those references or force a decision about someone else's data. The address becomes `deleted+<id>@invalid` — valid syntax, reserved TLD, can never receive mail — which frees the real address for re-registration. Password, both metadata halves and the confirmation timestamp are scrubbed, and every session, refresh lineage and outstanding one-time token goes with them: **a deleted user whose recovery link still works is a deleted user who can be signed back in from an inbox.**
 
-**The drill that proves crash-resume had not completed a single provision in four nights.** Found while checking CI on something else. The nightly said `DID NOT CONVERGE` for all eleven kill points and printed four lines of worker log; the error explaining everything was in memory, just outside that window — `backups are required (CB_REQUIRE_BACKUPS) but no repo is configured`, naming the exact variables and the command to run.
+**The drill that proves crash-resume had not completed a single provision in four nights.** Found while checking CI on something else. The nightly said `DID NOT CONVERGE` for all eleven kill points and printed four lines of worker log; the error explaining everything was in memory, just outside that window — `backups are required (SH_REQUIRE_BACKUPS) but no repo is configured`, naming the exact variables and the command to run.
 
 Five faults, four in the drill and none in the product. Its environment never carried the object-store settings, so a step added later failed every scenario. It never checked the status of the call it depended on. It read `{ref, id}` out of a response that has been `{project: …, job: …}` for two phases — so every convergence poll watched a project that did not exist while provisioning succeeded perfectly. Its failure path printed four lines of a two-minute failure. And its credential invariant asserted a stale total: exactly 3, the number a project had at Milestone 0, against the 11 it legitimately carries now.
 
@@ -340,8 +340,8 @@ policy that was correct. Five green steps, one whole class of caller untested.
 ```bash
 pnpm install
 ./scripts/staging.sh up && ./scripts/migrate-staging.sh && ./scripts/staging.sh kek
-docker build -t corebase/postgres:17.5 infra/docker/postgres
-docker build -t corebase/pgbouncer:1.23 infra/docker/pgbouncer
+docker build -t steadhold/postgres:17.5 infra/docker/postgres
+docker build -t steadhold/pgbouncer:1.23 infra/docker/pgbouncer
 ./scripts/staging.sh seed-images && ./scripts/staging.sh backup-store && ./scripts/staging.sh verify
 ```
 
@@ -385,28 +385,28 @@ pnpm test:unit
 Or measure provisioning end to end — twenty creates, each proven usable by connecting to it:
 
 ```bash
-pnpm --filter @corebase/worker bench
+pnpm --filter @steadhold/worker bench
 ```
 
 Or kill the worker at eleven points mid-provision and watch every one converge:
 
 ```bash
-pnpm --filter @corebase/worker kill-matrix
+pnpm --filter @steadhold/worker kill-matrix
 ```
 
 Or run twenty full create-use-delete-purge cycles and check nothing is left behind:
 
 ```bash
-pnpm --filter @corebase/worker lifecycle
+pnpm --filter @steadhold/worker lifecycle
 ```
 
 Or reboot the data node and watch it converge on its own:
 
 ```bash
-pnpm --filter @corebase/worker node-reboot
+pnpm --filter @steadhold/worker node-reboot
 ```
 
-To watch it work, `./scripts/dev.sh` starts both services with the right environment and ships their logs to Loki; Grafana is then at <http://127.0.0.1:3001/d/corebase-provisioning>.
+To watch it work, `./scripts/dev.sh` starts both services with the right environment and ships their logs to Loki; Grafana is then at <http://127.0.0.1:3001/d/steadhold-provisioning>.
 
 Staging is Docker Compose plus Docker-in-Docker standing in for a control node and a data node. The interface the worker drives is the real one — the Docker Engine API over mutual TLS, no per-node agent (D-052) — so no step of the plan is skipped and nothing is paid for. [STATUS.md §2](STATUS.md) has the details and the environment variables.
 
@@ -463,7 +463,7 @@ The corpus covers, A to Z:
 
 ## The brand
 
-The product is being renamed **Corebase → Steadhold** (D-407) — *stead* (a holding,
+The product was renamed **Corebase → Steadhold** (D-407) — *stead* (a holding,
 a place one stands) plus *hold* (to keep). The mark is a **chiselled S cut at the
 waist**: ink upper bowl, terracotta lower bowl — the stratum the letter stands in.
 
@@ -502,7 +502,7 @@ cd design-exports/07-html && python3 -m http.server 8000
 
 Three rules in the token layer are load-bearing, and a naive light-to-dark inversion breaks all three:
 
-- Components reference **role** tokens (`--cb-surface`, `--cb-text`, `--cb-accent`), never ramp steps — which is why flipping `data-theme` is the entire implementation of dark mode.
+- Components reference **role** tokens (`--sh-surface`, `--sh-text`, `--sh-accent`), never ramp steps — which is why flipping `data-theme` is the entire implementation of dark mode.
 - The accent **lifts one ramp step** in dark, or it disappears into the surface.
 - Danger *fill* stays darker than error *text* in dark, so white labels on destructive buttons keep their contrast.
 
@@ -510,4 +510,4 @@ There is no shadow scale. Elevation is surface tint plus border weight.
 
 ## North star
 
-Make one developer love using Corebase. Then 10. Then 100. Then 1,000. The infrastructure evolves alongside the users rather than being built entirely in advance.
+Make one developer love using Steadhold. Then 10. Then 100. Then 1,000. The infrastructure evolves alongside the users rather than being built entirely in advance.

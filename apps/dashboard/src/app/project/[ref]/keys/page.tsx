@@ -45,19 +45,19 @@ export default function KeysPage({ params }: { params: Promise<{ ref: string }> 
       {keys.error ? <ErrorSurface error={keys.error} onRetry={() => void keys.refetch()} /> : null}
 
       {!ready ? (
-        <div className="emptywrap"><div className="cb-empty">
-          <div className="cb-empty__title">Keys are not minted yet</div>
-          <div className="cb-empty__text">
+        <div className="emptywrap"><div className="sh-empty">
+          <div className="sh-empty__title">Keys are not minted yet</div>
+          <div className="sh-empty__text">
             They are created as part of provisioning. This page fills in when the project
             reaches <code className="mono">ready</code>.
           </div>
         </div></div>
       ) : keys.isLoading ? (
         <div className="card"><div className="card__body" aria-busy="true">
-          <div className="cb-skeleton" style={{ height: 12, width: 60 }} />
-          <div className="cb-skeleton" style={{ height: 18, marginTop: 10 }} />
-          <div className="cb-skeleton" style={{ height: 12, width: 90, marginTop: 28 }} />
-          <div className="cb-skeleton" style={{ height: 18, marginTop: 10, width: '40%' }} />
+          <div className="sh-skeleton" style={{ height: 12, width: 60 }} />
+          <div className="sh-skeleton" style={{ height: 18, marginTop: 10 }} />
+          <div className="sh-skeleton" style={{ height: 12, width: 90, marginTop: 28 }} />
+          <div className="sh-skeleton" style={{ height: 18, marginTop: 10, width: '40%' }} />
         </div></div>
       ) : (
         <>
@@ -69,8 +69,8 @@ export default function KeysPage({ params }: { params: Promise<{ ref: string }> 
             <div className="card">
               <div className="card__body">
                 {anon?.key ? (
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--cb-space-3)' }}>
-                    <code style={{ flex: 1, minWidth: 0, font: 'var(--cb-code)', overflowWrap: 'anywhere' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--sh-space-3)' }}>
+                    <code style={{ flex: 1, minWidth: 0, font: 'var(--sh-code)', overflowWrap: 'anywhere' }}>
                       {anon.key}
                     </code>
                     <CopyButton value={anon.key} what="anon key" />
@@ -103,14 +103,14 @@ export default function KeysPage({ params }: { params: Promise<{ ref: string }> 
                   audit log against your account. The confirmation flow that does that
                   properly is not built yet — until then, read it with the API:
                 </p>
-                <div className="cb-code codeblock" style={{ marginTop: 'var(--cb-space-4)' }}>
-                  <div className="cb-code__header">
-                    <span className="cb-code__lang">shell</span>
+                <div className="sh-code codeblock" style={{ marginTop: 'var(--sh-space-4)' }}>
+                  <div className="sh-code__header">
+                    <span className="sh-code__lang">shell</span>
                     <CopyButton
-                      value={`curl -b cookies.txt "$COREBASE_API/v1/projects/${ref}/keys?reveal=true"`}
+                      value={`curl -b cookies.txt "$STEADHOLD_API/v1/projects/${ref}/keys?reveal=true"`}
                       what="Command" variant="ghost" />
                   </div>
-                  <pre><code>{`curl -b cookies.txt \\\n  "$COREBASE_API/v1/projects/${ref}/keys?reveal=true"`}</code></pre>
+                  <pre><code>{`curl -b cookies.txt \\\n  "$STEADHOLD_API/v1/projects/${ref}/keys?reveal=true"`}</code></pre>
                 </div>
               </div>
               {service ? (
@@ -126,11 +126,11 @@ export default function KeysPage({ params }: { params: Promise<{ ref: string }> 
           <section className="section">
             <div className="section__head"><h2 className="section__title">JWKS</h2></div>
             <div className="card"><div className="card__body">
-              <p className="muted" style={{ margin: 0, marginBottom: 'var(--cb-space-3)' }}>
+              <p className="muted" style={{ margin: 0, marginBottom: 'var(--sh-space-3)' }}>
                 Your own services can verify these tokens without calling us.
               </p>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--cb-space-3)' }}>
-                <code style={{ flex: 1, minWidth: 0, font: 'var(--cb-code)', overflowWrap: 'anywhere' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sh-space-3)' }}>
+                <code style={{ flex: 1, minWidth: 0, font: 'var(--sh-code)', overflowWrap: 'anywhere' }}>
                   {`/v1/projects/${ref}/.well-known/jwks.json`}
                 </code>
                 <CopyButton value={`/v1/projects/${ref}/.well-known/jwks.json`} what="JWKS path" />

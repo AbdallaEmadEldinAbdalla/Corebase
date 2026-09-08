@@ -6,7 +6,7 @@ import {
 } from './index.ts';
 
 const key = generateKeypair();
-const claims = projectKeyClaims({ ref: 'kxqwrtplmzensfba2345', role: 'anon', issuer: 'https://corebase.co' });
+const claims = projectKeyClaims({ ref: 'kxqwrtplmzensfba2345', role: 'anon', issuer: 'https://steadhold.app' });
 
 const b64u = (o: unknown) => Buffer.from(JSON.stringify(o), 'utf8').toString('base64url');
 

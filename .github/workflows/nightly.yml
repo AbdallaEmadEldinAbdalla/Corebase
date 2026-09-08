@@ -65,21 +65,21 @@ jobs:
       - uses: docker/build-push-action@v7
         with:
           context: infra/docker/postgres
-          tags: corebase/postgres:17.5
+          tags: steadhold/postgres:17.5
           load: true
           cache-from: type=gha
 
       - uses: docker/build-push-action@v7
         with:
           context: infra/docker/pgbouncer
-          tags: corebase/pgbouncer:1.23
+          tags: steadhold/pgbouncer:1.23
           load: true
           cache-from: type=gha
 
       - uses: docker/build-push-action@v7
         with:
           context: infra/docker/postgrest
-          tags: corebase/postgrest:12.2
+          tags: steadhold/postgrest:12.2
           load: true
           cache-from: type=gha
 
@@ -97,7 +97,7 @@ jobs:
       # Each drill asserts its own invariants and exits non-zero on failure, so
       # there is nothing to check here beyond letting them run.
       - name: ${{ matrix.drill.name }}
-        run: pnpm --filter @corebase/worker ${{ matrix.drill.task }}
+        run: pnpm --filter @steadhold/worker ${{ matrix.drill.task }}
 
       # Only T5f writes it, so only T5f has anything to print. In the other three
       # jobs this used to cat a file the checkout happened to contain, which is

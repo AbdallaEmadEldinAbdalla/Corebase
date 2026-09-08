@@ -56,7 +56,7 @@ export interface AuthEmailJob {
   email: AuthEmail;
   to: string;
   /**
-   * Interpolated into a Corebase-controlled template. Never HTML, never a URL
+   * Interpolated into a Steadhold-controlled template. Never HTML, never a URL
    * the client chose: `action_url` is built here from the *validated* redirect
    * (D-116 — fixed templates are what stop this being a phishing kit).
    */

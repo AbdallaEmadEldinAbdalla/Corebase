@@ -4,10 +4,10 @@ import { join } from 'node:path';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { createEnvelope, generateSecret } from '@corebase/crypto';
+import { createEnvelope, generateSecret } from '@steadhold/crypto';
 import { createDocker, type Docker } from './docker.ts';
-import { createSecretStore } from '@corebase/secrets';
-import { SECRET_NAMES } from '@corebase/secrets';
+import { createSecretStore } from '@steadhold/secrets';
+import { SECRET_NAMES } from '@steadhold/secrets';
 import { buildSagas } from './jobs/sagas.ts';
 import { registerNode } from './placement.ts';
 import { containerName, bootstrapPassword, IMAGE, LABEL_MANAGED } from './container-spec.ts';
@@ -22,12 +22,12 @@ import type { SagaStep, SagaContext } from './jobs/runner.ts';
  * bootstrap password actually gone afterwards, does a stored credential survive
  * a crash at every point in the sequence, and does mark_ready refuse to lie.
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
-const CERT_DIR = process.env.CB_DOCKER_CERT_DIR
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
+const CERT_DIR = process.env.SH_DOCKER_CERT_DIR
   ?? join(process.cwd(), '../../infra/docker/staging/certs');
-const HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
+const HOST = process.env.SH_DOCKER_HOST ?? '127.0.0.1';
+const PORT = Number(process.env.SH_DOCKER_PORT ?? 2376);
 const SECRET = 'test-bootstrap-secret-0123456789';
 
 let pool: Pool; let docker: Docker; let orgId: string; let kekDir: string;
@@ -37,7 +37,7 @@ let up = false; let reason = '';
 
 beforeAll(async () => {
   pool = new Pool({ connectionString: DB, max: 6, connectionTimeoutMillis: 1500 });
-  kekDir = mkdtempSync(join(tmpdir(), 'cb-kek-t5e-'));
+  kekDir = mkdtempSync(join(tmpdir(), 'sh-kek-t5e-'));
   writeFileSync(join(kekDir, 'kek_2026_08.key'), randomBytes(32));
   try {
     await pool.query('select 1');
@@ -125,7 +125,7 @@ async function mkProject(plan = 'free') {
  */
 const ALL_STEPS: string[] = buildSagas({
   pool: undefined as never, docker: undefined as never, secrets: undefined as never,
-  bootstrapSecret: SECRET, projectDomain: 'corebase.test',
+  bootstrapSecret: SECRET, projectDomain: 'steadhold.test',
 }).provision_project!.map((s: SagaStep<SagaContext>) => s.name);
 
 /** Steps up to and including `name` — positional slices are what just broke. */
@@ -138,7 +138,7 @@ const upTo = (name: string) => {
 async function runSteps(projectId: string, names: string[], extra: Record<string, unknown> = {}) {
   const sagas = buildSagas({
     pool, docker, secrets, bootstrapSecret: SECRET, healthTimeoutMs: 60_000,
-    projectDomain: 'corebase.test', ...extra,
+    projectDomain: 'steadhold.test', ...extra,
   });
   const steps = sagas['provision_project']!;
   const logs: string[] = [];
@@ -312,7 +312,7 @@ describe('T5e — credentials', () => {
     expect(stored).not.toBe(bootstrapPassword(SECRET, project.id));
 
     // The fleet-wide derivable password must no longer open the door: until this
-    // step runs, one leaked CB_BOOTSTRAP_SECRET is every project's superuser.
+    // step runs, one leaked SH_BOOTSTRAP_SECRET is every project's superuser.
     await expect(connectAs(row.port, 'postgres', bootstrapPassword(SECRET, project.id)))
       .rejects.toThrow(/password authentication failed/);
     const su = await connectAs(row.port, 'postgres', stored!);
@@ -330,7 +330,7 @@ describe('T5e — credentials', () => {
     expect(rows[0]!.kek_id).toBe('kek_2026_08');
 
     // A different KEK — the attacker who has the database but not the key file.
-    const otherDir = mkdtempSync(join(tmpdir(), 'cb-kek-thief-'));
+    const otherDir = mkdtempSync(join(tmpdir(), 'sh-kek-thief-'));
     try {
       writeFileSync(join(otherDir, 'kek_2026_08.key'), randomBytes(32));
       const thief = createSecretStore(pool, createEnvelope({ kekDir: otherDir }));
@@ -437,7 +437,7 @@ describe('T5e — connection details and readiness', () => {
   t('writes the customer-facing host and marks the project ready', async () => {
     const { project } = await provision();
     const row = (await placement(project.id))!;
-    expect(row.connection_host).toBe(`${project.ref}.corebase.test`);
+    expect(row.connection_host).toBe(`${project.ref}.steadhold.test`);
     expect(await projectStatus(project.id)).toBe('ready');
   });
 

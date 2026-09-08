@@ -18,7 +18,7 @@
 -- SECURITY DEFINER, owned by the superuser, because it runs as whichever role the
 -- request selected — `anon` included — and `set_config` on `application_name` is
 -- not something an anonymous caller should be granted directly.
-CREATE OR REPLACE FUNCTION corebase.pre_request() RETURNS void
+CREATE OR REPLACE FUNCTION steadhold.pre_request() RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   req_id text;
@@ -43,22 +43,22 @@ EXCEPTION WHEN others THEN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION corebase.pre_request() FROM PUBLIC;
+REVOKE ALL ON FUNCTION steadhold.pre_request() FROM PUBLIC;
 -- USAGE on the schema as well as EXECUTE on the function. They are separate
 -- privileges and only having the second produces `permission denied for schema
--- corebase` on **every request that carries a token** — the API comes up, answers
+-- steadhold` on **every request that carries a token** — the API comes up, answers
 -- `/ready` with 200, and then fails everything, which reads as an authorization
 -- bug in the customer's policies rather than a missing grant in ours.
 --
--- USAGE lets these roles resolve names in `corebase`; it does not let them run
+-- USAGE lets these roles resolve names in `steadhold`; it does not let them run
 -- anything, because every other function in here keeps the REVOKE above.
-GRANT USAGE ON SCHEMA corebase TO authenticator, anon, authenticated, service_role;
+GRANT USAGE ON SCHEMA steadhold TO authenticator, anon, authenticated, service_role;
 -- Only the roles a request can actually run as. `authenticator` is included
 -- because it is the login role, and PostgREST calls the hook before `SET LOCAL
 -- ROLE` on some paths.
-GRANT EXECUTE ON FUNCTION corebase.pre_request() TO authenticator, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION steadhold.pre_request() TO authenticator, anon, authenticated, service_role;
 
-COMMENT ON FUNCTION corebase.pre_request() IS
+COMMENT ON FUNCTION steadhold.pre_request() IS
   'PostgREST db-pre-request (D-105): stamps the request id into application_name '
   'so a slow query can be traced back to the HTTP request. Never raises.';
 
@@ -67,14 +67,14 @@ COMMENT ON FUNCTION corebase.pre_request() IS
 -- PostgREST caches the catalog, and a stale cache after DDL is *the* classic
 -- embedded-PostgREST failure: "I created the table and the API 404s". This makes
 -- the reload automatic and source-agnostic — the dashboard's table editor,
--- `corebase db push` and a developer in raw psql all get it, and no code path in
--- Corebase has to remember to poke anything.
+-- `steadhold db push` and a developer in raw psql all get it, and no code path in
+-- Steadhold has to remember to poke anything.
 --
--- Separate from `corebase_force_rls` deliberately, even though both fire on DDL.
+-- Separate from `steadhold_force_rls` deliberately, even though both fire on DDL.
 -- They fail differently and for different reasons: force-RLS is a security
 -- posture whose failure must be loud, and this is a cache hint whose failure must
 -- not be. One trigger doing both would have to pick one of those behaviours.
-CREATE OR REPLACE FUNCTION corebase.pgrst_reload() RETURNS event_trigger
+CREATE OR REPLACE FUNCTION steadhold.pgrst_reload() RETURNS event_trigger
 LANGUAGE plpgsql AS $$
 BEGIN
   NOTIFY pgrst, 'reload schema';
@@ -86,18 +86,18 @@ EXCEPTION WHEN others THEN
 END;
 $$;
 
-DROP EVENT TRIGGER IF EXISTS corebase_pgrst_reload;
-CREATE EVENT TRIGGER corebase_pgrst_reload
+DROP EVENT TRIGGER IF EXISTS steadhold_pgrst_reload;
+CREATE EVENT TRIGGER steadhold_pgrst_reload
   ON ddl_command_end
-  EXECUTE FUNCTION corebase.pgrst_reload();
+  EXECUTE FUNCTION steadhold.pgrst_reload();
 
 -- `drop` is its own event, and a dropped table is exactly the case where a stale
 -- cache serves a 200 for something that no longer exists.
-DROP EVENT TRIGGER IF EXISTS corebase_pgrst_reload_drop;
-CREATE EVENT TRIGGER corebase_pgrst_reload_drop
+DROP EVENT TRIGGER IF EXISTS steadhold_pgrst_reload_drop;
+CREATE EVENT TRIGGER steadhold_pgrst_reload_drop
   ON sql_drop
-  EXECUTE FUNCTION corebase.pgrst_reload();
+  EXECUTE FUNCTION steadhold.pgrst_reload();
 
-COMMENT ON FUNCTION corebase.pgrst_reload() IS
+COMMENT ON FUNCTION steadhold.pgrst_reload() IS
   'Event-trigger body for D-100: NOTIFY pgrst on DDL so the schema cache reloads '
   'without a restart, whatever issued the DDL. Never raises.';

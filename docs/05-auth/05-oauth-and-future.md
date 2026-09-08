@@ -20,24 +20,24 @@ The post-V1 auth roadmap in dependency order, with effort and complexity notes p
 
 ### 1. OAuth social login — V1.1 (Google + GitHub first)
 
-Google and GitHub cover the two dominant end-user populations of Corebase customers' apps (consumer + developer tools) and have the two best-behaved OAuth implementations; every further provider is config, not architecture. Apple is deliberately third (OQ-118): its signed-JWT client secret, name-only-on-first-consent quirk, and paid developer account make it the wrong first implementation target.
+Google and GitHub cover the two dominant end-user populations of Steadhold customers' apps (consumer + developer tools) and have the two best-behaved OAuth implementations; every further provider is config, not architecture. Apple is deliberately third (OQ-118): its signed-JWT client secret, name-only-on-first-consent quirk, and paid developer account make it the wrong first implementation target.
 
 **The flow** (authorization-code, server-side exchange — tokens never transit the browser):
 
-1. Client → `GET /auth/v1/authorize?provider=google&redirect_to=<app url>`. Auth validates `redirect_to` against the allowlist (same control as every other flow — see security note below), generates `state` (CSRF, 10 min TTL, stored server-side with the validated `redirect_to` and PKCE material), 302 → provider consent URL with Corebase's per-project client_id and callback.
+1. Client → `GET /auth/v1/authorize?provider=google&redirect_to=<app url>`. Auth validates `redirect_to` against the allowlist (same control as every other flow — see security note below), generates `state` (CSRF, 10 min TTL, stored server-side with the validated `redirect_to` and PKCE material), 302 → provider consent URL with Steadhold's per-project client_id and callback.
 2. User authenticates at the provider.
-3. Provider → `GET https://<ref>.corebase.co/auth/v1/callback?code=…&state=…` — **one fixed callback per project host**, registered with the provider; the app-level destination rides the server-side `state` record, never the provider redirect.
+3. Provider → `GET https://<ref>.steadhold.app/auth/v1/callback?code=…&state=…` — **one fixed callback per project host**, registered with the provider; the app-level destination rides the server-side `state` record, never the provider redirect.
 4. Auth verifies `state`, then **exchanges `code` server-side** (client_secret from per-project provider credentials, envelope-encrypted per D-035) for provider tokens; fetches the identity (OIDC `id_token` verified against provider JWKS for Google; `/user` + `/user/emails` API for GitHub).
 5. **Find-or-create**: look up `auth.identities (provider, provider_user_id)`.
    - Found → sign in that user.
    - Not found → account-linking rules (below) → either attach an identity row to an existing user or `INSERT auth.users` (no password, `email_confirmed_at` set only if the provider attests the email is verified) + `INSERT auth.identities` with `identity_data` (provider profile snapshot).
-6. Issue **Corebase tokens** — ordinary session + refresh + ES256 access JWT per [sessions & tokens](02-sessions-and-tokens.md); provider tokens are not the session. 302 → the `redirect_to` captured in step 1, tokens in the URL fragment.
+6. Issue **Steadhold tokens** — ordinary session + refresh + ES256 access JWT per [sessions & tokens](02-sessions-and-tokens.md); provider tokens are not the session. 302 → the `redirect_to` captured in step 1, tokens in the URL fragment.
 
-**PKCE** (S256) is supported end-to-end for mobile/SPA clients: the SDK generates `code_verifier`, Corebase's `/authorize` records the challenge and plays the confidential-client role against the provider, and the final code exchange at `/token` requires the verifier. Public clients get code interception protection without a client secret in the binary.
+**PKCE** (S256) is supported end-to-end for mobile/SPA clients: the SDK generates `code_verifier`, Steadhold's `/authorize` records the challenge and plays the confidential-client role against the provider, and the final code exchange at `/token` requires the verifier. Public clients get code interception protection without a client secret in the binary.
 
 **The critical security control is the redirect-URL allowlist** — stated in V1 ([auth architecture](01-auth-architecture.md), checklist item 6) and doubly load-bearing here: the post-OAuth redirect carries tokens in the fragment, so an unvalidated `redirect_to` is a full account-takeover primitive (attacker crafts an authorize URL whose final hop exfiltrates the victim's tokens to attacker.com). Exact-origin + path-prefix matching, no wildcards in origins, validated at step 1 *and* re-checked at step 6 from the server-side state record.
 
-**Per-project provider credentials**: each project registers its own OAuth app (its own consent-screen branding) and stores client_id/client_secret in project config (encrypted, D-035; dashboard UI). No shared Corebase-wide OAuth app in V1.1 — a shared app is a consent-screen phishing surface and a single revocation point for every project at once.
+**Per-project provider credentials**: each project registers its own OAuth app (its own consent-screen branding) and stores client_id/client_secret in project config (encrypted, D-035; dashboard UI). No shared Steadhold-wide OAuth app in V1.1 — a shared app is a consent-screen phishing surface and a single revocation point for every project at once.
 
 ### Account linking rules (with OAuth, V1.1)
 
@@ -61,7 +61,7 @@ Guest users: `POST /auth/v1/signup?anonymous=true` → real `auth.users` row wit
 
 ### 6 (out of order because it is parked). Phone / SMS — deferred, justified
 
-- **Cost**: SMS is per-message money in every country, on Corebase's bill under shared infra — a free tier with SMS auth is a subsidy to strangers, hostile to the economics lane (D-006, [cost model](../12-business/01-cost-model.md)).
+- **Cost**: SMS is per-message money in every country, on Steadhold's bill under shared infra — a free tier with SMS auth is a subsidy to strangers, hostile to the economics lane (D-006, [cost model](../12-business/01-cost-model.md)).
 - **Fraud magnet**: SMS-pumping/toll fraud (attackers trigger OTPs to premium-rate ranges they profit from) is an industry-wide extraction scheme that has cost platforms millions; defending requires per-country allowlists, velocity heuristics, and carrier relationships — an ops capability, not a feature.
 - Deliverability is carrier-political (sender-ID registration per country, filtering), and SMS is simultaneously the *weakest* common factor (SIM swap).
 - Verdict: no target version. Revisit only on concrete paying demand, and then custom-Twilio-credentials-per-project first (their spend, their fraud surface) — mirroring the D-117 custom-SMTP pattern.
@@ -87,7 +87,7 @@ SAML is XML-signature security archaeology (signature-wrapping attack classes), 
 
 ## Decisions
 
-- **D-118 — OAuth ships in V1.1 with Google and GitHub only: authorization-code flow with server-side code exchange at `/auth/v1/callback`, PKCE (S256) for public clients, per-project provider credentials (no shared Corebase OAuth app), and allowlist-validated redirects checked at authorize time and again at token delivery. Account linking: auto-link only when the provider attests a verified email matching an existing *confirmed* user; a match against an unconfirmed user is a hard `409 email_conflict_unverified` (never a link); unverified provider emails never auto-link and create unconfirmed users.** *(Rationale: code+PKCE with server-side exchange keeps provider tokens out of browsers; the redirect allowlist is the control that stops authorize-URL token exfiltration; the linking rule closes the pre-registered-unverified-email account-takeover trap, which is the classic OAuth-linking breach.)*
+- **D-118 — OAuth ships in V1.1 with Google and GitHub only: authorization-code flow with server-side code exchange at `/auth/v1/callback`, PKCE (S256) for public clients, per-project provider credentials (no shared Steadhold OAuth app), and allowlist-validated redirects checked at authorize time and again at token delivery. Account linking: auto-link only when the provider attests a verified email matching an existing *confirmed* user; a match against an unconfirmed user is a hard `409 email_conflict_unverified` (never a link); unverified provider emails never auto-link and create unconfirmed users.** *(Rationale: code+PKCE with server-side exchange keeps provider tokens out of browsers; the redirect allowlist is the control that stops authorize-URL token exfiltration; the linking rule closes the pre-registered-unverified-email account-takeover trap, which is the classic OAuth-linking breach.)*
 - **D-119 — Auth scope freeze: nothing enters auth V1 beyond the flows specified in [03-flows.md](03-flows.md); post-V1 order is fixed as OAuth (V1.1) → magic links (V1.1) → anonymous sign-in (V1.2) → MFA/TOTP (V1.2) → passkeys (V2) → SAML/SSO (V3), with phone/SMS deferred with no target version. Exceptions require a decision-log entry superseding this one.** *(Rationale: D-013's build-in-house bet is only sound while the surface stays small and auditable; a written freeze with a named amendment procedure is what keeps "it's just one endpoint" from eroding it, and the phone deferral removes a per-message cost + SMS-pumping fraud surface the economics lane cannot absorb.)*
 
 ## Open Questions

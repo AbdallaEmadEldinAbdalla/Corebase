@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Two intertwined guarantees (proposal §59, §65–66): every consequential action on the platform leaves an immutable record, and no Corebase operator has standing access to customer databases. The first makes the second verifiable. Covers the audit event catalog, what gets recorded, retention and tamper-resistance, the JIT operator-access flow, break-glass, and the customer-facing audit surface. The `audit_logs` table itself is defined in the [data model](01-data-model.md).
+Two intertwined guarantees (proposal §59, §65–66): every consequential action on the platform leaves an immutable record, and no Steadhold operator has standing access to customer databases. The first makes the second verifiable. Covers the audit event catalog, what gets recorded, retention and tamper-resistance, the JIT operator-access flow, break-glass, and the customer-facing audit surface. The `audit_logs` table itself is defined in the [data model](01-data-model.md).
 
 ## Design
 

@@ -11,8 +11,8 @@
  * API handed back, and a statement that returns a row.
  *
  * Usage (from the repo root, staging up and migrated):
- *   pnpm --filter @corebase/worker bench
- *   CB_BENCH_COUNT=5 pnpm --filter @corebase/worker bench
+ *   pnpm --filter @steadhold/worker bench
+ *   SH_BENCH_COUNT=5 pnpm --filter @steadhold/worker bench
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -21,15 +21,15 @@ import { Client } from 'pg';
 import { appDatabaseUrl, backupStoreEnv, bootstrapOrgId } from './staging-env.mts';
 
 const ROOT = resolve(import.meta.dirname, '../../..');
-const COUNT = Number(process.env.CB_BENCH_COUNT ?? 20);
-const BUDGET_MS = Number(process.env.CB_BENCH_BUDGET_MS ?? 60_000);
-const PORT = Number(process.env.CB_BENCH_API_PORT ?? 8098);
+const COUNT = Number(process.env.SH_BENCH_COUNT ?? 20);
+const BUDGET_MS = Number(process.env.SH_BENCH_BUDGET_MS ?? 60_000);
+const PORT = Number(process.env.SH_BENCH_API_PORT ?? 8098);
 const TOKEN = 'bench-token-harness-token-long-enough-for-the-boot-check';
-const OUT_DIR = process.env.CB_BENCH_OUT ?? join(ROOT, 'docs/14-roadmap/measurements');
+const OUT_DIR = process.env.SH_BENCH_OUT ?? join(ROOT, 'docs/14-roadmap/measurements');
 
 /**
  * The object store. Every harness here provisions a project, and provisioning
- * requires a backup repo (`CB_REQUIRE_BACKUPS`) since P3a added
+ * requires a backup repo (`SH_REQUIRE_BACKUPS`) since P3a added
  * `configure_backups` — so a harness without these settings cannot complete a
  * single cycle. All four of them were missing it, and the nightly reported it as
  * "ready did not happen within 90000ms" for four nights (D-358).
@@ -43,11 +43,11 @@ const orgId = async () => (cachedOrg ??= await bootstrapOrgId(
   `http://127.0.0.1:${PORT}`, auth as Record<string, string>));
 
 const backupEnv = backupStoreEnv(ROOT);
-if (!backupEnv['CB_BACKUP_S3_ENDPOINT']) {
+if (!backupEnv['SH_BACKUP_S3_ENDPOINT']) {
   throw new Error(
     'no object-store settings at infra/docker/staging/backup-store.env — '
     + 'run ./scripts/staging.sh backup-store. This harness provisions projects, '
-    + 'and provisioning requires a backup repo (CB_REQUIRE_BACKUPS).');
+    + 'and provisioning requires a backup repo (SH_REQUIRE_BACKUPS).');
 }
 
 const env = {
@@ -63,28 +63,28 @@ const env = {
   //
   // What is being measured here is provisioning, not quota enforcement, and the
   // bench knows exactly how many projects it will ask for.
-  CB_PROJECTS_PER_ORG: String(COUNT + 5),
-  CB_CONTROL_DATABASE_URL: appDatabaseUrl(ROOT),
-  CB_REDIS_URL: process.env.CB_REDIS_URL ?? 'redis://127.0.0.1:56379',
-  CB_DOCKER_HOST: process.env.CB_DOCKER_HOST ?? '127.0.0.1',
-  CB_DOCKER_PORT: process.env.CB_DOCKER_PORT ?? '2376',
-  CB_DOCKER_CERT_DIR: process.env.CB_DOCKER_CERT_DIR ?? join(ROOT, 'infra/docker/staging/certs'),
-  CB_KEK_DIR: process.env.CB_KEK_DIR ?? join(ROOT, 'infra/docker/staging/kek.d'),
-  CB_BOOTSTRAP_SECRET: process.env.CB_BOOTSTRAP_SECRET ?? 'bench-bootstrap-secret-0123456789',
-  CB_PROJECT_DOMAIN: process.env.CB_PROJECT_DOMAIN ?? 'localhost',
-  CB_PG_PORT_MIN: process.env.CB_PG_PORT_MIN ?? '5433',
-  CB_PG_PORT_MAX: process.env.CB_PG_PORT_MAX ?? '5462',
+  SH_PROJECTS_PER_ORG: String(COUNT + 5),
+  SH_CONTROL_DATABASE_URL: appDatabaseUrl(ROOT),
+  SH_REDIS_URL: process.env.SH_REDIS_URL ?? 'redis://127.0.0.1:56379',
+  SH_DOCKER_HOST: process.env.SH_DOCKER_HOST ?? '127.0.0.1',
+  SH_DOCKER_PORT: process.env.SH_DOCKER_PORT ?? '2376',
+  SH_DOCKER_CERT_DIR: process.env.SH_DOCKER_CERT_DIR ?? join(ROOT, 'infra/docker/staging/certs'),
+  SH_KEK_DIR: process.env.SH_KEK_DIR ?? join(ROOT, 'infra/docker/staging/kek.d'),
+  SH_BOOTSTRAP_SECRET: process.env.SH_BOOTSTRAP_SECRET ?? 'bench-bootstrap-secret-0123456789',
+  SH_PROJECT_DOMAIN: process.env.SH_PROJECT_DOMAIN ?? 'localhost',
+  SH_PG_PORT_MIN: process.env.SH_PG_PORT_MIN ?? '5433',
+  SH_PG_PORT_MAX: process.env.SH_PG_PORT_MAX ?? '5462',
   // The local node is declared larger than the 4 GB default so twenty Free
   // projects (350 MB booked each, D-174) sit well under the 85% fill ceiling
   // (D-090) — a capacity refusal would be a correct outcome measuring the wrong
   // thing. Real Free-tier nodes are 32–64 GB.
-  CB_NODE_RAM_MB: process.env.CB_NODE_RAM_MB ?? '16384',
-  CB_NODE_HOSTNAME: process.env.CB_NODE_HOSTNAME ?? 'data-1',
-  CB_STATIC_TOKEN: TOKEN,
+  SH_NODE_RAM_MB: process.env.SH_NODE_RAM_MB ?? '16384',
+  SH_NODE_HOSTNAME: process.env.SH_NODE_HOSTNAME ?? 'data-1',
+  SH_STATIC_TOKEN: TOKEN,
   PORT: String(PORT),
   // Its own metrics port: a harness must not fight a worker someone is already
   // running from scripts/dev.sh for the same port.
-  CB_METRICS_PORT: process.env.CB_METRICS_PORT ?? '9111',
+  SH_METRICS_PORT: process.env.SH_METRICS_PORT ?? '9111',
 };
 
 const children: ChildProcess[] = [];

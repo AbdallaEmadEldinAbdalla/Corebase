@@ -18,7 +18,7 @@ import type { FastifyInstance } from 'fastify';
  * cache can hand one origin's `Allow-Origin` header to another, which turns a
  * correct allowlist into an incorrect one at the edge.
  *
- * **Off by default.** An unset `CB_DASHBOARD_ORIGINS` allows no cross-origin
+ * **Off by default.** An unset `SH_DASHBOARD_ORIGINS` allows no cross-origin
  * requests at all. A default of `localhost:3000` would be convenient and would
  * also be a production hole the day someone forgets to set the variable — and
  * forgetting is the normal case, since the service starts fine either way.
@@ -80,7 +80,7 @@ export interface CorsOptions {
   origins: readonly string[];
 }
 
-/** Parse `CB_DASHBOARD_ORIGINS`. Empty or unset means no cross-origin access. */
+/** Parse `SH_DASHBOARD_ORIGINS`. Empty or unset means no cross-origin access. */
 export function parseOrigins(raw: string | undefined): string[] {
   if (!raw) return [];
   return raw.split(',')

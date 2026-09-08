@@ -20,20 +20,20 @@
 
 /**
  * Read at runtime from the browser rather than baked in at build time, so one
- * build can serve staging and production. `window.__COREBASE__` is set by a
+ * build can serve staging and production. `window.__STEADHOLD__` is set by a
  * small inline script in the root layout from the server's own environment.
  */
 declare global {
-  interface Window { __COREBASE__?: { apiBase?: string } }
+  interface Window { __STEADHOLD__?: { apiBase?: string } }
 }
 
 export function apiBase(): string {
-  if (typeof window !== 'undefined' && window.__COREBASE__?.apiBase) {
-    return window.__COREBASE__.apiBase.replace(/\/+$/, '');
+  if (typeof window !== 'undefined' && window.__STEADHOLD__?.apiBase) {
+    return window.__STEADHOLD__.apiBase.replace(/\/+$/, '');
   }
   // Server-render fallback. Nothing data-driven renders on the server (D-130),
   // so this is only ever used by code that also runs in the browser.
-  return (process.env.NEXT_PUBLIC_COREBASE_API ?? 'http://localhost:8099').replace(/\/+$/, '');
+  return (process.env.NEXT_PUBLIC_STEADHOLD_API ?? 'http://localhost:8099').replace(/\/+$/, '');
 }
 
 export class ApiError extends Error {
@@ -116,7 +116,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     // than rendering "undefined" into an error card.
     if (cause instanceof DOMException && cause.name === 'AbortError') throw cause;
     throw new ApiError(0, 'NETWORK_UNREACHABLE',
-      'Could not reach the Corebase API. Check that it is running and that this origin is allowed.',
+      'Could not reach the Steadhold API. Check that it is running and that this origin is allowed.',
       null);
   }
 

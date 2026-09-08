@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Row-Level Security is the authorization model of the entire data plane (D-036: no phase where the API serves table data without policies). This doc makes the identity→policy pipeline concrete end to end: how a JWT becomes a Postgres role plus session claims under connection reuse (PostgREST's own pool on the API path, D-101; PgBouncer transaction mode on the pooled direct paths, D-015), the exact DDL of the Corebase helper functions, the default-deny posture, a policy cookbook developers copy from, the performance pitfalls that make naive RLS 100× slower, and the `service_role` bypass mechanism. Everything here must survive connection reuse across requests and remain plain SQL that any Postgres can run (portability, D-004).
+Row-Level Security is the authorization model of the entire data plane (D-036: no phase where the API serves table data without policies). This doc makes the identity→policy pipeline concrete end to end: how a JWT becomes a Postgres role plus session claims under connection reuse (PostgREST's own pool on the API path, D-101; PgBouncer transaction mode on the pooled direct paths, D-015), the exact DDL of the Steadhold helper functions, the default-deny posture, a policy cookbook developers copy from, the performance pitfalls that make naive RLS 100× slower, and the `service_role` bypass mechanism. Everything here must survive connection reuse across requests and remain plain SQL that any Postgres can run (portability, D-004).
 
 ## Design
 
@@ -82,7 +82,7 @@ alter table public.profiles enable row level security;
 alter table public.profiles force row level security;   -- applies even to the table owner
 ```
 
-- Every table created through the dashboard table editor or `corebase` migrations gets both statements automatically (D-083); the enforcement mechanism (DDL event trigger in the project DB vs. lint in `db push` + dashboard) is OQ-082.
+- Every table created through the dashboard table editor or `steadhold` migrations gets both statements automatically (D-083); the enforcement mechanism (DDL event trigger in the project DB vs. lint in `db push` + dashboard) is OQ-082.
 - `FORCE` matters because customer-owned tables are owned by the customer's owner role: without FORCE, owner connections silently bypass RLS and developers test against a lie. With FORCE, the owner sees exactly what policies allow — `service_role` remains the explicit, documented bypass (below).
 - A freshly created table is therefore deny-by-default for every API role: `authenticated` holds grants but zero policies mean zero rows (`[]`), and `anon` holds no table grant at all (D-108, next bullet). Nothing is readable until the developer writes a policy. The dashboard shows a persistent "no policies — API returns no rows" badge rather than treating it as an error, because it is the *safe* state.
 - `GRANT` still gates above RLS (D-108, normative DDL in [api-keys-and-roles](../04-data-api/03-api-keys-and-roles.md)): default privileges grant table-level `SELECT/INSERT/UPDATE/DELETE` to `authenticated` and `service_role` only; **`anon` gets no default table grants** — anonymous access is opt-in via explicit per-table `GRANT` (the dashboard toggle emits it). RLS then filters rows for the roles that do hold grants, and RLS-on-at-creation (D-083, as amended by D-191) keeps the whole arrangement fail-closed. Revoking a grant entirely is the coarse switch for "this table is never API-visible."
@@ -246,7 +246,7 @@ Hard rules, enforced in docs, SDK, and dashboard:
 
 ## Open Questions
 
-- **OQ-082 — Enforcement mechanism for D-083:** a DDL event trigger inside each project database (bulletproof, catches raw psql `CREATE TABLE`, but is platform-magic living in customer DBs and shows up in their dumps) vs. enforcement at the tooling layer (`db push` lint + table editor + a drift alarm scanning `pg_class.relrowsecurity`). Leaning: event trigger + `corebase export` strips it. Decide with [migrations](../03-database-platform/04-migrations.md).
+- **OQ-082 — Enforcement mechanism for D-083:** a DDL event trigger inside each project database (bulletproof, catches raw psql `CREATE TABLE`, but is platform-magic living in customer DBs and shows up in their dumps) vs. enforcement at the tooling layer (`db push` lint + table editor + a drift alarm scanning `pg_class.relrowsecurity`). Leaning: event trigger + `steadhold export` strips it. Decide with [migrations](../03-database-platform/04-migrations.md).
 - **OQ-083 — Custom-claims surface for V1:** do we ship a supported hook for customers to mint claims (e.g. `app_metadata.org_id`) at token issue time, or document the service-role pattern only? Affects [auth architecture](../05-auth/01-auth-architecture.md); pattern 3 above assumes at least the documented path.
 
 ## Dependencies

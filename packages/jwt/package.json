@@ -1,5 +1,5 @@
 {
-  "name": "@corebase/jwt",
+  "name": "@steadhold/jwt",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -11,7 +11,7 @@
   },
   "dependencies": {},
   "devDependencies": {
-    "@corebase/config": "workspace:*",
+    "@steadhold/config": "workspace:*",
     "@types/node": "^22.7.5",
     "typescript": "^5.6.3",
     "vitest": "^2.1.3"

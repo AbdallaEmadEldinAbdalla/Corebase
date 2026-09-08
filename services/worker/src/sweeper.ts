@@ -1,5 +1,5 @@
-import type { Queue } from '@corebase/queue';
-import { enqueueRecovery, type ProvisioningJobData } from '@corebase/queue';
+import type { Queue } from '@steadhold/queue';
+import { enqueueRecovery, type ProvisioningJobData } from '@steadhold/queue';
 import type { JobRepo } from './jobs/repo.ts';
 
 /**

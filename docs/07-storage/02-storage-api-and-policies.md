@@ -8,7 +8,7 @@ The contract of `/storage/v1/*`: the endpoint surface, how authorization is eval
 
 ### 1. Endpoint surface
 
-All endpoints under `https://<ref>.corebase.co/storage/v1`, authenticated like every data-plane request: `apikey` header (anon/service_role JWT, D-029) plus optional user `Authorization: Bearer` (D-014). Errors use the uniform envelope (D-032). Rate limits per D-033.
+All endpoints under `https://<ref>.steadhold.app/storage/v1`, authenticated like every data-plane request: `apikey` header (anon/service_role JWT, D-029) plus optional user `Authorization: Bearer` (D-014). Errors use the uniform envelope (D-032). Rate limits per D-033.
 
 | Method & path | Operation | Notes |
 |---|---|---|
@@ -31,7 +31,7 @@ All endpoints under `https://<ref>.corebase.co/storage/v1`, authenticated like e
 | `POST /object/sign/:bucket/*path` | `createSignedUrl` | Body: `{expires_in}` (seconds, default 3600, max 604800) |
 | `GET /object/sign/:bucket/*path?token=…` | Fetch via signed URL | No `apikey` required — the token is the credential |
 
-Public-bucket reads skip authentication but ride the same origin: `GET /object/public/:bucket/*path` (no `apikey` — full URL `https://<ref>.corebase.co/storage/v1/object/public/<bucket>/<path>`), CDN-cached via a cache rule on that path prefix ([01-storage-architecture.md](01-storage-architecture.md) §5).
+Public-bucket reads skip authentication but ride the same origin: `GET /object/public/:bucket/*path` (no `apikey` — full URL `https://<ref>.steadhold.app/storage/v1/object/public/<bucket>/<path>`), CDN-cached via a cache rule on that path prefix ([01-storage-architecture.md](01-storage-architecture.md) §5).
 
 ### 2. Authorization: RLS on metadata is the permission system
 
@@ -130,14 +130,14 @@ RLS performance notes (per-statement subselects, policy indexing) follow [RLS de
 
 ### 3. Signed URLs
 
-Download signed URLs are **Corebase-HMAC-signed tokens verified by the storage service** — not R2 presigned URLs — so they work through `<ref>.corebase.co`, survive R2 credential rotation, and never expose the physical key layout. (Presigned *upload* URLs from D-122 are the one place raw R2 presigning appears, and those point at R2 directly.)
+Download signed URLs are **Steadhold-HMAC-signed tokens verified by the storage service** — not R2 presigned URLs — so they work through `<ref>.steadhold.app`, survive R2 credential rotation, and never expose the physical key layout. (Presigned *upload* URLs from D-122 are the one place raw R2 presigning appears, and those point at R2 directly.)
 
 **Token contents (signed payload):** `project_ref`, `bucket`, `object path`, `exp` (unix), `kid` (signing-key version), and for signed *uploads* additionally the required `content-type` and max size — so a leaked upload URL cannot be repurposed for a different file shape. Encoding: compact JWS-style `base64url(payload).base64url(HMAC-SHA256(payload))`.
 
 **Key derivation:** each project already has signing material managed under D-014/D-035. Because the JWT keypair is asymmetric (ES256) and these tokens need a cheap symmetric verifier held only by the storage service, the key is derived, not reused:
 
 ```
-storage_signing_key = HKDF-SHA256(ikm = project_master_secret,  info = "corebase/storage/v1",  salt = kid)
+storage_signing_key = HKDF-SHA256(ikm = project_master_secret,  info = "steadhold/storage/v1",  salt = kid)
 ```
 
 with `project_master_secret` an envelope-encrypted per-project secret ([credentials & secrets](../03-database-platform/03-credentials-and-secrets.md)). Rotation = new `kid`; old `kid`s verify until their last possible token expiry (≤ 7 d) then retire. Blast radius stays per-project (same argument as D-014).
@@ -150,7 +150,7 @@ All bucket-config enforcement happens **at the storage service**, the only compo
 
 - **Size:** proxied path — bytes counted as streamed; the stream is aborted (and any partial R2 multipart aborted) the moment `min(bucket.file_size_limit, plan_limit)` is exceeded; nothing is trusted from `Content-Length`. Presigned path — the cap is baked into the presigned policy, and the completion `HEAD` re-checks true size before the row is finalized (violations ⇒ object deleted, upload rejected).
 - **MIME — sniff vs trust:** trusting the declared `Content-Type` is free but lets `evil.exe` upload as `image/png`; full sniffing of every type is a rabbit hole of ambiguous formats. Decision: **verify magic bytes against a known-dangerous set, store the declared type.** The service sniffs the first 512 bytes and rejects the upload if the content matches executable/active signatures (PE `MZ`, ELF, Mach-O, Java class, plus `<script`/`<?php` when the declared type claims an image) or if a bucket's `allowed_mime_types` names an image/media type the magic bytes contradict. Otherwise the declared type is stored and served. Presigned-path uploads get the same sniff at completion time (ranged GET of the first bytes), with rejection deleting the object.
-- **Serving hygiene** (independent of validation): all downloads are served with `X-Content-Type-Options: nosniff`, and `text/html`/`image/svg+xml` are served with `Content-Disposition: attachment` plus a restrictive CSP on public-object responses — stored-XSS via served objects is the actual attack this stack must kill ([platform security](../06-security/04-platform-security.md)). Note the separate-host defense is **unavailable in V1**: public objects serve from the project origin `<ref>.corebase.co` because the dedicated storage host is dropped by the [domain & region model](../01-architecture/04-domain-and-region-model.md) (D-057 — the wildcard covers one label). The forced `nosniff` + attachment-disposition serving is therefore load-bearing, not defense-in-depth; a dedicated storage host returns with the custom-domain/PSL work (OQ-057/OQ-062).
+- **Serving hygiene** (independent of validation): all downloads are served with `X-Content-Type-Options: nosniff`, and `text/html`/`image/svg+xml` are served with `Content-Disposition: attachment` plus a restrictive CSP on public-object responses — stored-XSS via served objects is the actual attack this stack must kill ([platform security](../06-security/04-platform-security.md)). Note the separate-host defense is **unavailable in V1**: public objects serve from the project origin `<ref>.steadhold.app` because the dedicated storage host is dropped by the [domain & region model](../01-architecture/04-domain-and-region-model.md) (D-057 — the wildcard covers one label). The forced `nosniff` + attachment-disposition serving is therefore load-bearing, not defense-in-depth; a dedicated storage host returns with the custom-domain/PSL work (OQ-057/OQ-062).
 
 ### 5. The orphaned-object consistency problem (D-124)
 

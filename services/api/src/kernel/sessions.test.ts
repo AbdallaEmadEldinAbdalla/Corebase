@@ -3,7 +3,7 @@ import {
   createSessionStore, csrfOk, sessionCookie, clearedSessionCookie, readCookie,
   SESSION_COOKIE, IDLE_TTL_SECONDS, ABSOLUTE_TTL_SECONDS, type Session,
 } from './sessions.ts';
-import type { Redis } from '@corebase/queue';
+import type { Redis } from '@steadhold/queue';
 
 /** In-memory Redis double, enough for the session store's surface. */
 function fakeRedis() {
@@ -122,8 +122,8 @@ describe('cookies', () => {
   });
 
   it('reads one cookie out of a header', () => {
-    expect(readCookie('a=1; cb_session=xyz; b=2', SESSION_COOKIE)).toBe('xyz');
-    expect(readCookie('cb_session=xyz', SESSION_COOKIE)).toBe('xyz');
+    expect(readCookie('a=1; sh_session=xyz; b=2', SESSION_COOKIE)).toBe('xyz');
+    expect(readCookie('sh_session=xyz', SESSION_COOKIE)).toBe('xyz');
     expect(readCookie('other=1', SESSION_COOKIE)).toBeUndefined();
     expect(readCookie(undefined, SESSION_COOKIE)).toBeUndefined();
     // A cookie whose name merely ends with ours must not match.

@@ -2,26 +2,26 @@
 
 ## Purpose
 
-Specifies the migration system (proposal §43, D-028): the file format, the tracking table, the precise semantics of `db push` / `db pull` / `db reset` and the V1.1 `db diff`, and — the part every BaaS gets wrong first — what happens when dashboard table-editor changes and local migration files diverge. Plain SQL throughout, because migrations are half the portability story (D-004): a Corebase migrations directory must run against any Postgres.
+Specifies the migration system (proposal §43, D-028): the file format, the tracking table, the precise semantics of `db push` / `db pull` / `db reset` and the V1.1 `db diff`, and — the part every BaaS gets wrong first — what happens when dashboard table-editor changes and local migration files diverge. Plain SQL throughout, because migrations are half the portability story (D-004): a Steadhold migrations directory must run against any Postgres.
 
 ## Design
 
 ### 1. File format
 
 ```
-corebase/                   # scaffolding owned by the CLI spec (corebase init)
+steadhold/                   # scaffolding owned by the CLI spec (steadhold init)
 ├── migrations/
 │   ├── 20260827130000_add_profiles.sql
 │   └── 20260829091500_profiles_rls.sql
 └── seed.sql                # sibling of migrations/ — dev-only, applied by db reset, never by db push
 ```
 
-- Filename: `<UTC timestamp YYYYMMDDHHMMSS>_<snake_case_name>.sql`, created by `corebase migration create <name>`. Timestamp is the version; lexicographic order = application order. Collisions (two developers, same second) are resolved at push time by full-filename ordering and are harmless because push is transactional per file.
+- Filename: `<UTC timestamp YYYYMMDDHHMMSS>_<snake_case_name>.sql`, created by `steadhold migration create <name>`. Timestamp is the version; lexicographic order = application order. Collisions (two developers, same second) are resolved at push time by full-filename ordering and are harmless because push is transactional per file.
 - Content: **plain SQL only** (D-028). No DSL, no up/down pairs in V1 — rollbacks are forward migrations (write the inverse SQL), consistent with the restore-based recovery posture ([backups & PITR](05-backups-and-pitr.md)). Any `psql`-free SQL is legal; `\` meta-commands are not (files are executed via the driver, not psql).
 - One directive comment is recognized:
 
 ```sql
--- corebase:no-transaction
+-- steadhold:no-transaction
 CREATE INDEX CONCURRENTLY idx_posts_author ON posts (author_id);
 ```
 
@@ -29,11 +29,11 @@ for statements that cannot run inside a transaction (`CREATE INDEX CONCURRENTLY`
 
 ### 2. The tracking table
 
-Created in each project database (and each local dev database) on first contact, in a Corebase-owned schema so `db pull` and customer tooling can ignore it cleanly:
+Created in each project database (and each local dev database) on first contact, in a Steadhold-owned schema so `db pull` and customer tooling can ignore it cleanly:
 
 ```sql
-CREATE SCHEMA IF NOT EXISTS corebase_migrations;
-CREATE TABLE corebase_migrations.schema_migrations (
+CREATE SCHEMA IF NOT EXISTS steadhold_migrations;
+CREATE TABLE steadhold_migrations.schema_migrations (
   version        text PRIMARY KEY,      -- '20260827130000'
   name           text NOT NULL,         -- 'add_profiles'
   checksum       text NOT NULL,         -- sha256 of file bytes
@@ -47,11 +47,11 @@ The checksum makes tampering with already-applied files detectable: history is a
 
 ### 3. Command semantics
 
-All remote commands run over `DIRECT_DATABASE_URL` ([pooling §2](02-connection-pooling.md) — DDL through a transaction pooler is asking for trouble), against the linked project (`corebase link`, [CLI spec](../10-cli-and-sdk/01-cli-spec.md)).
+All remote commands run over `DIRECT_DATABASE_URL` ([pooling §2](02-connection-pooling.md) — DDL through a transaction pooler is asking for trouble), against the linked project (`steadhold link`, [CLI spec](../10-cli-and-sdk/01-cli-spec.md)).
 
 **`db push`** — apply pending local migrations to the linked project:
 
-1. Take a session advisory lock (`pg_advisory_lock(hashtext('corebase_db_push'))`) — two concurrent pushes must serialize.
+1. Take a session advisory lock (`pg_advisory_lock(hashtext('steadhold_db_push'))`) — two concurrent pushes must serialize.
 2. Read `schema_migrations`; verify every already-applied version's checksum against the local file. Mismatch ⇒ **abort** with a diff hint (someone edited history).
 3. Compute pending = local files not in the table, ordered by version. A local file *older* than the newest applied version ⇒ warn (out-of-order merge from a branch) and require `--include-out-of-order` to apply it.
 4. Run drift detection (§6). Drift ⇒ warn, require `--force` or a `db pull` reconcile first.
@@ -61,18 +61,18 @@ All remote commands run over `DIRECT_DATABASE_URL` ([pooling §2](02-connection-
 **`db pull`** — introspect the remote schema into a baseline migration:
 
 - Output: one `migrations/<ts>_remote_baseline.sql` (or `_remote_changes.sql` when a baseline exists) containing, in dependency order: extensions (`CREATE EXTENSION`), schemas, types/enums/domains, sequences, tables (columns, defaults, constraints, PKs/FKs), indexes, views/materialized views, functions/procedures/triggers, **RLS enablement and policies** (`ALTER TABLE ... ENABLE ROW LEVEL SECURITY` + `CREATE POLICY ...` from `pg_policies`), grants on the above, comments.
-- Excluded: Corebase-managed schemas (`corebase_migrations`, `auth`, `storage`, `corebase`) — those are platform-owned and versioned by the platform, not the customer ([storage architecture](../07-storage/01-storage-architecture.md), [auth architecture](../05-auth/01-auth-architecture.md)).
+- Excluded: Steadhold-managed schemas (`steadhold_migrations`, `auth`, `storage`, `steadhold`) — those are platform-owned and versioned by the platform, not the customer ([storage architecture](../07-storage/01-storage-architecture.md), [auth architecture](../05-auth/01-auth-architecture.md)).
 - On a fresh pull against a project with applied migrations, pull also writes the remote's `schema_migrations` state into the local project file so push agrees about history.
 
 **`db reset`** — local development only, absolute:
 
-1. Target check: reset refuses to run against anything but the local `corebase dev` stack ([local development](../10-cli-and-sdk/02-local-development.md)). Concretely: the target host must be the compose-project's Postgres container. There is **no flag** that points reset at a linked remote — not `--force`, not `--yes`. Resetting production is done by nobody, ever; recovering production is a restore ([backups & PITR §4](05-backups-and-pitr.md)).
-2. Drop and recreate the local database, re-apply the Corebase base schema, replay all migrations in order, then apply `seed.sql` if present.
+1. Target check: reset refuses to run against anything but the local `steadhold dev` stack ([local development](../10-cli-and-sdk/02-local-development.md)). Concretely: the target host must be the compose-project's Postgres container. There is **no flag** that points reset at a linked remote — not `--force`, not `--yes`. Resetting production is done by nobody, ever; recovering production is a restore ([backups & PITR §4](05-backups-and-pitr.md)).
+2. Drop and recreate the local database, re-apply the Steadhold base schema, replay all migrations in order, then apply `seed.sql` if present.
 
 Worked `db push` output (the contract the CLI implements — errors are the product, §90 spirit):
 
 ```
-$ corebase db push
+$ steadhold db push
 Linked project: acme-prod (proj_8f3k2)
 Verified 12 applied migrations (checksums OK)
 Drift check: clean
@@ -85,7 +85,7 @@ Applying 2 pending migrations over DIRECT_DATABASE_URL:
     request_id: req_01J9XW...
 ```
 
-**CI usage**: `db push` is non-interactive by design (exit codes per the [CLI spec](../10-cli-and-sdk/01-cli-spec.md)'s reserved table, which owns them: 0 success, 1 migration error, 5 refused-by-state — drift or checksum mismatch, distinguished via stderr and the `--json` payload, not the exit code), so `corebase db push` in a deploy pipeline against a staging project, then production, is the recommended promotion flow — with `CI=true` disabling every prompt and never implying `--force`.
+**CI usage**: `db push` is non-interactive by design (exit codes per the [CLI spec](../10-cli-and-sdk/01-cli-spec.md)'s reserved table, which owns them: 0 success, 1 migration error, 5 refused-by-state — drift or checksum mismatch, distinguished via stderr and the `--json` payload, not the exit code), so `steadhold db push` in a deploy pipeline against a staging project, then production, is the recommended promotion flow — with `CI=true` disabling every prompt and never implying `--force`.
 
 **`db diff`** — V1.1 (D-028), shadow-database approach:
 
@@ -103,7 +103,7 @@ Migrations run against live databases behind a 20-connection instance ([provisio
 |---|---|---|
 | Add NOT NULL column | `ADD COLUMN x type NOT NULL DEFAULT ...` on huge tables pre-11 lore; fine on PG17 but teach the general shape | `ADD COLUMN` (with default — PG17 is non-rewriting) → backfill if needed → `SET NOT NULL` |
 | Add constraint | `ADD CONSTRAINT ... CHECK/FK` (full-table scan under lock) | `ADD CONSTRAINT ... NOT VALID` in one migration → `VALIDATE CONSTRAINT` in the next (short lock + concurrent scan) |
-| New index on live table | `CREATE INDEX` (blocks writes) | `-- corebase:no-transaction` + `CREATE INDEX CONCURRENTLY` |
+| New index on live table | `CREATE INDEX` (blocks writes) | `-- steadhold:no-transaction` + `CREATE INDEX CONCURRENTLY` |
 | Rename in production | `ALTER TABLE ... RENAME` breaking deployed app versions | Expand/contract: add new, dual-write in app, migrate reads, drop old in a later migration |
 
 The CLI adds one guardrail: a lint pass before push flags `CREATE INDEX` (non-concurrent) and `VACUUM FULL`/`CLUSTER` on non-empty public tables as warnings — advisory only in V1, never blocking (`--quiet-lint` silences).
@@ -127,7 +127,7 @@ Reality: users click around in the production dashboard, their local `migrations
 
 Mechanism (D-076):
 
-1. **Every** DDL statement in a project database is captured by an event trigger into `corebase_migrations.ddl_log(id, executed_at, username, command_tag, object_identity, ddl_text)` — dashboard, CLI, psql over `DIRECT_DATABASE_URL`, all of it. (Event triggers can't capture every statement's exact text for all command types; where the text is unavailable we log the command tag + object identity — enough for drift *detection* and attribution, with `db pull` as the reconstruction tool.)
+1. **Every** DDL statement in a project database is captured by an event trigger into `steadhold_migrations.ddl_log(id, executed_at, username, command_tag, object_identity, ddl_text)` — dashboard, CLI, psql over `DIRECT_DATABASE_URL`, all of it. (Event triggers can't capture every statement's exact text for all command types; where the text is unavailable we log the command tag + object identity — enough for drift *detection* and attribution, with `db pull` as the reconstruction tool.)
 2. **Drift detection** at `db push` time (§3 step 4): drift = `ddl_log` entries newer than the last applied migration that did not come from a recorded migration or a saved-as-migration dashboard action.
 3. **Reconcile** = `db pull --changes`: emits the drift as a new migration file (introspection-based, so it's correct even where `ddl_text` was partial), marks the log entries reconciled, and push proceeds cleanly.
 4. Dashboard shows a persistent **"unsaved schema changes: N"** badge when the log has unreconciled entries — drift is visible where it's created, not just where it breaks.
@@ -136,7 +136,7 @@ The stance in one line: **the migration history is the source of truth, but the 
 
 ## Decisions
 
-**D-076 — Drift handling: all project DDL is captured via event trigger into `corebase_migrations.ddl_log`; dashboard DDL offers "save as migration" (default-on for linked projects); `db push` performs checksum verification of applied history and refuses on unreconciled drift (override `--force`); `db pull --changes` converts drift into a migration file and marks it reconciled; `db reset` is structurally local-only with no remote override flag.** *(Rationale: forbidding prod dashboard edits kills the first-five-minutes experience while ignoring them silently corrupts the migration story; capture-detect-reconcile keeps migration history authoritative without policing how users touch their own database, and an un-overridable local-only reset removes the single most catastrophic CLI foot-gun.)*
+**D-076 — Drift handling: all project DDL is captured via event trigger into `steadhold_migrations.ddl_log`; dashboard DDL offers "save as migration" (default-on for linked projects); `db push` performs checksum verification of applied history and refuses on unreconciled drift (override `--force`); `db pull --changes` converts drift into a migration file and marks it reconciled; `db reset` is structurally local-only with no remote override flag.** *(Rationale: forbidding prod dashboard edits kills the first-five-minutes experience while ignoring them silently corrupts the migration story; capture-detect-reconcile keeps migration history authoritative without policing how users touch their own database, and an un-overridable local-only reset removes the single most catastrophic CLI foot-gun.)*
 
 (D-028 governs format and command set; D-004 governs the plain-SQL portability constraint. Both implemented here.)
 

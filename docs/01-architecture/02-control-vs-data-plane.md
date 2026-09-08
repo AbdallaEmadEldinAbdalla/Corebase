@@ -8,7 +8,7 @@ Proposal §7–8 and §121 name the split; this doc makes it operational. It fix
 
 ### Definitions
 
-- **Control plane** — the system that manages Corebase itself. Its customers are *developers clicking and CLI-ing*. Its database is control-plane Postgres (D-012). Its truth is **desired state**: which projects should exist, on which node, at which plan, with which keys.
+- **Control plane** — the system that manages Steadhold itself. Its customers are *developers clicking and CLI-ing*. Its database is control-plane Postgres (D-012). Its truth is **desired state**: which projects should exist, on which node, at which plan, with which keys.
 - **Data plane** — the system that serves *the developers' end-users*. Its components are the per-project container triplets (D-009/D-054), the gateway hot path, the auth token endpoints, and the storage read/write path. Its truth is **actual state**: containers that are running, volumes that hold data.
 
 The planes share a repo and (in V1) mostly a process — the monolith hosts both the control-plane module and the gateway/auth/storage-api modules (D-010, D-020). The split is therefore a **data-coupling discipline**, not a deployment diagram: no data-plane request path may read control-plane Postgres synchronously. That discipline is what makes the later physical split (see [split triggers](05-repo-and-service-layout.md)) a deploy change instead of a rewrite.
@@ -85,7 +85,7 @@ The contract: **the data plane keeps serving customer traffic.**
 | End-user JWT verification | ✅ | same: asymmetric keys, JWKS material cached at the verifier |
 | End-user login / refresh (`/auth/v1/*`) | ✅* | user rows are in the *project* DB; signing key must be in the auth module's decrypted-key cache. *Cold cache after a monolith restart during the outage → fails (OQ-054) |
 | Storage down/upload | ✅ | metadata in project PG, bytes in R2; bucket config cached with routing entry |
-| Direct SQL (`psql` to pooler/5432) | ✅ | never touches Corebase software at all |
+| Direct SQL (`psql` to pooler/5432) | ✅ | never touches Steadhold software at all |
 | Rate limiting | ✅ | Redis-backed, control plane not involved (degraded-open if Redis is also down — see [platform security](../06-security/04-platform-security.md)) |
 | Backups / WAL archiving | ✅ | pgBackRest runs autonomously on data nodes (D-019) |
 | Dashboard: sign-in, project list, settings | ❌ | these *are* the control plane |

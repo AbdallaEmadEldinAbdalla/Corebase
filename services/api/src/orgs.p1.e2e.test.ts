@@ -17,8 +17,8 @@ import { createPgStore, ensureBootstrapOrg } from './modules/control-plane/store
  * surface. Everything above it is the individual rule it depends on, so a failure
  * points at a rule rather than at "permissions are broken".
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
 const PASSWORD = 'a-perfectly-fine-password';
 
 let pool: Pool; let up = false; let reason = '';
@@ -62,7 +62,7 @@ const t = (n: string, fn: () => Promise<void>, ms = 40_000) =>
   }, ms);
 
 let seq = 0;
-const email = () => `p1d-${Date.now()}-${++seq}@corebase.test`;
+const email = () => `p1d-${Date.now()}-${++seq}@steadhold.test`;
 const slug = () => `p1d-${Date.now()}-${++seq}`.toLowerCase().slice(0, 40);
 
 /** A signed-in account: the headers to act as them. */
@@ -75,7 +75,7 @@ async function account(): Promise<Who> {
   const body = res.json() as { user: { id: string }; csrf_token: string };
   return {
     userId: body.user.id, email: addr, csrf: body.csrf_token,
-    cookie: /cb_session=([^;]+)/.exec(String(res.headers['set-cookie']))![1]!,
+    cookie: /sh_session=([^;]+)/.exec(String(res.headers['set-cookie']))![1]!,
   };
 }
 

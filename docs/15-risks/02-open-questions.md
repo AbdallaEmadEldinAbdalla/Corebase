@@ -31,7 +31,7 @@ Everything the corpus deliberately leaves unresolved, in one place. Each OQ live
 
 | ID | Question (one line) | Owning doc | Decide by |
 |---|---|---|---|
-| OQ-001 | Name/domain availability check for `corebase.com` / `corebase.co` — commercial task outside the corpus | [vision & principles](../00-foundation/01-vision-and-principles.md) | before public launch (with OQ-099) |
+| OQ-001 | Name/domain availability check for `steadhold.dev` / `steadhold.app` — commercial task outside the corpus | [vision & principles](../00-foundation/01-vision-and-principles.md) | before public launch (with OQ-099) |
 | OQ-002 | Publicly benchmark provisioning time vs incumbents at launch? (measurable claim must stay true forever) | [competitive analysis](../00-foundation/02-competitive-analysis.md) | launch marketing planning |
 
 ### OQ-050–064 — Architecture
@@ -50,9 +50,9 @@ Everything the corpus deliberately leaves unresolved, in one place. Each OQ live
 | OQ-059 | Dashboard deploys to Cloudflare Pages or rides the app node behind Caddy? | [system architecture](../01-architecture/01-system-architecture.md) | Phase 7 kickoff (dashboard IA) |
 | OQ-060 | Reconciler concurrency limit per node, so a repair storm can't saturate a node and harm healthy tenants | [control vs data plane](../01-architecture/02-control-vs-data-plane.md) | Phase 2 (reconciler build) |
 | OQ-061 | Free-plan CPU: weight-only (bursty, fair-ish) vs hard `cpu.max` quota (predictable, feels slow)? | [multi-tenancy & isolation](../01-architecture/03-multi-tenancy-and-isolation.md) | Phase 2 provisioning |
-| OQ-062 | Submit `corebase.co` to the Public Suffix List once tenant-served HTML exists, to hard-isolate cookies? | [domain & region model](../01-architecture/04-domain-and-region-model.md) | when storage-served HTML ships |
+| OQ-062 | Submit `steadhold.app` to the Public Suffix List once tenant-served HTML exists, to hard-isolate cookies? | [domain & region model](../01-architecture/04-domain-and-region-model.md) | when storage-served HTML ships |
 | OQ-063 | Base-schema upgrades for already-provisioned projects: reconciler-applied versioned migrations vs explicit fleet jobs | [repo & service layout](../01-architecture/05-repo-and-service-layout.md) | Phase 2 |
-| OQ-064 | Does `apps/docs` ship at V1 as a real app or stub content on `corebase.com`? | [repo & service layout](../01-architecture/05-repo-and-service-layout.md) | V1 cut-list review |
+| OQ-064 | Does `apps/docs` ship at V1 as a real app or stub content on `steadhold.dev`? | [repo & service layout](../01-architecture/05-repo-and-service-layout.md) | V1 cut-list review |
 
 ### OQ-040–048, 065–069 — Control plane
 
@@ -67,7 +67,7 @@ Everything the corpus deliberately leaves unresolved, in one place. Each OQ live
 | OQ-046 | Customer audit export: dashboard NDJSON enough, or SIEM streaming (webhook/S3 push)? | [audit & admin access](../02-control-plane/05-audit-and-admin-access.md) | deferred until asked twice |
 | OQ-047 | JIT support access to a *paused* project: force a resume, or operate on the volume offline? | [audit & admin access](../02-control-plane/05-audit-and-admin-access.md) | before private beta, with pause internals |
 | OQ-048 | JIT approval surface: admin area of the main dashboard vs a separate operator tool | [audit & admin access](../02-control-plane/05-audit-and-admin-access.md) | Phase 1, with repo layout |
-| OQ-065 | PAT lifetime: indefinite with revocation vs forced 90-day expiry with refresh via `corebase login` | [platform API](../02-control-plane/02-platform-api.md) | before CLI ships (Phase 8) |
+| OQ-065 | PAT lifetime: indefinite with revocation vs forced 90-day expiry with refresh via `steadhold login` | [platform API](../02-control-plane/02-platform-api.md) | before CLI ships (Phase 8) |
 | OQ-066 | Paused-project RAM reservation — **Closed by D-072/D-174**: released; paused projects book 0 RAM (the pause economics depend on it) | [provisioning state machine](../02-control-plane/03-provisioning-state-machine.md) | closed |
 | OQ-067 | Resume-on-first-request UX — **Closed by D-172**: immediate 503 + `Retry-After: 5`, `project_resuming`; no hold, no interstitial page in V1 | [provisioning state machine](../02-control-plane/03-provisioning-state-machine.md) | closed |
 | OQ-068 | Auto-retry out of FAILED: 3 re-enqueues then dashboard `failed` + retry button — confirm with UX | [provisioning state machine](../02-control-plane/03-provisioning-state-machine.md) | Phase 7 |
@@ -119,7 +119,7 @@ Everything the corpus deliberately leaves unresolved, in one place. Each OQ live
 | OQ-096 | Phishing scan of subdomains/storage: build the daily crawl in-house vs vendor (Safe Browsing + URL-scan API) | [abuse prevention](../12-business/03-abuse-prevention.md) | spike before public launch |
 | OQ-097 | Which jurisdictions' LE-request, DMCA, CSAM obligations bind an eu-central platform with global users; minimum ToS/AUP | [abuse prevention](../12-business/03-abuse-prevention.md) | counsel before launch |
 | OQ-098 | Device fingerprinting for the friction ladder: build vs buy (GDPR review) vs skip until farming is observed | [abuse prevention](../12-business/03-abuse-prevention.md) | when farming is observed |
-| OQ-099 | Is "Corebase" registrable in EU/US software classes, or does a conflict force a rename? | [open-source strategy](../12-business/04-open-source-strategy.md) | before public launch |
+| OQ-099 | Is "Steadhold" registrable in EU/US software classes, or does a conflict force a rename? | [open-source strategy](../12-business/04-open-source-strategy.md) | before public launch |
 | OQ-106 | FSL vs AGPL final call at opening time (D-034 provisional) — re-evaluate against the 2027+ landscape | [open-source strategy](../12-business/04-open-source-strategy.md) | at source-opening trigger |
 | OQ-107 | Publish this planning corpus (radical-transparency marketing) or keep it internal (competitors read the cost model)? | [open-source strategy](../12-business/04-open-source-strategy.md) | before launch marketing |
 
@@ -138,7 +138,7 @@ Everything the corpus deliberately leaves unresolved, in one place. Each OQ live
 
 | ID | Question (one line) | Owning doc | Decide by |
 |---|---|---|---|
-| OQ-110 | Auth → project DB via the shared PgBouncer (lean, reserved `corebase_auth` role) vs a tiny dedicated direct pool | [auth architecture](../05-auth/01-auth-architecture.md) | Phase 4, with pooling load numbers |
+| OQ-110 | Auth → project DB via the shared PgBouncer (lean, reserved `steadhold_auth` role) vs a tiny dedicated direct pool | [auth architecture](../05-auth/01-auth-architecture.md) | Phase 4, with pooling load numbers |
 | OQ-111 | Per-project auth config: dedicated control-plane table vs rows in `project_settings` | [auth architecture](../05-auth/01-auth-architecture.md) | before dashboard auth pages (Phase 4) |
 | OQ-112 | Rotated-key pickup in PostgREST (SIGUSR2 reload vs container restart) and measured p99 of a strict-mode Redis check | [sessions & tokens](../05-auth/02-sessions-and-tokens.md) | Phase 4–5 |
 | OQ-113 | Absolute session lifetime ("force re-login every N days") as per-project config | [sessions & tokens](../05-auth/02-sessions-and-tokens.md) | V1.x |
@@ -190,7 +190,7 @@ Everything the corpus deliberately leaves unresolved, in one place. Each OQ live
 
 | ID | Question (one line) | Owning doc | Decide by |
 |---|---|---|---|
-| OQ-135 | `corebase import` (re-import counterpart to export): V1.1 candidate or documented-manual-only via `REIMPORT.md`? | [CLI spec](../10-cli-and-sdk/01-cli-spec.md) | V1.1 planning |
+| OQ-135 | `steadhold import` (re-import counterpart to export): V1.1 candidate or documented-manual-only via `REIMPORT.md`? | [CLI spec](../10-cli-and-sdk/01-cli-spec.md) | V1.1 planning |
 | OQ-136 | Steer CI users to read-scoped PATs for verification-only pipelines, and does that need a `--scope` flag on `login --token`? | [CLI spec](../10-cli-and-sdk/01-cli-spec.md) | Phase 8 |
 | OQ-137 | Podman / Colima / OrbStack: test and claim a support matrix, or "Docker only" for V1? | [local development](../10-cli-and-sdk/02-local-development.md) | Phase 8 |
 | OQ-138 | Dev profiles between `--db-only` and the full stack (e.g. db+auth): real demand or flag creep? | [local development](../10-cli-and-sdk/02-local-development.md) | deferred until asked twice |
@@ -208,9 +208,9 @@ Everything the corpus deliberately leaves unresolved, in one place. Each OQ live
 | OQ-144 | WireGuard mesh module: pre-build in Phase B, or on the first dedicated-node / second-location need? | [IaC & CI/CD](../11-infrastructure/02-iac-and-cicd.md) | Phase B or first dedicated node |
 | OQ-145 | Ephemeral second staging data node per e2e run vs a standing one (~€29/mo): cost vs ~2 min boot latency — ephemeral confirmed for *drills* by D-175; e2e-run substrate still open | [IaC & CI/CD](../11-infrastructure/02-iac-and-cicd.md) | start ephemeral; revisit on e2e flakes |
 | OQ-146 | Paging delivery: self-hosted Alertmanager→Twilio/ntfy vs a free-tier incident tool (Grafana OnCall OSS) | [observability](../11-infrastructure/03-observability.md) | before first paying customer |
-| OQ-147 | `corebase_monitor` exact grants, and is it filtered from customer-visible `pg_stat_activity` views? | [observability](../11-infrastructure/03-observability.md) | at monitoring rollout (Phase 2–3) |
+| OQ-147 | `steadhold_monitor` exact grants, and is it filtered from customer-visible `pg_stat_activity` views? | [observability](../11-infrastructure/03-observability.md) | at monitoring rollout (Phase 2–3) |
 | OQ-148 | remote_write the alert-critical series to a tiny secondary so a mon-1 loss doesn't blind on-call mid-incident? | [observability](../11-infrastructure/03-observability.md) | before GA |
-| OQ-157 | Status-page/paging vendor (with OQ-146): one incident vendor or two, and does `status.corebase.co` need non-Cloudflare DNS? | [disaster recovery](../11-infrastructure/04-disaster-recovery.md) | before first paying customer |
+| OQ-157 | Status-page/paging vendor (with OQ-146): one incident vendor or two, and does `status.steadhold.app` need non-Cloudflare DNS? | [disaster recovery](../11-infrastructure/04-disaster-recovery.md) | before first paying customer |
 | OQ-158 | Measured parallel restore rate per target node — the real bound on D-148's <60 min RTO (interacts with OQ-060 caps) | [disaster recovery](../11-infrastructure/04-disaster-recovery.md) | first quarterly node-loss drill |
 | OQ-159 | Region-loss refinements: pre-scripted `envs/dr/` vs documented-only; paid-tier storage-object second copies; publish paid-first restore priority? | [disaster recovery](../11-infrastructure/04-disaster-recovery.md) | with OQ-078, before V2 multi-region |
 

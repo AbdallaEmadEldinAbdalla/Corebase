@@ -14,7 +14,7 @@ export function ThemeToggle() {
 
   useEffect(() => {
     const stored = (() => {
-      try { return localStorage.getItem('cb-theme'); } catch { return null; }
+      try { return localStorage.getItem('sh-theme'); } catch { return null; }
     })();
     setChoice(stored === 'dark' || stored === 'light' ? stored : 'system');
   }, []);
@@ -23,8 +23,8 @@ export function ThemeToggle() {
     setChoice(next);
     const root = document.documentElement;
     try {
-      if (next === 'system') { localStorage.removeItem('cb-theme'); root.removeAttribute('data-theme'); }
-      else { localStorage.setItem('cb-theme', next); root.setAttribute('data-theme', next); }
+      if (next === 'system') { localStorage.removeItem('sh-theme'); root.removeAttribute('data-theme'); }
+      else { localStorage.setItem('sh-theme', next); root.setAttribute('data-theme', next); }
     } catch { /* private mode: the class still applies for this page */ }
   };
 
@@ -32,7 +32,7 @@ export function ThemeToggle() {
   const label = choice === 'system' ? 'System' : choice === 'dark' ? 'Dark' : 'Light';
 
   return (
-    <button type="button" className="cb-btn cb-btn--ghost cb-btn--sm"
+    <button type="button" className="sh-btn sh-btn--ghost sh-btn--sm"
             onClick={() => apply(next)}
             aria-label={`Theme: ${label}. Switch to ${next}.`}>
       {label}

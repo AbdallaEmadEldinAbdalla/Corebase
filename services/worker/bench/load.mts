@@ -26,7 +26,7 @@
  *     difference between two arms of the same interleaved run on the same box.
  *     That difference is a property of the code.
  *   - **Hardware-dependent, and therefore reported**: the absolute p50 and p99
- *     against the doc's numbers. Enforced only under `CB_LOAD_STRICT=1`, which is
+ *     against the doc's numbers. Enforced only under `SH_LOAD_STRICT=1`, which is
  *     what a production-shaped node would set.
  *
  * OQ-151 asked when the k6 suite stops being record-only. The answer is now for
@@ -44,56 +44,56 @@ import { appDatabaseUrl, backupStoreEnv, bootstrapOrgId } from './staging-env.mt
 
 const run = promisify(execFile);
 const ROOT = resolve(import.meta.dirname, '../../..');
-const PORT = Number(process.env.CB_LOAD_API_PORT ?? 8097);
+const PORT = Number(process.env.SH_LOAD_API_PORT ?? 8097);
 const TOKEN = 'load-token-harness-token-long-enough-for-the-boot-check';
-const VUS = process.env.CB_LOAD_VUS ?? '10';
-const DURATION = process.env.CB_LOAD_DURATION ?? '30s';
-const STRICT = process.env.CB_LOAD_STRICT === '1';
-const DOMAIN = 'corebase.test';
+const VUS = process.env.SH_LOAD_VUS ?? '10';
+const DURATION = process.env.SH_LOAD_DURATION ?? '30s';
+const STRICT = process.env.SH_LOAD_STRICT === '1';
+const DOMAIN = 'steadhold.test';
 const OWNER = '11111111-1111-4111-8111-111111111111';
 const OTHER = '22222222-2222-4222-8222-222222222222';
-const OUT_DIR = process.env.CB_LOAD_OUT ?? join(ROOT, 'docs/14-roadmap/measurements');
+const OUT_DIR = process.env.SH_LOAD_OUT ?? join(ROOT, 'docs/14-roadmap/measurements');
 
 const backupEnv = backupStoreEnv(ROOT);
-if (!backupEnv['CB_BACKUP_S3_ENDPOINT']) {
+if (!backupEnv['SH_BACKUP_S3_ENDPOINT']) {
   throw new Error(
     'no object-store settings at infra/docker/staging/backup-store.env — '
     + 'run ./scripts/staging.sh backup-store. This harness provisions a project, '
-    + 'and provisioning requires a backup repo (CB_REQUIRE_BACKUPS).');
+    + 'and provisioning requires a backup repo (SH_REQUIRE_BACKUPS).');
 }
 
 const env = {
   ...backupEnv,
   ...process.env,
-  CB_CONTROL_DATABASE_URL: appDatabaseUrl(ROOT),
-  CB_REDIS_URL: process.env.CB_REDIS_URL ?? 'redis://127.0.0.1:56379',
-  CB_DOCKER_HOST: process.env.CB_DOCKER_HOST ?? '127.0.0.1',
-  CB_DOCKER_PORT: process.env.CB_DOCKER_PORT ?? '2376',
-  CB_DOCKER_CERT_DIR: process.env.CB_DOCKER_CERT_DIR ?? join(ROOT, 'infra/docker/staging/certs'),
-  CB_KEK_DIR: process.env.CB_KEK_DIR ?? join(ROOT, 'infra/docker/staging/kek.d'),
-  CB_BOOTSTRAP_SECRET: process.env.CB_BOOTSTRAP_SECRET ?? 'load-bootstrap-secret-0123456789',
+  SH_CONTROL_DATABASE_URL: appDatabaseUrl(ROOT),
+  SH_REDIS_URL: process.env.SH_REDIS_URL ?? 'redis://127.0.0.1:56379',
+  SH_DOCKER_HOST: process.env.SH_DOCKER_HOST ?? '127.0.0.1',
+  SH_DOCKER_PORT: process.env.SH_DOCKER_PORT ?? '2376',
+  SH_DOCKER_CERT_DIR: process.env.SH_DOCKER_CERT_DIR ?? join(ROOT, 'infra/docker/staging/certs'),
+  SH_KEK_DIR: process.env.SH_KEK_DIR ?? join(ROOT, 'infra/docker/staging/kek.d'),
+  SH_BOOTSTRAP_SECRET: process.env.SH_BOOTSTRAP_SECRET ?? 'load-bootstrap-secret-0123456789',
   // The gateway resolves a project from the Host header, so the domain here and
   // the Host k6 sends must agree or every request is a 404 that looks like a
   // broken route rather than a mismatched setting.
-  CB_PROJECT_DOMAIN: DOMAIN,
-  // CB_JWT_ISSUER is deliberately **not** set. The worker falls back to
+  SH_PROJECT_DOMAIN: DOMAIN,
+  // SH_JWT_ISSUER is deliberately **not** set. The worker falls back to
   // `https://<ref>.<domain>` per project, which is exactly what the gateway
   // checks (D-319, and P5e's issuer check). Setting it to a flat
-  // `https://corebase.test` mints every project's keys under an issuer no
+  // `https://steadhold.test` mints every project's keys under an issuer no
   // project's gateway will accept, and the entire run comes back 403 — which is
   // how the first version of this harness produced a beautiful 0.9 ms p50 that
   // was measuring the latency of a rejection.
-  CB_NODE_RAM_MB: process.env.CB_NODE_RAM_MB ?? '16384',
-  CB_NODE_HOSTNAME: process.env.CB_NODE_HOSTNAME ?? 'data-1',
-  CB_STATIC_TOKEN: TOKEN,
+  SH_NODE_RAM_MB: process.env.SH_NODE_RAM_MB ?? '16384',
+  SH_NODE_HOSTNAME: process.env.SH_NODE_HOSTNAME ?? 'data-1',
+  SH_STATIC_TOKEN: TOKEN,
   PORT: String(PORT),
-  CB_METRICS_PORT: process.env.CB_METRICS_PORT ?? '9112',
+  SH_METRICS_PORT: process.env.SH_METRICS_PORT ?? '9112',
   // The rate limiter must not be what this measures. The gateway's buckets are
   // P5c's concern and a 429 mid-run would show up as a latency cliff and an error
   // rate, i.e. as a performance regression that is nothing of the kind.
-  CB_GW_IP_RPS: '1000000',
-  CB_GW_KEY_RPS: '1000000',
-  CB_GW_PROJECT_RPS: '1000000',
+  SH_GW_IP_RPS: '1000000',
+  SH_GW_KEY_RPS: '1000000',
+  SH_GW_PROJECT_RPS: '1000000',
 };
 
 const children: ChildProcess[] = [];
@@ -203,9 +203,9 @@ async function seed(control: Pool, projectId: string): Promise<void> {
 }
 
 async function postgresPassword(control: Pool, projectId: string): Promise<string> {
-  const { createSecretStore, SECRET_NAMES } = await import('@corebase/secrets');
-  const { createEnvelope } = await import('@corebase/crypto');
-  const secrets = createSecretStore(control, createEnvelope({ kekDir: env.CB_KEK_DIR! }));
+  const { createSecretStore, SECRET_NAMES } = await import('@steadhold/secrets');
+  const { createEnvelope } = await import('@steadhold/crypto');
+  const secrets = createSecretStore(control, createEnvelope({ kekDir: env.SH_KEK_DIR! }));
   const pw = await secrets.get(projectId, SECRET_NAMES.postgres);
   if (!pw) throw new Error('the project has no stored postgres password');
   return pw;
@@ -213,10 +213,10 @@ async function postgresPassword(control: Pool, projectId: string): Promise<strin
 
 /** A user token signed by the project's own key — what a real session carries. */
 async function userToken(control: Pool, projectId: string, ref: string): Promise<string> {
-  const { createSecretStore, SECRET_NAMES } = await import('@corebase/secrets');
-  const { createEnvelope } = await import('@corebase/crypto');
-  const { sign } = await import('@corebase/jwt');
-  const secrets = createSecretStore(control, createEnvelope({ kekDir: env.CB_KEK_DIR! }));
+  const { createSecretStore, SECRET_NAMES } = await import('@steadhold/secrets');
+  const { createEnvelope } = await import('@steadhold/crypto');
+  const { sign } = await import('@steadhold/jwt');
+  const secrets = createSecretStore(control, createEnvelope({ kekDir: env.SH_KEK_DIR! }));
   const [priv, kid] = await Promise.all([
     secrets.get(projectId, SECRET_NAMES.jwtPrivateKey),
     secrets.get(projectId, SECRET_NAMES.jwtKid),
@@ -385,7 +385,7 @@ async function main(): Promise<void> {
   const detail = await pollReady(ref);
   // A Pool rather than a Client: the secret store takes one, and a cast would be
   // a lie about a type that has real methods behind it.
-  const control = new Pool({ connectionString: env.CB_CONTROL_DATABASE_URL, max: 4 });
+  const control = new Pool({ connectionString: env.SH_CONTROL_DATABASE_URL, max: 4 });
   const { rows } = await control.query<{ id: string; postgrest_port: number }>(
     `select p.id, d.postgrest_port from projects p
        join project_databases d on d.project_id = p.id where p.ref = $1`, [ref]);
@@ -396,23 +396,23 @@ async function main(): Promise<void> {
   console.log('▸ seeding 4000 rows behind an RLS policy');
   await seed(control, projectId);
 
-  const { createSecretStore, SECRET_NAMES } = await import('@corebase/secrets');
-  const { createEnvelope } = await import('@corebase/crypto');
-  const secrets = createSecretStore(control, createEnvelope({ kekDir: env.CB_KEK_DIR! }));
+  const { createSecretStore, SECRET_NAMES } = await import('@steadhold/secrets');
+  const { createEnvelope } = await import('@steadhold/crypto');
+  const secrets = createSecretStore(control, createEnvelope({ kekDir: env.SH_KEK_DIR! }));
   const anon = (await secrets.get(projectId, SECRET_NAMES.anonKey))!;
   const service = (await secrets.get(projectId, SECRET_NAMES.serviceRoleKey))!;
   const user = await userToken(control, projectId, ref);
 
   const shared = {
-    CB_LOAD_BASE_URL: `http://${hostFromContainer}:${PORT}`,
-    CB_LOAD_DIRECT_URL: `http://${hostFromContainer}:${postgrestPort}`,
-    CB_LOAD_HOST: `${ref}.${DOMAIN}`,
-    CB_LOAD_ANON_KEY: anon,
-    CB_LOAD_SERVICE_KEY: service,
-    CB_LOAD_USER_TOKEN: user,
-    CB_LOAD_OWNER: OWNER,
-    CB_LOAD_VUS: VUS,
-    CB_LOAD_DURATION: DURATION,
+    SH_LOAD_BASE_URL: `http://${hostFromContainer}:${PORT}`,
+    SH_LOAD_DIRECT_URL: `http://${hostFromContainer}:${postgrestPort}`,
+    SH_LOAD_HOST: `${ref}.${DOMAIN}`,
+    SH_LOAD_ANON_KEY: anon,
+    SH_LOAD_SERVICE_KEY: service,
+    SH_LOAD_USER_TOKEN: user,
+    SH_LOAD_OWNER: OWNER,
+    SH_LOAD_VUS: VUS,
+    SH_LOAD_DURATION: DURATION,
   };
 
   // ── preflight ──────────────────────────────────────────────────────────────
@@ -454,7 +454,7 @@ async function main(): Promise<void> {
   // beside it so the queuing cost is visible rather than blamed on the code.
   console.log('▸ k6: gateway overhead A/B (1 VU — per-request cost)');
   const abSerial = await k6('gateway-overhead.js',
-    { ...shared, CB_LOAD_VUS: '1', CB_LOAD_DURATION: '15s' });
+    { ...shared, SH_LOAD_VUS: '1', SH_LOAD_DURATION: '15s' });
 
   console.log(`▸ k6: gateway overhead A/B (${VUS} VUs — with queuing)`);
   const ab = await k6('gateway-overhead.js', shared);
@@ -462,23 +462,23 @@ async function main(): Promise<void> {
   await control.end();
 
   // ── the verdict ────────────────────────────────────────────────────────────
-  const readP50 = val(smoke, 'cb_read_latency', 'p(50)');
-  const readP99 = val(smoke, 'cb_read_latency', 'p(99)');
-  const writeP50 = val(smoke, 'cb_write_latency', 'p(50)');
-  const writeP99 = val(smoke, 'cb_write_latency', 'p(99)');
+  const readP50 = val(smoke, 'sh_read_latency', 'p(50)');
+  const readP99 = val(smoke, 'sh_read_latency', 'p(99)');
+  const writeP50 = val(smoke, 'sh_write_latency', 'p(50)');
+  const writeP99 = val(smoke, 'sh_write_latency', 'p(99)');
   // `http_req_failed` is a Rate, and its summary field is `value`, not `rate`.
   const errorRate = val(smoke, 'http_req_failed', 'value') ?? 1;
-  const rlsRate = val(smoke, 'cb_rls_correct', 'value') ?? 0;
+  const rlsRate = val(smoke, 'sh_rls_correct', 'value') ?? 0;
   const reqs = val(smoke, 'http_reqs', 'count') ?? 0;
 
-  const sDirect = val(abSerial, 'cb_direct_latency', 'p(50)') ?? 0;
-  const sGateway = val(abSerial, 'cb_gateway_latency', 'p(50)') ?? 0;
+  const sDirect = val(abSerial, 'sh_direct_latency', 'p(50)') ?? 0;
+  const sGateway = val(abSerial, 'sh_gateway_latency', 'p(50)') ?? 0;
   const serialOverhead = sGateway - sDirect;
 
-  const directP50 = val(ab, 'cb_direct_latency', 'p(50)') ?? 0;
-  const gatewayP50 = val(ab, 'cb_gateway_latency', 'p(50)') ?? 0;
-  const directP99 = val(ab, 'cb_direct_latency', 'p(99)') ?? 0;
-  const gatewayP99 = val(ab, 'cb_gateway_latency', 'p(99)') ?? 0;
+  const directP50 = val(ab, 'sh_direct_latency', 'p(50)') ?? 0;
+  const gatewayP50 = val(ab, 'sh_gateway_latency', 'p(50)') ?? 0;
+  const directP99 = val(ab, 'sh_direct_latency', 'p(99)') ?? 0;
+  const gatewayP99 = val(ab, 'sh_gateway_latency', 'p(99)') ?? 0;
   const overheadP50 = gatewayP50 - directP50;
   const overheadP99 = gatewayP99 - directP99;
 
@@ -526,7 +526,7 @@ async function main(): Promise<void> {
   // figure describes. The concurrent delta is reported, not enforced: it is
   // dominated by how many VUs are aimed at a single-threaded process, so
   // enforcing it would be enforcing a property of the load generator.
-  const overheadBudget = Number(process.env.CB_LOAD_OVERHEAD_P50_MS ?? (STRICT ? 1.5 : 3));
+  const overheadBudget = Number(process.env.SH_LOAD_OVERHEAD_P50_MS ?? (STRICT ? 1.5 : 3));
   if (serialOverhead > overheadBudget) {
     failures.push(`the gateway adds ${serialOverhead.toFixed(2)} ms per request at p50, over `
       + `the ${overheadBudget} ms budget — D-016 says it must stay cheap enough that nobody `
@@ -542,7 +542,7 @@ async function main(): Promise<void> {
     else {
       console.log('\n  ⚠ absolute budget not met, reported and not blocking:');
       for (const a of absolute) console.log(`      ${a}`);
-      console.log('      Absolute latency is hardware. Set CB_LOAD_STRICT=1 on a');
+      console.log('      Absolute latency is hardware. Set SH_LOAD_STRICT=1 on a');
       console.log('      production-shaped node to make these block (D-388).');
     }
   }

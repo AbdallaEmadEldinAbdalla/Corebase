@@ -49,18 +49,18 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
 
       {/* In progress renders as progress, never as an error (§6). */}
       {settling ? (
-        <div className="cb-banner cb-banner--info" role="status" style={{ marginBottom: 'var(--cb-space-5)' }}>
-          <span className="cb-banner__icon" aria-hidden="true">
+        <div className="sh-banner sh-banner--info" role="status" style={{ marginBottom: 'var(--sh-space-5)' }}>
+          <span className="sh-banner__icon" aria-hidden="true">
             <svg viewBox="0 0 12 12"><path d="M6 2v4l3 2" /></svg>
           </span>
-          <div className="cb-banner__body">
-            <div className="cb-banner__title">
+          <div className="sh-banner__body">
+            <div className="sh-banner__title">
               {p?.status === 'resuming' ? 'Resuming this project'
                 : p?.status === 'deleting' ? 'Deleting this project'
                 : p?.status === 'restoring' ? 'Restoring to a point in time'
                 : 'Setting up your database'}
             </div>
-            <div className="cb-banner__text">
+            <div className="sh-banner__text">
               {p?.status === 'restoring'
                 // A restore is not a create, and the create copy is actively
                 // alarming here: someone recovering data does not want to read
@@ -72,22 +72,22 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
             {/* Indeterminate, because nothing here knows a percentage. The bar was
                 a fixed 55% fill, which is a number on screen that is not real
                 (§8 Q19) and reads as stuck rather than as working. */}
-            <div className="cb-progress cb-progress--indeterminate"
-                 style={{ marginTop: 'var(--cb-space-3)' }}>
-              <div className="cb-progress__fill" />
+            <div className="sh-progress sh-progress--indeterminate"
+                 style={{ marginTop: 'var(--sh-space-3)' }}>
+              <div className="sh-progress__fill" />
             </div>
           </div>
         </div>
       ) : null}
 
       {p?.status === 'failed' ? (
-        <div className="cb-banner cb-banner--error" role="alert" style={{ marginBottom: 'var(--cb-space-5)' }}>
-          <span className="cb-banner__icon" aria-hidden="true">
+        <div className="sh-banner sh-banner--error" role="alert" style={{ marginBottom: 'var(--sh-space-5)' }}>
+          <span className="sh-banner__icon" aria-hidden="true">
             <svg viewBox="0 0 12 12"><path d="M2 2 10 10M10 2 2 10" /></svg>
           </span>
-          <div className="cb-banner__body">
-            <div className="cb-banner__title">Provisioning failed</div>
-            <div className="cb-banner__text">
+          <div className="sh-banner__body">
+            <div className="sh-banner__title">Provisioning failed</div>
+            <div className="sh-banner__text">
               Nothing was charged. The control plane retries on its own; if it stays failed,
               quote <code className="mono">{ref}</code> to support.
             </div>
@@ -101,13 +101,13 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
           the original is still serving — two live databases and nothing that can
           reconcile them afterwards. */}
       {p?.status === 'restored' ? (
-        <div className="cb-banner cb-banner--warning" role="status" style={{ marginBottom: 'var(--cb-space-5)' }}>
-          <span className="cb-banner__icon" aria-hidden="true">
+        <div className="sh-banner sh-banner--warning" role="status" style={{ marginBottom: 'var(--sh-space-5)' }}>
+          <span className="sh-banner__icon" aria-hidden="true">
             <svg viewBox="0 0 12 12"><path d="M6 2v5M6 9v1" /></svg>
           </span>
-          <div className="cb-banner__body">
-            <div className="cb-banner__title">This is a restored copy, not your live project</div>
-            <div className="cb-banner__text">
+          <div className="sh-banner__body">
+            <div className="sh-banner__title">This is a restored copy, not your live project</div>
+            <div className="sh-banner__text">
               It holds your data as of{' '}
               {q.data?.restore?.target_time
                 ? new Date(q.data.restore.target_time).toLocaleString()
@@ -124,7 +124,7 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
                 which is the same rule the soft-delete banner follows. The second
                 window is said out loud too: expiry is not destruction. */}
             {q.data?.restore?.expires_at ? (
-              <div className="cb-banner__text" style={{ marginTop: 'var(--cb-space-2)' }}>
+              <div className="sh-banner__text" style={{ marginTop: 'var(--sh-space-2)' }}>
                 <strong>This copy is removed on{' '}
                   {new Date(q.data.restore.expires_at).toLocaleString()}</strong>{' '}
                 — its data then stays recoverable for the usual window, so an expiry
@@ -136,13 +136,13 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
       ) : null}
 
       {p?.deleted_at || p?.status === 'soft_deleted' ? (
-        <div className="cb-banner cb-banner--warning" role="status" style={{ marginBottom: 'var(--cb-space-5)' }}>
-          <span className="cb-banner__icon" aria-hidden="true">
+        <div className="sh-banner sh-banner--warning" role="status" style={{ marginBottom: 'var(--sh-space-5)' }}>
+          <span className="sh-banner__icon" aria-hidden="true">
             <svg viewBox="0 0 12 12"><path d="M6 2v5M6 9v1" /></svg>
           </span>
-          <div className="cb-banner__body">
-            <div className="cb-banner__title">This project is deleted</div>
-            <div className="cb-banner__text">
+          <div className="sh-banner__body">
+            <div className="sh-banner__title">This project is deleted</div>
+            <div className="sh-banner__text">
               Its data is kept until{' '}
               {p?.restorable_until ? new Date(p.restorable_until).toLocaleString() : 'the window closes'},
               then destroyed permanently. Restoring is not built yet.
@@ -171,7 +171,7 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
                 </div>
               </div>
             ) : q.isLoading ? (
-              <div className="cb-skeleton" style={{ height: 20, width: '80%' }} />
+              <div className="sh-skeleton" style={{ height: 20, width: '80%' }} />
             ) : (
               <p className="muted" style={{ margin: 0 }}>
                 {settling
@@ -235,8 +235,8 @@ function FactsSkeleton() {
     <div className="facts" aria-busy="true">
       {[0, 1, 2, 3, 4, 5].map((i) => (
         <div key={i} style={{ display: 'contents' }}>
-          <div className="cb-skeleton" style={{ height: 12, width: 80 }} />
-          <div className="cb-skeleton" style={{ height: 14, width: `${45 + (i % 3) * 15}%` }} />
+          <div className="sh-skeleton" style={{ height: 12, width: 80 }} />
+          <div className="sh-skeleton" style={{ height: 14, width: `${45 + (i % 3) * 15}%` }} />
         </div>
       ))}
     </div>

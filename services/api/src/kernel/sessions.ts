@@ -1,5 +1,5 @@
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
-import type { Redis } from '@corebase/queue';
+import type { Redis } from '@steadhold/queue';
 
 /**
  * Dashboard sessions (D-062): an opaque id in an httpOnly cookie, the state in
@@ -17,7 +17,7 @@ import type { Redis } from '@corebase/queue';
  * limit — which is the bug this comment exists to prevent.
  */
 
-export const SESSION_COOKIE = 'cb_session';
+export const SESSION_COOKIE = 'sh_session';
 export const CSRF_HEADER = 'x-csrf-token';
 
 export const IDLE_TTL_SECONDS = 7 * 24 * 60 * 60;

@@ -1,6 +1,6 @@
-# Corebase Planning Corpus — Index
+# Steadhold Planning Corpus — Index
 
-The complete A-to-Z plan for Corebase. Every doc follows the template **Purpose → Design → Decisions → Open Questions → Dependencies**; all binding decisions live in the [decision log](00-foundation/05-decision-log.md).
+The complete A-to-Z plan for Steadhold. Every doc follows the template **Purpose → Design → Decisions → Open Questions → Dependencies**; all binding decisions live in the [decision log](00-foundation/05-decision-log.md).
 
 ## Recommended reading order
 
@@ -12,7 +12,7 @@ The complete A-to-Z plan for Corebase. Every doc follows the template **Purpose 
 
 | Doc | Contents |
 |---|---|
-| [01 Vision & principles](00-foundation/01-vision-and-principles.md) | What Corebase is, the five principles, non-goals, the binding priority stack |
+| [01 Vision & principles](00-foundation/01-vision-and-principles.md) | What Steadhold is, the five principles, non-goals, the binding priority stack |
 | [02 Competitive analysis](00-foundation/02-competitive-analysis.md) | The field, exploitable lanes, moat honesty |
 | [03 Critical review](00-foundation/03-critical-review.md) | Section-by-section critique of the v0.1 proposal; contradiction ledger; §1–124 disposition map |
 | [04 Glossary](00-foundation/04-glossary.md) | Shared vocabulary |
@@ -105,8 +105,8 @@ The complete A-to-Z plan for Corebase. Every doc follows the template **Purpose 
 | Doc | Contents |
 |---|---|
 | [01 CLI spec](10-cli-and-sdk/01-cli-spec.md) | Full command surface, auth/link model, config files |
-| [02 Local development](10-cli-and-sdk/02-local-development.md) | `corebase dev` Docker Compose stack, local↔remote parity |
-| [03 SDK spec](10-cli-and-sdk/03-sdk-spec.md) | `@corebase/core` API surface |
+| [02 Local development](10-cli-and-sdk/02-local-development.md) | `steadhold dev` Docker Compose stack, local↔remote parity |
+| [03 SDK spec](10-cli-and-sdk/03-sdk-spec.md) | `@steadhold/core` API surface |
 | [04 Self-hosting](10-cli-and-sdk/04-self-hosting.md) | Docker Compose self-host stack, dashboard in single-project mode, hardening deltas |
 
 ## 11 — Infrastructure

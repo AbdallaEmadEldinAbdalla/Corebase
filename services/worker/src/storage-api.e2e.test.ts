@@ -5,12 +5,12 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
-import { createEnvelope } from '@corebase/crypto';
-import { createSecretStore, SECRET_NAMES } from '@corebase/secrets';
-import { sign as signJwt } from '@corebase/jwt';
-import { buildApp } from '@corebase/api';
-import { createMemoryRateLimiter } from '@corebase/api/kernel/rate-limit.ts';
-import { createS3, s3FromEnv, type S3 } from '@corebase/s3';
+import { createEnvelope } from '@steadhold/crypto';
+import { createSecretStore, SECRET_NAMES } from '@steadhold/secrets';
+import { sign as signJwt } from '@steadhold/jwt';
+import { buildApp } from '@steadhold/api';
+import { createMemoryRateLimiter } from '@steadhold/api/kernel/rate-limit.ts';
+import { createS3, s3FromEnv, type S3 } from '@steadhold/s3';
 import { createDocker, type Docker } from './docker.ts';
 import { loadBackupEnv } from './staging-env.ts';
 import { createStorageSweep } from './storage-sweep.ts';
@@ -29,14 +29,14 @@ import type { SagaStep, SagaContext } from './jobs/runner.ts';
  * is under test is whether the customer's policies actually decide, and a mocked
  * database would answer that question with whatever the mock was told to say.
  */
-const DB = process.env.CB_CONTROL_DATABASE_URL
-  ?? 'postgres://corebase:controlpass@127.0.0.1:55433/corebase_control';
-const CERT_DIR = process.env.CB_DOCKER_CERT_DIR
+const DB = process.env.SH_CONTROL_DATABASE_URL
+  ?? 'postgres://steadhold:controlpass@127.0.0.1:55433/steadhold_control';
+const CERT_DIR = process.env.SH_DOCKER_CERT_DIR
   ?? join(process.cwd(), '../../infra/docker/staging/certs');
-const HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
+const HOST = process.env.SH_DOCKER_HOST ?? '127.0.0.1';
+const PORT = Number(process.env.SH_DOCKER_PORT ?? 2376);
 const SECRET = 'p6b-bootstrap-secret-0123456789';
-const DOMAIN = 'corebase.test';
+const DOMAIN = 'steadhold.test';
 const ALICE = '11111111-1111-4111-8111-111111111111';
 const BOB = '22222222-2222-4222-8222-222222222222';
 
@@ -50,7 +50,7 @@ let up = false; let reason = '';
 
 beforeAll(async () => {
   loadBackupEnv();
-  kekDir = mkdtempSync(join(tmpdir(), 'cb-kek-p6b-'));
+  kekDir = mkdtempSync(join(tmpdir(), 'sh-kek-p6b-'));
   writeFileSync(join(kekDir, 'kek_2026_09.key'), randomBytes(32));
   try {
     pool = new Pool({ connectionString: DB, max: 6, connectionTimeoutMillis: 2000 });
@@ -213,7 +213,7 @@ describe('P6b — the front door', () => {
     const foreign = signJwt(
       { iss: `https://${ref}.${DOMAIN}`, ref, role: 'anon',
         iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 60 },
-      { privateKeyPem: (await import('@corebase/jwt')).generateKeypair().privateKeyPem,
+      { privateKeyPem: (await import('@steadhold/jwt')).generateKeypair().privateKeyPem,
         kid: 'not-ours' });
     expect((await call('GET', '/storage/v1/bucket', { key: foreign })).statusCode).toBe(401);
   });
@@ -737,7 +737,7 @@ describe('P6d — public buckets', () => {
     // lookalike domain cannot borrow the routing.
     const evil = await app.inject({
       method: 'GET', url: '/storage/v1/object/public/assets-pub/logo.png',
-      headers: { host: `${ref}.evil-corebase.test` },
+      headers: { host: `${ref}.evil-steadhold.test` },
     });
     expect(evil.statusCode).toBe(404);
   });

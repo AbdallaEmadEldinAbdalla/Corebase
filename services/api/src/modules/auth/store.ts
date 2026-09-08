@@ -1,6 +1,6 @@
 import type { Pool, PoolClient } from 'pg';
-import { hashPassword, verifyPassword } from '@corebase/crypto';
-import { writeAudit, type Actor } from '@corebase/audit';
+import { hashPassword, verifyPassword } from '@steadhold/crypto';
+import { writeAudit, type Actor } from '@steadhold/audit';
 
 /**
  * Platform accounts: the users who log into the dashboard, not the users of a

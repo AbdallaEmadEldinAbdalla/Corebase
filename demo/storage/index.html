@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Corebase Storage — demo</title>
+<title>Steadhold Storage — demo</title>
 <!--
   Phase 6's demo (roadmap §Phase 6): "avatar upload from the phase-4 demo page,
   public URL renders, signed URL expires."
@@ -71,7 +71,7 @@
 </head>
 <body>
 <main>
-  <h1>Corebase Storage</h1>
+  <h1>Steadhold Storage</h1>
   <p class="sub" id="target">…</p>
 
   <section>
@@ -172,7 +172,7 @@ create policy "users manage their own avatar folder"
 <script src="config.js"></script>
 <script>
 (() => {
-  const cfg = window.COREBASE_DEMO;
+  const cfg = window.STEADHOLD_DEMO;
   const $ = (id) => document.getElementById(id);
   if (!cfg) {
     $('target').textContent = 'No config.js — run ./scripts/storage-demo.sh first.';

@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react';
-import { ProjectStatus } from '@corebase/types';
+import { ProjectStatus } from '@steadhold/types';
 
 /**
  * A project's state, as a dot *and* a word.
@@ -10,7 +10,7 @@ import { ProjectStatus } from '@corebase/types';
  * ticket.
  *
  * The tone map is typed `Record<ProjectStatus, …>` against the enum in
- * `@corebase/types` rather than a hand-kept list of strings. The first version
+ * `@steadhold/types` rather than a hand-kept list of strings. The first version
  * here *was* a hand-kept list, and it was wrong on the very first live create: a
  * new project's status is `creating`, which the list did not have, so the badge
  * rendered neutral and — much worse — the overview page decided the project was
@@ -19,15 +19,15 @@ import { ProjectStatus } from '@corebase/types';
  * compile error the next time a state is added.
  */
 export const TONE: Record<ProjectStatus, string> = {
-  creating: 'cb-badge--info',
-  provisioning: 'cb-badge--info',
-  configuring: 'cb-badge--info',
-  ready: 'cb-badge--success',
-  failed: 'cb-badge--error',
-  pausing: 'cb-badge--warning',
+  creating: 'sh-badge--info',
+  provisioning: 'sh-badge--info',
+  configuring: 'sh-badge--info',
+  ready: 'sh-badge--success',
+  failed: 'sh-badge--error',
+  pausing: 'sh-badge--warning',
   paused: '',
-  resuming: 'cb-badge--info',
-  restoring: 'cb-badge--info',
+  resuming: 'sh-badge--info',
+  restoring: 'sh-badge--info',
   /**
    * A restored copy is not healthy production and must not read as it (P3d).
    *
@@ -36,8 +36,8 @@ export const TONE: Record<ProjectStatus, string> = {
    * because neutral is what `paused` uses and a paused project is inert. This one
    * is running, serving nothing, and costing money.
    */
-  restored: 'cb-badge--warning',
-  deleting: 'cb-badge--warning',
+  restored: 'sh-badge--warning',
+  deleting: 'sh-badge--warning',
   soft_deleted: '',
   deleted: '',
 };
@@ -79,16 +79,16 @@ export function ProjectStateBadge({ status, compact }: {
   const label = LABEL[status as ProjectStatus] ?? status.replace(/_/g, ' ');
   if (compact) {
     return (
-      <span className={`cb-badge ${tone}`.trim()} title={label.toUpperCase()}
+      <span className={`sh-badge ${tone}`.trim()} title={label.toUpperCase()}
             style={{ padding: 0, width: 16, height: 16, justifyContent: 'center', background: 'none' }}>
-        <span className="cb-dot" aria-hidden="true" />
-        <span className="cb-sr">{label}</span>
+        <span className="sh-dot" aria-hidden="true" />
+        <span className="sh-sr">{label}</span>
       </span>
     );
   }
   return (
-    <span className={`cb-badge ${tone}`.trim()}>
-      <span className="cb-dot" aria-hidden="true" />
+    <span className={`sh-badge ${tone}`.trim()}>
+      <span className="sh-dot" aria-hidden="true" />
       {label.toUpperCase()}
     </span>
   );

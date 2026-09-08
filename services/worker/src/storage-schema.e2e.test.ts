@@ -16,15 +16,15 @@ import { join } from 'node:path';
  * example would have failed with "must be owner of table objects", which reads
  * like a platform fault rather than a missing `ALTER TABLE ... OWNER TO`.
  */
-const CERT_DIR = process.env.CB_DOCKER_CERT_DIR
+const CERT_DIR = process.env.SH_DOCKER_CERT_DIR
   ?? join(process.cwd(), '../../infra/docker/staging/certs');
-const HOST = process.env.CB_DOCKER_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.CB_DOCKER_PORT ?? 2376);
-const PG_IMAGE = process.env.CB_PG_IMAGE ?? 'corebase/postgres:17.5';
+const HOST = process.env.SH_DOCKER_HOST ?? '127.0.0.1';
+const PORT = Number(process.env.SH_DOCKER_PORT ?? 2376);
+const PG_IMAGE = process.env.SH_PG_IMAGE ?? 'steadhold/postgres:17.5';
 
-const NET = 'cb-p6a-net';
-const PG = 'cb-p6a-pg';
-const PG_HOST_PORT = Number(process.env.CB_P6A_PG_PORT ?? 5461);
+const NET = 'sh-p6a-net';
+const PG = 'sh-p6a-pg';
+const PG_HOST_PORT = Number(process.env.SH_P6A_PG_PORT ?? 5461);
 
 const ALICE = '11111111-1111-4111-8111-111111111111';
 const BOB = '22222222-2222-4222-8222-222222222222';
@@ -58,7 +58,7 @@ beforeAll(async () => {
     await docker.createNetwork(NET, {});
     await docker.createContainer(PG, {
       Image: PG_IMAGE, Env: ['POSTGRES_PASSWORD=p6asmoke'],
-      Labels: { 'com.corebase.managed': 'true' },
+      Labels: { 'com.steadhold.managed': 'true' },
       HostConfig: {
         Memory: 512 * 1024 * 1024, MemorySwap: 512 * 1024 * 1024, NanoCpus: 1e9,
         RestartPolicy: { Name: 'no' }, Mounts: [],

@@ -6,7 +6,7 @@ import { capsFor, CAPS } from './caps.ts';
  * P4d — the enqueue gate (D-116).
  *
  * What these caps defend is not our bill: `/signup` and `/recover` let any
- * anonymous visitor make Corebase email an arbitrary address, and V1 sends every
+ * anonymous visitor make Steadhold email an arbitrary address, and V1 sends every
  * project's mail from one domain — so one free project can mail-bomb a victim or
  * act as a bulk mailer, and the reputation damage lands on every project.
  */
