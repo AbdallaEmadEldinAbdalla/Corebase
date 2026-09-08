@@ -38,6 +38,15 @@ export const hue = (hex) => {
   const h = max === r ? ((g - b) / d + 6) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
   return h * 60;
 };
+/** HSL saturation, for the chroma-family rule below. */
+export const saturation = (hex) => {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return 0;
+  return l > 0.5 ? (max - min) / (2 - max - min) : (max - min) / (max + min);
+};
+
 export const hueGap = (a, b) => {
   const d = Math.abs(hue(a) - hue(b)) % 360;
   return Math.min(d, 360 - d);
@@ -79,19 +88,32 @@ export const accent = {
 };
 
 /**
- * Semantics, pushed away from the accent's hue on purpose. D-177's binding rule —
- * "error must never be a hue the brand also uses" — is why a red-adjacent accent
- * was rejected once already, and terracotta at 15° sits 12° from the old error red
- * and 21° from the old warning amber. Rather than drop the brand, error moves to
- * the *cool* side of red (rose, ~346°) and warning to a true ochre (~41°), so both
- * clear 25° of separation from the accent and read as a different family, not a
- * different shade. D-180 still forbids colour as the sole carrier either way.
+ * Semantics, held to two rules at once.
+ *
+ * **Away from the accent's hue.** D-177's binding rule — "error must never be a
+ * hue the brand also uses" — is why a red-adjacent accent was rejected once
+ * already, and terracotta at 15° sits 12° from the old error red and 21° from the
+ * old warning amber. So error moves to the *cool* side of red (~346°) and warning
+ * to a true ochre (~41°), both clearing 25° of separation, asserted in the suite.
+ *
+ * **And inside the same warm family.** This is the rule the first version missed:
+ * every constraint was about contrast or hue distance from the accent, and none
+ * about whether a semantic *belongs* on a warm clay surface. Info was a saturated
+ * navy — `#10203A`, hue 217°, saturation 0.57 against a surface at 32°/0.21 — the
+ * coldest and most saturated thing on the screen, and it read as borrowed from a
+ * different product. Info is now a muted slate-teal (~190°): still unmistakably
+ * "neutral information" rather than success or warning, but at a chroma that sits
+ * beside clay instead of shouting over it. Error's light tint and success's dark
+ * tint were the other two outliers and are muted for the same reason.
+ *
+ * Hue is what keeps them apart; chroma is what keeps them in the family. D-180
+ * still forbids colour as the sole carrier either way.
  */
 export const semantic = {
-  light: { success:['#0F7A52','#E2F3EA'], warning:['#8A6410','#F7EEDA'],
-           error:['#C0143C','#FBE4E9'],   info:['#1F5FA8','#E4EDF8'] },
-  dark:  { success:['#4FD08A','#0E2A1D'], warning:['#E0A72A','#2A2110'],
-           error:['#F2708F','#2C1219'],   info:['#6FA8F0','#10203A'] },
+  light: { success:['#0F7A52','#E4F1EA'], warning:['#8A6410','#F4EDDD'],
+           error:['#C0143C','#F9E7EB'],   info:['#245F6B','#E7EEEF'] },
+  dark:  { success:['#4FD08A','#122A20'], warning:['#E0A72A','#282012'],
+           error:['#F2708F','#2C1219'],   info:['#7BBFC9','#16262A'] },
 };
 
 /** Destructive fills carry white labels, so they are darker than error *text*. */

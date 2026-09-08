@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
-import { renderCss, roles, contrast, hueGap } from './tokens.build.mjs';
+import { renderCss, roles, contrast, hueGap, saturation } from './tokens.build.mjs';
 import { join } from 'node:path';
 
 /**
@@ -153,6 +153,36 @@ describe('design tokens', () => {
         for (const s of ['success', 'warning', 'error', 'info']) {
           expect(contrast(r[s as keyof typeof r] as string, r[`${s}-bg` as keyof typeof r] as string),
             `--sh-${s} on --sh-${s}-bg (${mode}) is below AA`).toBeGreaterThanOrEqual(AA);
+        }
+      }
+    });
+
+    /**
+     * The rule the first version of this palette did not have, and the one a
+     * screenshot caught instead of a test.
+     *
+     * Every constraint here was about contrast, or about hue distance from the
+     * accent. None asked whether a semantic *belongs* on a warm clay surface — so
+     * info shipped as a saturated navy, `#10203A`, hue 217° and saturation 0.57
+     * against a surface at 32°/0.21. It was the coldest and loudest thing on the
+     * screen and read as borrowed from another product, which is a thing you see
+     * immediately and measure never.
+     *
+     * Hue is what keeps the semantics apart; chroma is what keeps them in the
+     * family. The ceiling is the accent's own tint, because nothing merely
+     * informational should out-shout the brand — and unlike a magic number, that
+     * ceiling moves correctly if the brand ever changes again.
+     */
+    it('keeps every semantic tint within the brand tint\'s chroma', () => {
+      for (const mode of ['light', 'dark'] as const) {
+        const r = roles(mode);
+        const ceiling = saturation(r['accent-subtle'] as string);
+        for (const s of ['success', 'warning', 'error', 'info']) {
+          const tint = r[`${s}-bg` as keyof typeof r] as string;
+          expect(saturation(tint),
+            `--sh-${s}-bg (${mode}) is more saturated than the brand's own tint, `
+            + `so it reads as a louder, foreign colour on a warm surface`,
+          ).toBeLessThanOrEqual(ceiling + 0.001);
         }
       }
     });

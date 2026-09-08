@@ -34,6 +34,13 @@ past:
   red, warning to a true ochre, both ≥25° from the accent, asserted in
   `tokens.test.ts` rather than asserted here.
 
+**Hue keeps the semantics apart; chroma keeps them in the family (D-424).** Info is
+a muted slate-teal rather than a blue, because a saturated navy on a warm clay
+surface reads as borrowed from another product — and no semantic tint may be more
+saturated than the accent's own, since nothing merely informational should
+out-shout the brand. That rule was missing from the first version of this palette
+and a screenshot found it in minutes; it is measured now.
+
 **The limitation, stated:** the accent *tint* cannot be hue-separated from both
 semantic tints simultaneously, because the brand hue sits between error and warning
 — 20° is already near-equidistant, and moving away from one moves toward the other.
@@ -60,6 +67,7 @@ What the token layer guarantees, and fails the build over:
 | `accent-on-subtle` on `accent-subtle` (the tinted badge) | 4.5:1 |
 | Focus ring against `bg` and `surface` (WCAG 2.2) | 3:1 |
 | `accent` ↔ `warning` / `error` / `danger` hue separation | 25° |
+| Every semantic tint's chroma, against the accent's own tint | ≤ it |
 | A skeleton against the surface it loads on | 1.25:1 |
 | Ramps monotonic in luminance | — |
 | No colour literal in any component stylesheet or component | — |
