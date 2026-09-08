@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { use } from 'react';
 import { ErrorSurface } from '../../../components/ErrorSurface.tsx';
 import { ProjectStateBadge, SETTLING } from '../../../components/ProjectState.tsx';
+import { RESUMING_STATES } from '../../../components/PausedProject.tsx';
 import { useProject } from '../../../lib/queries.ts';
 
 /**
@@ -26,7 +27,17 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
   const q = useProject(ref);
   const p = q.data?.project;
   const db = q.data?.database;
-  const settling = Boolean(p && SETTLING.has(p.status));
+  /**
+   * Every settling state *except* the two the layout now owns.
+   *
+   * `paused` and `resuming` moved to the project layout with auto-resume (D-131),
+   * because a stopped database blocks Connect and API keys exactly as much as it
+   * blocks this page — a banner that only appears on the overview leaves a
+   * deep-linked user staring at empty panels with no explanation. Without this
+   * exclusion the overview showed two banners saying the same thing, which is
+   * what the first version of that change did.
+   */
+  const settling = Boolean(p && SETTLING.has(p.status) && !RESUMING_STATES.has(p.status));
   // Deliberately not the connection strings: this page polls, and revealing
   // credentials is audited (see the project detail route). Connect reveals.
 

@@ -3977,6 +3977,67 @@ recorded as gaps.
 **What it broke:** nothing outside the dashboard. No service, migration or test
 outside `apps/dashboard` changed.
 
+## 4j. Phase 7 — the dashboard
+
+### P7a — the paused-project experience · done · D-425
+
+D-131's dashboard half. The API half already existed and my first survey of Phase 7
+said otherwise, wrongly: `POST /v1/projects/:ref/pause` and `/resume` are complete,
+including the 409-with-state that an idempotent auto-resume reads. They were missed
+because they are registered in a `for` loop over a template literal and the survey
+grepped for string-literal routes — the same methodology error as D-422, one file
+apart.
+
+What shipped:
+
+- **Auto-resume from the project layout**, so a deep link to Connect or API keys
+  resumes as readily as the overview. No confirmation dialog: opening the project
+  after clicking it is not a decision to re-confirm.
+- **A resuming banner** with `aria-live`, and no error state during a normal
+  few-second transition — a panel saying "failed to load" while a project resumes
+  teaches the user their data is at risk when it is not.
+- **A failure card** carrying code, message, `request_id` + copy button (D-032) and
+  Retry. Never a dead end.
+- **An inline Resume on paused grid rows** — the IA's "resume without opening". The
+  grid's most likely action should not be two clicks deep in a ⋯ menu.
+
+The sequence rules are in `lib/resume-machine.ts`, tested against ordered status
+sequences rather than through a DOM the dashboard has no tooling for. The hook is
+the thin half; if the decision lived in it the test would guard a copy of it.
+
+**What verifying it found — two production bugs, both in the backup path.** Neither
+was Phase 7 work and both are now fixed: the Engine API client held every
+pgbackrest exec to 30 seconds (**D-421**), and a resumed project came back with no
+pgbackrest config at all (**D-423**). The second was found by pausing a real
+project, opening the dashboard, watching it resume, and pausing it again — which
+dead-lettered. No unit test would have found either.
+
+**Verification.** Dashboard 87/87, typecheck 14/14, `next build` green. Live on
+staging: a real project provisioned, paused, opened in the browser, seen to
+auto-resume with the banner and the badge, and the duplicate-banner bug that first
+attempt introduced found by looking and fixed.
+
+### The rest of Phase 7 — not started, and what blocks it
+
+The scope is ~30 routes. What is missing is mostly **API, not UI**:
+
+| Surface | Blocker |
+|---|---|
+| Table editor, SQL editor | No query/DDL execution endpoint exists |
+| Auth users, storage browser | Data-plane only (`/auth/v1/admin/*`, `/storage/v1/*`), which needs a `service_role` key — and a session-cookie dashboard (D-062) must never hold one in the browser. Needs a control-plane proxy, which is an architectural decision, not a screen |
+| Logs, metrics, backups list, audit | No endpoints |
+| Org members, settings, account, invites | **API exists** — these are the genuinely UI-only steps |
+
+`D-130` specifies Tailwind + shadcn/ui and the dashboard has neither, using the
+hand-written token layer instead. That divergence predates this phase and is still
+unrecorded, which CLAUDE.md calls a doc bug; it needs a decision either way before
+the screens are built on it.
+
+**Exit criterion 1 — "the first-five-minutes flow completable without docs,
+hallway-tested on ≥3 people, timed <5 min" — cannot be self-certified and will be
+recorded unmet** no matter how well the flow works. The checklist can be built and
+instrumented; three people cannot.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real

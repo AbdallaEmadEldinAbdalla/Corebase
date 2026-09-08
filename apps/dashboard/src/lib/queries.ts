@@ -130,6 +130,42 @@ export function useRotateCredentials(ref: string) {
   });
 }
 
+/**
+ * Resume a paused project (D-131).
+ *
+ * Invalidating the project **and** its org's list is deliberate: the projects
+ * grid carries a Resume button of its own, so a resume started from the grid has
+ * to move the badge there, and one started by opening the project has to move the
+ * badge on the grid the user goes back to.
+ *
+ * A 409 is not an error here — `api.resumeProject` reports it as
+ * `enqueued: false`, because "already ready" and "already resuming" are the
+ * expected answers to a call fired on navigation. The project's polled status
+ * stays the single source of truth for what the UI shows.
+ */
+export function useResumeProject(ref: string, orgId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.resumeProject(ref),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: keys.project(ref) });
+      if (orgId) void qc.invalidateQueries({ queryKey: keys.projects(orgId) });
+    },
+  });
+}
+
+/** Pause a project by hand. Unlike resume, a 409 here is a real refusal. */
+export function usePauseProject(ref: string, orgId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.pauseProject(ref),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: keys.project(ref) });
+      if (orgId) void qc.invalidateQueries({ queryKey: keys.projects(orgId) });
+    },
+  });
+}
+
 export function useCreateProject(orgId: string) {
   const qc = useQueryClient();
   return useMutation({

@@ -3,6 +3,7 @@
 import { use, type ReactNode } from 'react';
 import { AppShell, NavItem, useSection } from '../../../components/AppShell.tsx';
 import { useProject, useOrgs } from '../../../lib/queries.ts';
+import { useAutoResume, ResumeBanner } from '../../../components/PausedProject.tsx';
 
 /**
  * Project chrome: three sections, all of which are real.
@@ -21,6 +22,15 @@ export default function ProjectLayout({ children, params }: {
   const orgs = useOrgs();
   const path = useSection();
   const orgSlug = orgs.data?.orgs.find((o) => o.id === project.data?.project.org_id)?.slug;
+  const p = project.data?.project;
+
+  /**
+   * D-131: opening any page of a paused project *is* the intent to resume, so it
+   * is fired here in the layout rather than on the overview — a user may deep-link
+   * straight to Connect or API keys, and those pages are just as blocked by a
+   * database that is not running.
+   */
+  const resume = useAutoResume(ref, p?.status, p?.org_id);
 
   return (
     <AppShell projectRef={ref} {...(orgSlug ? { orgSlug } : {})} nav={
@@ -36,6 +46,12 @@ export default function ProjectLayout({ children, params }: {
         </div>
       </>
     }>
+      <ResumeBanner
+        status={p?.status}
+        plan={p?.plan}
+        error={resume.error}
+        onRetry={() => resume.mutate()}
+      />
       {children}
     </AppShell>
   );

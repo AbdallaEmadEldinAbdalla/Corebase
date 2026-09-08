@@ -8,6 +8,7 @@ import { ProjectStateBadge } from '../../../components/ProjectState.tsx';
 import { Menu, MenuItem } from '../../../components/Menu.tsx';
 import { useOrgBySlug, useProjects } from '../../../lib/queries.ts';
 import { copyText } from '../../../lib/copy.ts';
+import { useResumeProject } from '../../../lib/queries.ts';
 import { useToast } from '../../../components/Toasts.tsx';
 import { api, type Project } from '../../../lib/api.ts';
 
@@ -186,7 +187,10 @@ function ProjectTable({ projects, deleted, hasMore, loadingMore, onLoadMore }: {
                   : new Date(p.created_at).toLocaleDateString()}
               </td>
               <td className="td-actions" onClick={(e) => e.stopPropagation()}>
-                <RowActions project={p} />
+                <div className="sh-row sh-row--tight" style={{ justifyContent: 'flex-end' }}>
+                  <ResumeRowButton project={p} />
+                  <RowActions project={p} />
+                </div>
               </td>
             </tr>
           ))}
@@ -210,6 +214,41 @@ function ProjectTable({ projects, deleted, hasMore, loadingMore, onLoadMore }: {
         ) : null}
       </div>
     </div>
+  );
+}
+
+/**
+ * Resume, inline on the row (D-131 / IA §"paused-project experience").
+ *
+ * Inline rather than inside the ⋯ menu because the IA asks for "resume without
+ * opening": a project that paused itself after seven days is the one thing on this
+ * grid a user actively wants to undo, and putting it two clicks deep behind a menu
+ * makes the grid's most likely action its least reachable one.
+ *
+ * It stays a `sh-btn--sm` next to the menu rather than replacing it, so the row's
+ * other actions do not move around depending on state — a control that changes
+ * position by row is harder to hit than one that is simply sometimes absent.
+ */
+function ResumeRowButton({ project }: { project: Project }) {
+  // The org comes off the project rather than through a prop: this table is also
+  // rendered for the deleted-projects list, and threading an id through two
+  // components to reach a button that is usually absent is more plumbing than the
+  // one field it needs.
+  const resume = useResumeProject(project.ref, project.org_id);
+  const toast = useToast();
+  if (project.status !== 'paused') return null;
+  return (
+    <button type="button" className="sh-btn sh-btn--sm"
+      disabled={resume.isPending}
+      aria-label={`Resume ${project.name}`}
+      onClick={() => resume.mutate(undefined, {
+        onError: (err) => toast.show({
+          tone: 'error', title: 'Could not resume',
+          detail: err instanceof Error ? err.message : 'Open the project to see why.',
+        }),
+      })}>
+      {resume.isPending ? 'Resuming…' : 'Resume'}
+    </button>
   );
 }
 

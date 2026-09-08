@@ -282,6 +282,43 @@ export const api = {
       `/v1/projects/${encodeURIComponent(ref)}/rotate-credentials`,
       { method: 'POST', body: { terminate } }),
 
+  /**
+   * Pause a project (D-008). Only a `ready` project can be paused, so a 409 here
+   * is a real refusal and is left to the caller.
+   */
+  pauseProject: (ref: string) =>
+    request<{ project: Project; job: { id: string; type: string; state: string } }>(
+      `/v1/projects/${encodeURIComponent(ref)}/pause`, { method: 'POST' }),
+
+  /**
+   * Resume a project. A 409 is reported, not thrown.
+   *
+   * D-131 makes opening a paused project the intent to resume, so this is fired
+   * on navigation *before* the caller knows the state — which makes "already
+   * ready" and "already resuming" the expected answers rather than failures. The
+   * control plane answers both with 409 and the current state (routes.ts calls it
+   * "the honest answer for an idempotent-looking call that is actually a no-op").
+   *
+   * A 409 means exactly one thing: **no job was enqueued.** Whether that is fine
+   * is not this function's question — it is answered by the project's own status,
+   * which the caller is already polling. Deciding here would mean matching on the
+   * message prose, and a refusal that matters (`failed`, `deleting`) is visible in
+   * the status anyway, where the banner reads it. So the state is returned and the
+   * caller keeps its single source of truth.
+   */
+  resumeProject: async (ref: string): Promise<{ enqueued: boolean; conflict?: string }> => {
+    try {
+      await request<{ project: Project }>(
+        `/v1/projects/${encodeURIComponent(ref)}/resume`, { method: 'POST' });
+      return { enqueued: true };
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        return { enqueued: false, conflict: err.message };
+      }
+      throw err;
+    }
+  },
+
   projectKeys: (ref: string) =>
     request<{ api_keys: ApiKey[] }>(`/v1/projects/${encodeURIComponent(ref)}/keys`),
 
