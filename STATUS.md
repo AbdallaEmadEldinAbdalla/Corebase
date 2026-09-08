@@ -4099,6 +4099,18 @@ the entire dashboard shell, because `style={{}}` can write a custom property jus
 as easily as a rule can and nothing was looking there. Ask what *else* can express
 the mistake, and put the guard around that instead (D-414).
 
+**A test suite that has been tuned until it passes is hiding something.** The
+worker's e2e files each built their Docker client with a different timeout — 20s,
+30s, 60s, 120s — numbers arrived at by raising whichever file was failing. That
+spread was the symptom of a real defect underneath it (D-421): the client applied
+one timeout to *every* request including the exec that waits on a command, so the
+production worker held pgbackrest to 30 seconds and every backup past a certain
+size failed at the transport. It surfaced only when two CI shards failed on a
+commit that changed nothing but CSS, and the honest read of "these tests need
+different timeouts" is that the thing being timed is not what the number thinks it
+is. The per-file values are now vestigial and worth normalising; they are left for
+a separate change rather than folded into the fix.
+
 **A rename is applied to references, never to the record of the rename.** A
 find-and-replace cannot tell a mention of the old name apart from a statement
 *about* the old name, so it rewrites "Corebase → Steadhold" into

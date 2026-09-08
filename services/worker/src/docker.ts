@@ -3,6 +3,15 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
+ * Ten minutes, for `/exec/<id>/start` only.
+ *
+ * Long enough for a full base backup of a real database; short enough that a
+ * genuinely wedged exec ends inside one job's lifetime rather than never. Every
+ * other request keeps `timeoutMs`, which is short on purpose.
+ */
+const EXEC_TIMEOUT_MS = 600_000;
+
+/**
  * Docker Engine API client over mTLS (D-052): the worker drives nodes through
  * the Engine API with client certificates, and there is no per-node agent.
  *
@@ -16,6 +25,26 @@ export interface DockerConfig {
   port: number;        // 2376
   certDir: string;     // holds ca.pem, cert.pem, key.pem
   timeoutMs?: number;
+  /**
+   * Ceiling for `/exec/<id>/start` alone — the only request that stays open for
+   * as long as the command runs.
+   *
+   * It is separate because one number cannot serve both jobs. `timeoutMs` is
+   * short on purpose: a container that will not start or answer its health check
+   * should fail in seconds, not minutes. But an exec's duration is whatever was
+   * asked of it, and this client runs pgbackrest — `stanza-create`, a
+   * `check` that forces a WAL switch and waits for it to archive, and full base
+   * backups. Those are minute-scale on a real database and unbounded in
+   * principle, so holding them to the same 30s as a health probe means every
+   * backup of a database past a certain size fails at the HTTP layer, with the
+   * saga blaming pgbackrest.
+   *
+   * That was not hypothetical: the production worker (main.ts) passed no
+   * timeout at all and inherited the 30s default, and the test suite had it
+   * papered over with per-file values tuned until each file passed — 20s, 30s,
+   * 60s, 120s — which is how a real timeout defect gets normalised into a flake.
+   */
+  execTimeoutMs?: number;
 }
 
 export class DockerError extends Error {
@@ -101,7 +130,10 @@ export function createDocker(cfg: DockerConfig) {
     keepAliveMsecs: 10_000,
     maxSockets: 8,
     maxFreeSockets: 4,
-    timeout: cfg.timeoutMs ?? 30_000,
+    // The agent's socket timeout has to be the *longest* ceiling any request
+    // may ask for, or it kills a legitimate long exec before that request's own
+    // timeout is ever reached.
+    timeout: Math.max(cfg.timeoutMs ?? 30_000, cfg.execTimeoutMs ?? EXEC_TIMEOUT_MS),
     ...tls,
   });
 
@@ -144,11 +176,13 @@ export function createDocker(cfg: DockerConfig) {
    * to survive intact — decoding it as UTF-8 first would mangle the binary
    * headers before `demux` ever sees them.
    */
-  function callRaw(method: string, path: string, body?: unknown): Promise<Buffer> {
+  function callRaw(
+    method: string, path: string, body?: unknown, timeoutMs?: number,
+  ): Promise<Buffer> {
     const payload = body === undefined ? undefined : JSON.stringify(body);
     const opts: RequestOptions = {
       host: cfg.host, port: cfg.port, path, method, ...tls, agent,
-      timeout: cfg.timeoutMs ?? 30_000,
+      timeout: timeoutMs ?? cfg.timeoutMs ?? 30_000,
       headers: payload
         ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) }
         : {},
@@ -350,7 +384,7 @@ export function createDocker(cfg: DockerConfig) {
      * (1 stdout, 2 stderr) and whose last four are a big-endian length.
      */
     async execCapture(
-      id: string, cmd: string[],
+      id: string, cmd: string[], opts?: { timeoutMs?: number },
     ): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
       let created: { Id: string };
       try {
@@ -361,8 +395,10 @@ export function createDocker(cfg: DockerConfig) {
         if (e instanceof DockerError && notExecable(e)) return { exitCode: null, stdout: '', stderr: '' };
         throw e;
       }
+      // Only this call waits on the command. `create` above and the `json`
+      // inspect below are ordinary fast requests and keep the short default.
       const raw = await callRaw('POST', `/exec/${created.Id}/start`,
-        { Detach: false, Tty: false });
+        { Detach: false, Tty: false }, opts?.timeoutMs ?? cfg.execTimeoutMs ?? EXEC_TIMEOUT_MS);
       const { stdout, stderr } = demux(raw);
       // The engine reports a runtime failure to *launch* the exec on the stream
       // itself, with a 200 — so a caller that trusts stdout reads
