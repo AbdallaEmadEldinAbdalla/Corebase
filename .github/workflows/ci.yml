@@ -19,7 +19,14 @@ on:
 # On a branch, a new push supersedes the in-flight run: the old answer is about code
 # nobody will merge. On `main` it does not — see below.
 concurrency:
-  group: ci-${{ github.ref }}
+  # On `main`, group by **commit** so runs never queue behind each other. Grouping
+  # by ref and merely disabling cancellation was the first attempt, and it traded
+  # one wrong answer for another: instead of killing the previous run, the new one
+  # sat `pending` for nineteen minutes and GitHub shows no status icon at all for a
+  # queued run — so the latest commit looked as though CI had never triggered.
+  # A group per SHA means every commit on main gets its own run, immediately, and
+  # none of them can cancel another.
+  group: ci-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   # Cancel superseded runs on branches, never on `main`.
   #
   # `cancel-in-progress: true` everywhere is right for a branch — nobody cares
