@@ -4234,6 +4234,60 @@ than eyeballed.
 action is either secondary or destructive, and promoting Pause would be wrong. The
 seven-day recovery still has no self-serve restore (D-038), which is an API gap.
 
+### P7e — usage per project, endpoint and page · done · D-442, D-443
+
+The figures existed and nothing published them. `project_databases` already carries
+`disk_used_bytes`, `disk_limit_mb`, `disk_state`, `disk_checked_at`, the WAL and
+backup-check columns and `last_active_at`; `backup_runs` carries sizes. So this step
+is one new route and one page, not a collection pipeline.
+
+**`GET /v1/projects/:ref/usage`** is its own route rather than fields on the project
+detail, because the dashboard polls that response **every second** while a project
+settles (D-425) and these numbers come from sweeps that run every few minutes.
+Bytes everywhere on the wire, `bigint` converted (pg hands it back as a string),
+nulls preserved, and a **409 naming the project's status** when there is no database
+row to measure — an answer, rather than a zero-filled body that reads as "using
+nothing".
+
+**The page presents samples, not readings.** Each figure carries when it was taken.
+Four sections: database disk (used-of-limit with a `role="meter"` bar), backups,
+WAL archiving, and activity.
+
+#### What it deliberately does not show
+
+| Absent | Why |
+|---|---|
+| CPU, memory consumption, connections, request rate | Nothing collects them. The only column matching a metrics-ish name in the whole control schema is `audit_logs.request_id`. |
+| Object-storage bytes | `storage.usage` lives inside each project's own database. Reading it needs a live connection and a credential this path does not carry, and it would be null exactly when a project is paused — which is when usage is most worth reading. **The way in:** `storage-sweep` already computes the authoritative per-project figure during its quota true-up; recording that centrally is a worker change, and is the next step. |
+| A countdown to the idle pause | The window is `SH_IDLE_PAUSE_DAYS`, worker configuration the API does not publish. The page shows last activity and does not compute a date it would have to guess. |
+
+`memory` is labelled **reserved** throughout, because `ram_booked_mb` is what
+placement books against a node — nothing measures a container's resident set.
+"Memory used" was the natural label and would have been a fabricated number.
+
+#### What verification found
+
+**A schema default was being reported as an assessment.** `disk_state` is
+`NOT NULL DEFAULT 'ok'`, so a project created seconds earlier — never swept —
+displayed its disk state as *ok*, directly beside a note reading "measured … never".
+`disk_checked_at` distinguishes them, and the page now says "Not measured yet".
+Found by opening the page on a brand-new project rather than only on the seeded one.
+
+The gate also moved the bar from `role="img"` to `role="meter"` with
+`aria-valuetext` (a value in a known range, not a task in progress), and made the
+loading skeleton draw four sections instead of two so the page does not jump as it
+resolves (Q16).
+
+**Verification.** api 224/224 e2e (8 new, including the `LATERAL` pairing — a failed
+run carries a size too, and two independent subqueries would pair one run's size
+with another's time), dashboard 124/124 (12 new on the formatting module),
+typecheck 14/14, `next build` green. Driven live against two projects: one with real
+figures (8.82 MB of 500 MB, 7 successful backups, archiving ok) and one created
+seconds before, which is how the defaulted-state bug surfaced. Both themes.
+
+**Gaps.** Q11 — no primary action, as on the settings page: this is a read-only
+surface and there is nothing to promote.
+
 ### The rest of Phase 7 — not started, and what blocks it
 
 The scope is ~30 routes. What is missing is mostly **API, not UI**:
@@ -4243,7 +4297,7 @@ The scope is ~30 routes. What is missing is mostly **API, not UI**:
 | Table editor, SQL editor | No query/DDL execution endpoint exists |
 | Auth users, storage browser | Data-plane only (`/auth/v1/admin/*`, `/storage/v1/*`), which needs a `service_role` key — and a session-cookie dashboard (D-062) must never hold one in the browser. Needs a control-plane proxy, which is an architectural decision, not a screen |
 | Logs, metrics, backups list, audit | No endpoints |
-| **Usage per project** | The *data* exists — `project_databases.disk_used_bytes`, `disk_limit_mb`, `disk_state`, `disk_checked_at`, plus `backup_runs.size_bytes` — but `serializeProject` exposes none of it, so this needs a control-plane field before it can be a page. CPU, RAM, connections and request rate have no source at all. |
+| ~~Usage per project~~ | **Built — P7e**, endpoint and page. Object-storage bytes remain out: `storage-sweep` computes the authoritative figure and does not record it centrally, which is the worker change that would let the route serve it. CPU, connections and request rate have no source at all. |
 | Org settings, account | **API exists** (`PATCH`/`DELETE /v1/orgs/:id`, and `/v1/auth/tokens` for personal access tokens, which have no UI at all) — the genuinely UI-only steps left |
 | ~~Project settings~~ | **Built — P7d.** Pause/resume and the danger zone; renaming still blocked on a missing route |
 
@@ -4418,6 +4472,16 @@ recipe — which is a recipe for running the *services* — turned 78 passing te
 success returned 401, and the only tests that stayed green were the ones asserting
 that things are refused. The lesson is the failure *shape*: when a suite fails and
 its negative tests all pass, suspect the fixture before the product.
+
+**A `NOT NULL DEFAULT` is not an observation.** `disk_state` defaults to `'ok'`, so
+the usage page reported a brand-new project's disk state as *ok* while the line
+above it said the disk had been measured "never". The column cannot tell an
+assessment from its own default; the *timestamp* can, and `disk_checked_at` was
+sitting right there being null. Any column with a default is two facts wearing one
+name — the value, and whether anyone put it there — and a page that reads only the
+value will state the default as though someone had checked. Found by opening the
+page on a project created seconds earlier, which is a state the seeded fixture
+never has. (D-443.)
 
 **Adding a way to cause a state re-opens every rule that reacts to it.** Auto-resume
 had one job — a paused project you navigate to gets started — and it read that state
