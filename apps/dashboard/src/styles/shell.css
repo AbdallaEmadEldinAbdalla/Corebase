@@ -78,6 +78,13 @@
 .wrap { max-width: 1120px; padding: var(--sh-space-24) var(--sh-space-24) var(--sh-space-48); }
 .wrap--narrow { max-width: 620px; }
 
+/* The layout's banner slot. `ResumeBanner` is a sibling of the page, not part of
+   it (D-425 puts it in the project layout), so it cannot inherit the gutter that
+   every page gets from its own `.wrap` — it rendered flush against the sidebar's
+   right edge and the header's bottom edge. Same gutter and column as `.wrap`, no
+   bottom padding: the page's own top padding is the gap. */
+.bannerslot { max-width: 1120px; padding: var(--sh-space-24) var(--sh-space-24) 0; }
+
 .head { display: flex; align-items: flex-start; gap: var(--sh-space-16); margin-bottom: var(--sh-space-24); }
 .head__title { font: var(--sh-heading-1); letter-spacing: var(--sh-tracking-heading-1); margin: 0; }
 .head__sub { font: var(--sh-body-s); color: var(--sh-text-secondary); margin: 6px 0 0; }
@@ -99,6 +106,10 @@
   border-radius: var(--sh-radius-lg); overflow: hidden;
 }
 .card__body { padding: var(--sh-space-24); }
+/* The danger zone. `.sh-card--error` exists but belongs to the *grid* card, which
+   is 340px wide by design — using it for a full-width section silently caps the
+   section. Same role token, page-card family. */
+.card--danger { border-color: var(--sh-error); border-width: 1.5px; }
 .card__foot {
   padding: var(--sh-space-12) var(--sh-space-24);
   border-top: 1px solid var(--sh-border); background: var(--sh-surface-alt);

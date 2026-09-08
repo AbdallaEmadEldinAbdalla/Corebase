@@ -344,6 +344,22 @@ export const api = {
   },
 
   /**
+   * Delete a project — which is a **soft** delete (D-038).
+   *
+   * The saga sets `deleted_at` and `purge_after = now() + 7 days` and stops the
+   * containers; the row, the volume and the final backup outlive the request.
+   * The 202 carries the project back with `restorable_until` on it, which is the
+   * deadline this UI shows rather than the phrase "seven days" — the promise is a
+   * date, and a date is checkable.
+   *
+   * There is no self-serve undo: nothing in the platform API flips
+   * `soft_deleted` back, so the confirmation must not imply a button exists.
+   */
+  deleteProject: (ref: string) =>
+    request<{ project: Project; job: { id: string; type: string; state: string } }>(
+      `/v1/projects/${encodeURIComponent(ref)}`, { method: 'DELETE' }),
+
+  /**
    * Accept an invitation.
    *
    * The platform answers a single 404 for expired, revoked, already-used and

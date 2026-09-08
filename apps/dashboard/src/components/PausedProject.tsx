@@ -4,7 +4,8 @@ import { useEffect, useRef } from 'react';
 import { useResumeProject } from '../lib/queries.ts';
 import { useToast } from './Toasts.tsx';
 import { ApiError } from '../lib/api.ts';
-import { onStatus, onResumeSettled, initialResumeState } from '../lib/resume-machine.ts';
+import { onStatus, onResumeSettled, initialResumeState, isDeliberatelyPaused }
+  from '../lib/resume-machine.ts';
 import { CopyButton } from './Copy.tsx';
 
 /**
@@ -60,21 +61,29 @@ export function useAutoResume(ref: string, status: string | undefined, orgId?: s
     }
   }, [status, ref]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  return resume;
+  /**
+   * `standing` is the paused state nobody asked to leave — the user pressed Pause
+   * on the settings page, or another admin did while this page was open. The
+   * banner has to word those two situations differently, and before P7d they
+   * could not occur, so there was only one wording.
+   */
+  return Object.assign(resume, { standing: isDeliberatelyPaused(state.current, status) });
 }
 
-export function ResumeBanner({ status, plan, error, onRetry }: {
+export function ResumeBanner({ status, plan, error, onRetry, standing, onResume }: {
   status: string | undefined;
   plan?: string | undefined;
   error?: unknown;
   onRetry?: () => void;
+  /** Paused with no resume on the way — somebody paused it on purpose. */
+  standing?: boolean;
+  onResume?: () => void;
 }) {
   const api = error instanceof ApiError ? error : null;
 
   if (api) {
     return (
-      <div className="sh-banner sh-banner--error" role="alert"
-           style={{ marginBottom: 'var(--sh-space-20)' }}>
+      <div className="sh-banner sh-banner--error" role="alert">
         <div className="sh-banner__body">
           <div className="sh-banner__title">This project could not be resumed</div>
           <div className="sh-banner__text">{api.message}</div>
@@ -94,6 +103,34 @@ export function ResumeBanner({ status, plan, error, onRetry }: {
 
   if (!status || !RESUMING_STATES.has(status)) return null;
 
+  /**
+   * A pause that is going to stay. The banner must not claim *why* — the control
+   * plane records `paused_at` and not a reason, and once a person can press Pause
+   * the old wording ("paused after 7 days of inactivity") is simply false for
+   * them. So it states the situation, what is safe, and the way out, and it
+   * carries the inverse action rather than leaving Resume to a navigation
+   * side-effect.
+   */
+  if (standing) {
+    return (
+      <div className="sh-banner sh-banner--info" role="status" aria-live="polite">
+        <div className="sh-banner__body">
+          <div className="sh-banner__title">This project is paused</div>
+          <div className="sh-banner__text">
+            The database is stopped. Its data, its volume and its keys are kept, and
+            the pages below cannot load until it is running again.
+            {plan === 'free' ? ' Free projects also pause on their own after seven days idle.' : ''}
+          </div>
+        </div>
+        {onResume ? (
+          <button type="button" className="sh-btn sh-btn--sm" onClick={onResume}>
+            Resume
+          </button>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
     <div className="sh-banner sh-banner--info" role="status" aria-live="polite"
          style={{ marginBottom: 'var(--sh-space-20)' }}>
@@ -102,8 +139,8 @@ export function ResumeBanner({ status, plan, error, onRetry }: {
           {status === 'paused' ? 'Resuming this project' : 'Resuming…'}
         </div>
         <div className="sh-banner__text">
-          This project was paused after 7 days of inactivity. Resuming usually takes
-          a few seconds — the pages below fill in as it comes back.
+          Resuming usually takes a few seconds — the pages below fill in as it comes
+          back.
           {/* The one place monetization appears in a flow, and it stays quiet:
               paid projects never pause, so this is information, not a pitch. */}
           {plan === 'free' ? ' Paid projects never pause.' : ''}

@@ -6,12 +6,15 @@ import { useProject, useOrgs } from '../../../lib/queries.ts';
 import { useAutoResume, ResumeBanner } from '../../../components/PausedProject.tsx';
 
 /**
- * Project chrome: three sections, all of which are real.
+ * Project chrome: four sections, all of which are real.
  *
- * Overview, Connect and API keys are exactly what the control plane can answer
- * today. The IA's full sidebar — table editor, SQL editor, auth, storage, logs,
- * backups, settings — is Phase 2 and beyond, and none of it appears here until it
- * works (§7's honesty rule and gate question 20).
+ * Overview, Connect, API keys and Settings are exactly what the control plane can
+ * answer today. The rest of the IA's sidebar — table editor, SQL editor, auth,
+ * storage, logs, backups — has no endpoints behind it, and none of it appears here
+ * until it works (§7's honesty rule and gate question 20).
+ *
+ * Settings sits last because that is the IA's order and because it is the only
+ * section that is mostly about *stopping* the project rather than using it.
  */
 export default function ProjectLayout({ children, params }: {
   children: ReactNode;
@@ -39,6 +42,7 @@ export default function ProjectLayout({ children, params }: {
         <NavItem href={`/project/${ref}`} current={path === `/project/${ref}`} icon="overview">Overview</NavItem>
         <NavItem href={`/project/${ref}/connect`} current={path.endsWith('/connect')} icon="connect">Connect</NavItem>
         <NavItem href={`/project/${ref}/keys`} current={path.endsWith('/keys')} icon="keys">API keys</NavItem>
+        <NavItem href={`/project/${ref}/settings`} current={path.endsWith('/settings')} icon="settings">Settings</NavItem>
         <div className="nav__foot">
           <div className="nav__hint">
             <span>Shortcuts</span><span className="kbd">?</span>
@@ -46,12 +50,14 @@ export default function ProjectLayout({ children, params }: {
         </div>
       </>
     }>
-      <ResumeBanner
+      <div className="bannerslot"><ResumeBanner
         status={p?.status}
         plan={p?.plan}
         error={resume.error}
+        standing={resume.standing}
+        onResume={() => resume.mutate()}
         onRetry={() => resume.mutate()}
-      />
+      /></div>
       {children}
     </AppShell>
   );

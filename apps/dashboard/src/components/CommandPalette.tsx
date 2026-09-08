@@ -136,6 +136,9 @@ export function CommandPalette({ open, onClose, orgSlug, projectRef }: {
         { id: 'go-keys', group: 'Go to', label: 'API keys',
           keywords: 'anon service role jwt jwks',
           hint: 'g k', run: go(`/project/${projectRef}/keys`) },
+        { id: 'go-settings', group: 'Go to', label: 'Project settings',
+          keywords: 'pause stop delete danger zone rename environment',
+          hint: 'g s', run: go(`/project/${projectRef}/settings`) },
       );
     }
 

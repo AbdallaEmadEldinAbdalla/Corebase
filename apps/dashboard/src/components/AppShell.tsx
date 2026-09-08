@@ -55,6 +55,7 @@ export function AppShell({ children, orgSlug, projectRef, nav }: {
       o: () => { if (projectRef) router.push(`/project/${projectRef}`); },
       c: () => { if (projectRef) router.push(`/project/${projectRef}/connect`); },
       k: () => { if (projectRef) router.push(`/project/${projectRef}/keys`); },
+      s: () => { if (projectRef) router.push(`/project/${projectRef}/settings`); },
     },
   });
 

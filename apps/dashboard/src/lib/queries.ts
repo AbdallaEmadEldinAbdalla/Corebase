@@ -169,6 +169,24 @@ export function usePauseProject(ref: string, orgId?: string) {
   });
 }
 
+/**
+ * Delete a project.
+ *
+ * Invalidates the org's project list as well as the project itself, because the
+ * grid hides soft-deleted projects — without it the caller navigates back to a
+ * list still showing the thing they just deleted.
+ */
+export function useDeleteProject(ref: string, orgId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.deleteProject(ref),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: keys.project(ref) });
+      if (orgId) void qc.invalidateQueries({ queryKey: keys.projects(orgId) });
+    },
+  });
+}
+
 export function useAcceptInvite() {
   const qc = useQueryClient();
   return useMutation({
