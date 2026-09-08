@@ -69,7 +69,7 @@ export default function KeysPage({ params }: { params: Promise<{ ref: string }> 
             <div className="card">
               <div className="card__body">
                 {anon?.key ? (
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--sh-space-3)' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--sh-space-12)' }}>
                     <code style={{ flex: 1, minWidth: 0, font: 'var(--sh-code)', overflowWrap: 'anywhere' }}>
                       {anon.key}
                     </code>
@@ -103,7 +103,7 @@ export default function KeysPage({ params }: { params: Promise<{ ref: string }> 
                   audit log against your account. The confirmation flow that does that
                   properly is not built yet — until then, read it with the API:
                 </p>
-                <div className="sh-code codeblock" style={{ marginTop: 'var(--sh-space-4)' }}>
+                <div className="sh-code codeblock" style={{ marginTop: 'var(--sh-space-16)' }}>
                   <div className="sh-code__header">
                     <span className="sh-code__lang">shell</span>
                     <CopyButton
@@ -126,10 +126,10 @@ export default function KeysPage({ params }: { params: Promise<{ ref: string }> 
           <section className="section">
             <div className="section__head"><h2 className="section__title">JWKS</h2></div>
             <div className="card"><div className="card__body">
-              <p className="muted" style={{ margin: 0, marginBottom: 'var(--sh-space-3)' }}>
+              <p className="muted" style={{ margin: 0, marginBottom: 'var(--sh-space-12)' }}>
                 Your own services can verify these tokens without calling us.
               </p>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sh-space-3)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sh-space-12)' }}>
                 <code style={{ flex: 1, minWidth: 0, font: 'var(--sh-code)', overflowWrap: 'anywhere' }}>
                   {`/v1/projects/${ref}/.well-known/jwks.json`}
                 </code>

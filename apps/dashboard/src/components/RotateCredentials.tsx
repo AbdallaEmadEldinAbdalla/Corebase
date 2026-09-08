@@ -72,12 +72,12 @@ export function RotateCredentials({ projectRef }: { projectRef: string }) {
             </div>
 
             {rotate.error ? (
-              <div style={{ marginBottom: 'var(--sh-space-4)' }}>
+              <div style={{ marginBottom: 'var(--sh-space-16)' }}>
                 <ErrorSurface error={rotate.error} />
               </div>
             ) : null}
 
-            <label className="row" style={{ alignItems: 'flex-start', gap: 'var(--sh-space-3)' }}>
+            <label className="row" style={{ alignItems: 'flex-start', gap: 'var(--sh-space-12)' }}>
               <input type="checkbox" className="sh-check" checked={terminate}
                      onChange={(e) => setTerminate(e.target.checked)} />
               <span style={{ font: 'var(--sh-body-s)' }}>
@@ -92,7 +92,7 @@ export function RotateCredentials({ projectRef }: { projectRef: string }) {
             </label>
 
             <div className="sh-dialog__footer"
-                 style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--sh-space-2)' }}>
+                 style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--sh-space-8)' }}>
               <button type="button" className="sh-btn sh-btn--secondary"
                       onClick={() => { setOpen(false); trigger.current?.focus(); }}>
                 Cancel

@@ -1,227 +1,224 @@
-/* Steadhold Design System — design tokens
-   Generated from the Pencil boards. Accent: Electric Violet (D-177).
-   Components must reference ROLE tokens (--sh-surface, --sh-text, …), never ramp
-   steps directly (D-178). Light values live on :root; dark overrides follow. */
+/* Steadhold — design tokens.  GENERATED FILE, DO NOT EDIT.
+   Source: tokens.build.mjs  ·  regenerate: node tokens.build.mjs > tokens.css
+   tokens.test.ts re-renders this and asserts byte-equality, so the dark theme
+   cannot drift from the light one (D-418).
+
+   Components reference ROLE tokens only — --sh-surface, --sh-text, --sh-accent.
+   Naming a ramp step (--sh-clay-700) in a component is a bug (D-178), and the
+   test fails the build if one appears. */
 
 :root {
-  /* ── brand ramp ─────────────────────────────── */
-  --sh-violet-50:  #F5F3FF;
-  --sh-violet-100: #EDE9FE;
-  --sh-violet-300: #C4B5FD;
-  --sh-violet-500: #7C3AED;
-  --sh-violet-600: #6D28D9;
-  --sh-violet-700: #5B21B6;
+  color-scheme: light dark;
 
-  /* ── neutral ramp (cool, violet-tinted) ─────── */
-  --sh-ink-50:  #F7F6FB;
-  --sh-ink-100: #EFECF8;
-  --sh-ink-200: #E1DCF0;
-  --sh-ink-300: #C3BADF;
-  --sh-ink-400: #8B82A3;
-  --sh-ink-500: #6B6285;
-  --sh-ink-600: #4B4360;
-  --sh-ink-700: #2C2640;
-  --sh-ink-800: #1F1A2E;
-  --sh-ink-900: #16121F;
+  --sh-clay-50:           #FAF6F0;
+  --sh-clay-100:          #F3EDE4;
+  --sh-clay-200:          #E7DFD4;
+  --sh-clay-300:          #CFC3B4;
+  --sh-clay-400:          #796959;
+  --sh-clay-500:          #63564A;
+  --sh-clay-600:          #4A3F33;
+  --sh-clay-700:          #332A21;
+  --sh-clay-800:          #241E18;
+  --sh-clay-900:          #171310;
+  --sh-terracotta:        #B4502E;
+  --sh-terracotta-bright: #E07A52;
+  --sh-bg:                #FAF6F0;
+  --sh-surface:           #FFFFFF;
+  --sh-surface-alt:       #F3EDE4;
+  --sh-surface-raised:    #FFFFFF;
+  --sh-border:            #E7DFD4;
+  --sh-border-strong:     #CFC3B4;
+  --sh-text:              #171310;
+  --sh-text-secondary:    #4A3F33;
+  --sh-text-muted:        #796959;
+  --sh-accent:            #B4502E;
+  --sh-accent-hover:      #9A4326;
+  --sh-accent-active:     #7F3620;
+  --sh-accent-subtle:     #F8EAE3;
+  --sh-accent-border:     #E0B29C;
+  --sh-accent-text:       #B4502E;
+  --sh-accent-on-subtle:  #7F3620;
+  --sh-on-accent:         #FFFFFF;
+  --sh-danger:            #B0123A;
+  --sh-danger-hover:      #8F0E2E;
+  --sh-on-danger:         #FFFFFF;
+  --sh-success:           #0F7A52;
+  --sh-success-bg:        #E2F3EA;
+  --sh-warning:           #8A6410;
+  --sh-warning-bg:        #F7EEDA;
+  --sh-error:             #C0143C;
+  --sh-error-bg:          #FBE4E9;
+  --sh-info:              #1F5FA8;
+  --sh-info-bg:           #E4EDF8;
+  --sh-skeleton:          #CFC3B4;
+  --sh-switch-knob:       #FFFFFF;
+  --sh-focus-ring:        #B4502E;
+  --sh-focus-halo:        #F8EAE3;
+  --sh-scrim:             rgb(23 19 16 / 32%);
 
-  /* ── semantic ───────────────────────────────── */
-  --sh-success:    #1E9E6A;
-  --sh-success-bg: #E4F5EE;
-  --sh-warning:    #C77A02;
-  --sh-warning-bg: #FDF1DC;
-  --sh-error:      #B3261E;
-  --sh-error-bg:   #F9E3E1;
-  --sh-info:       #2F6FB5;
-  --sh-info-bg:    #E4EEF8;
+  /* ── type ── three families; Zilla Slab is confined to display/h1/h2 (D-419) */
+  --sh-font-display: "Zilla Slab", Georgia, serif;
+  --sh-font-ui:      "Space Grotesk", system-ui, sans-serif;
+  --sh-font-mono:    "JetBrains Mono", ui-monospace, monospace;
 
-  /* ── role tokens — reference these ──────────── */
-  --sh-bg:             var(--sh-ink-50);
-  --sh-surface:        #FFFFFF;
-  --sh-surface-alt:    var(--sh-ink-100);
-  --sh-surface-raised: #FFFFFF;
-  --sh-border:         var(--sh-ink-200);
-  --sh-border-strong:  var(--sh-ink-300);
-  --sh-text:           var(--sh-ink-900);
-  --sh-text-secondary: var(--sh-ink-600);
-  --sh-text-muted:     var(--sh-ink-400);
-  --sh-accent:         var(--sh-violet-500);
-  --sh-accent-hover:   var(--sh-violet-600);
-  --sh-accent-active:  var(--sh-violet-700);
-  --sh-accent-subtle:  var(--sh-violet-100);
-  --sh-accent-border:  var(--sh-violet-300);
-  --sh-on-accent:      #FFFFFF;
-  --sh-on-danger:      #FFFFFF;
-  --sh-danger:         var(--sh-error);
-  --sh-danger-hover:   #8E1D16;
-  --sh-focus-ring:     var(--sh-violet-500);
-  --sh-focus-halo:     var(--sh-violet-100);
-  --sh-scrim:          rgb(22 18 31 / 28%);
-
-  /* code surfaces (dark in both themes) */
-  --sh-code-bg:      #16121F;
-  --sh-code-header:  #1B1628;
-  --sh-code-text:    #FFFFFF;
-  --sh-code-keyword: var(--sh-violet-300);
-  --sh-code-string:  #6EE7A8;
-  --sh-code-comment: var(--sh-ink-500);
-
-  /* ── type ───────────────────────────────────── */
-  --sh-font-ui:   Inter, system-ui, sans-serif;
-  --sh-font-mono: "JetBrains Mono", ui-monospace, monospace;
-
-  --sh-display:   700 32px/40px var(--sh-font-ui);
-  --sh-heading-1: 700 24px/32px var(--sh-font-ui);
-  --sh-heading-2: 600 20px/28px var(--sh-font-ui);
-  --sh-heading-3: 600 16px/24px var(--sh-font-ui);
-  --sh-body-l:    400 16px/24px var(--sh-font-ui);
-  --sh-body-m:    400 14px/20px var(--sh-font-ui);
-  --sh-body-s:    400 13px/18px var(--sh-font-ui);
-  --sh-caption:   500 12px/16px var(--sh-font-ui);
-  --sh-code:      400 13px/20px var(--sh-font-mono);
-
+  --sh-display:            700 32px/40px var(--sh-font-display);
   --sh-tracking-display:   -0.6px;
+  --sh-heading-1:          700 26px/34px var(--sh-font-display);
   --sh-tracking-heading-1: -0.4px;
+  --sh-heading-2:          600 20px/28px var(--sh-font-display);
   --sh-tracking-heading-2: -0.2px;
-  --sh-tracking-caption:    0.4px;
+  --sh-heading-3:          600 16px/24px var(--sh-font-ui);
+  --sh-body-l:             400 16px/24px var(--sh-font-ui);
+  --sh-body-m:             400 14px/20px var(--sh-font-ui);
+  --sh-body-s:             400 13px/18px var(--sh-font-ui);
+  --sh-caption:            500 12px/16px var(--sh-font-ui);
+  --sh-tracking-caption:   0.4px;
+  --sh-code:               400 13px/20px var(--sh-font-mono);
 
-  /* ── shape & space ──────────────────────────── */
+  /* ── shape & space ── named by value, so a missing step is obvious (D-414) */
+  --sh-space-4:     4px;
+  --sh-space-8:     8px;
+  --sh-space-12:    12px;
+  --sh-space-16:    16px;
+  --sh-space-20:    20px;
+  --sh-space-24:    24px;
+  --sh-space-32:    32px;
+  --sh-space-48:    48px;
   --sh-radius-sm:   6px;
-  --sh-radius-md:  10px;
-  --sh-radius-lg:  14px;
+  --sh-radius-md:   10px;
+  --sh-radius-lg:   14px;
   --sh-radius-full: 999px;
+  --sh-control-sm:  32px;
+  --sh-control-md:  40px;
+  --sh-control-lg:  48px;
 
-  --sh-space-1:  4px;
-  --sh-space-2:  8px;
-  --sh-space-3: 12px;
-  --sh-space-4: 16px;
-  --sh-space-6: 24px;
-  --sh-space-8: 32px;
-  --sh-space-12: 48px;
+  /* ── surfaces that are dark in BOTH themes ── */
+  --sh-toast-bg:            #241E18;
+  --sh-toast-fg:            #FAF6F0;
+  --sh-toast-sub:           #C0B3A3;
+  --sh-toast-border:        #373026;
+  --sh-toast-action:        #E07A52;
+  --sh-tooltip-bg:          #241E18;
+  --sh-tooltip-fg:          #FAF6F0;
+  --sh-tooltip-border:      #373026;
+  --sh-page-current-bg:     #241E18;
+  --sh-page-current-fg:     #FAF6F0;
+  --sh-page-current-border: #4C4237;
+  --sh-code-bg:      #171310;
+  --sh-code-header:  #241E18;
+  --sh-code-text:    #FAF6F0;
+  --sh-code-keyword: #E9A17E;
+  --sh-code-string:  #7FD8A6;
+  --sh-code-comment: #9C8E7C;
+  --sh-code-copy-bg: rgb(255 255 255 / 8%);
+  --sh-code-copy-fg: #C0B3A3;
 
-  --sh-control-sm: 32px;
-  --sh-control-md: 40px;
-  --sh-control-lg: 48px;
-
-  /* no shadow scale by design (D-179) — elevation is tint + border */
+  /* no shadow scale, by design (D-179) — elevation is surface tint + border */
 }
 
-/* ── dark theme ───────────────────────────────── */
+/* An explicit choice wins in both directions. */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"]  { color-scheme: dark; }
+
+/* ── dark theme ────────────────────────────────────────────────────────────────
+   Two blocks with identical bodies, and they must stay identical: the explicit
+   choice, and the default "system" setting which stamps no attribute at all — a
+   viewer on system-dark has nothing on :root to select. Both are emitted from one
+   definition, so they cannot diverge. */
 :root[data-theme="dark"] {
-  --sh-violet-50:  #2A1D4A;
-  --sh-violet-100: #3A2A63;
-  --sh-violet-300: #6D48C9;
-  --sh-violet-500: #7C3AED;
-  --sh-violet-600: #8B5CF6;
-  --sh-violet-700: #A78BFA;
-
-  --sh-ink-50:  #120F1A;
-  --sh-ink-100: #1A1526;
-  --sh-ink-200: #241D33;
-  --sh-ink-300: #322847;
-  --sh-ink-400: #453A63;
-  --sh-ink-500: #5D5080;
-  --sh-ink-600: #8E85A8;
-  --sh-ink-700: #BEB4D6;
-  --sh-ink-800: #DDD6EE;
-  --sh-ink-900: #F3F0FA;
-
-  --sh-success:    #4ADE80;
-  --sh-success-bg: #0F2E1E;
-  --sh-warning:    #FBBF24;
-  --sh-warning-bg: #2E2410;
-  --sh-error:      #F87171;
-  --sh-error-bg:   #2E1614;
-  --sh-info:       #60A5FA;
-  --sh-info-bg:    #12233A;
-
-  --sh-bg:             var(--sh-ink-50);
-  --sh-surface:        var(--sh-ink-100);
-  --sh-surface-alt:    var(--sh-ink-200);
-  --sh-surface-raised: var(--sh-ink-200);
-  --sh-border:         var(--sh-ink-300);
-  --sh-border-strong:  var(--sh-ink-400);
-  --sh-text:           var(--sh-ink-900);
-  --sh-text-secondary: var(--sh-ink-700);
-  --sh-text-muted:     var(--sh-ink-600);
-  --sh-accent:         var(--sh-violet-600);
-  --sh-accent-hover:   var(--sh-violet-700);
-  --sh-accent-active:  var(--sh-violet-300);
-  --sh-accent-subtle:  var(--sh-violet-50);
-  --sh-accent-border:  var(--sh-violet-300);
-  --sh-on-accent:      #FFFFFF;
-
-  /* danger keeps white labels, so the FILL stays darker than --sh-error,
-     which is the light/bright value used for error TEXT and icons */
-  --sh-danger:       #DC2626;
-  --sh-danger-hover: #B91C1C;
-  --sh-on-danger:    #FFFFFF;
-
-  --sh-focus-ring: var(--sh-violet-600);
-  --sh-focus-halo: var(--sh-violet-50);
-  --sh-scrim:      rgb(0 0 0 / 55%);
-
-  --sh-code-bg:      #0D0A14;
-  --sh-code-header:  #1F1830;
-  --sh-code-text:    #F3F0FA;
-  --sh-code-keyword: #C4B5FD;
-  --sh-code-string:  #6EE7A8;
-  --sh-code-comment: var(--sh-ink-600);
+  --sh-clay-50:           #14110E;
+  --sh-clay-100:          #1C1815;
+  --sh-clay-200:          #262019;
+  --sh-clay-300:          #373026;
+  --sh-clay-400:          #4C4237;
+  --sh-clay-500:          #6B5F51;
+  --sh-clay-600:          #9C8E7C;
+  --sh-clay-700:          #C0B3A3;
+  --sh-clay-800:          #E2D8CB;
+  --sh-clay-900:          #FAF6F0;
+  --sh-terracotta:        #B4502E;
+  --sh-terracotta-bright: #E07A52;
+  --sh-bg:                #14110E;
+  --sh-surface:           #1C1815;
+  --sh-surface-alt:       #262019;
+  --sh-surface-raised:    #262019;
+  --sh-border:            #373026;
+  --sh-border-strong:     #4C4237;
+  --sh-text:              #FAF6F0;
+  --sh-text-secondary:    #C0B3A3;
+  --sh-text-muted:        #9C8E7C;
+  --sh-accent:            #B4502E;
+  --sh-accent-hover:      #C05531;
+  --sh-accent-active:     #A04729;
+  --sh-accent-subtle:     #2F1A12;
+  --sh-accent-border:     #7C3B24;
+  --sh-accent-text:       #E07A52;
+  --sh-accent-on-subtle:  #E07A52;
+  --sh-on-accent:         #FFFFFF;
+  --sh-danger:            #C0143C;
+  --sh-danger-hover:      #A01032;
+  --sh-on-danger:         #FFFFFF;
+  --sh-success:           #4FD08A;
+  --sh-success-bg:        #0E2A1D;
+  --sh-warning:           #E0A72A;
+  --sh-warning-bg:        #2A2110;
+  --sh-error:             #F2708F;
+  --sh-error-bg:          #2C1219;
+  --sh-info:              #6FA8F0;
+  --sh-info-bg:           #10203A;
+  --sh-skeleton:          #373026;
+  --sh-switch-knob:       #E2D8CB;
+  --sh-focus-ring:        #E07A52;
+  --sh-focus-halo:        #2F1A12;
+  --sh-scrim:             rgb(0 0 0 / 58%);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    /* mirror of :root[data-theme="dark"] — keep the two blocks in sync */
-    --sh-violet-50:#2A1D4A; --sh-violet-100:#3A2A63; --sh-violet-300:#6D48C9;
-    --sh-violet-500:#7C3AED; --sh-violet-600:#8B5CF6; --sh-violet-700:#A78BFA;
-    --sh-ink-50:#120F1A; --sh-ink-100:#1A1526; --sh-ink-200:#241D33; --sh-ink-300:#322847;
-    --sh-ink-400:#453A63; --sh-ink-500:#5D5080; --sh-ink-600:#8E85A8; --sh-ink-700:#BEB4D6;
-    --sh-ink-800:#DDD6EE; --sh-ink-900:#F3F0FA;
-    --sh-success:#4ADE80; --sh-success-bg:#0F2E1E; --sh-warning:#FBBF24; --sh-warning-bg:#2E2410;
-    --sh-error:#F87171; --sh-error-bg:#2E1614; --sh-info:#60A5FA; --sh-info-bg:#12233A;
-    --sh-bg:var(--sh-ink-50); --sh-surface:var(--sh-ink-100); --sh-surface-alt:var(--sh-ink-200);
-    --sh-surface-raised:var(--sh-ink-200); --sh-border:var(--sh-ink-300); --sh-border-strong:var(--sh-ink-400);
-    --sh-text:var(--sh-ink-900); --sh-text-secondary:var(--sh-ink-700); --sh-text-muted:var(--sh-ink-600);
-    --sh-accent:var(--sh-violet-600); --sh-accent-hover:var(--sh-violet-700); --sh-accent-active:var(--sh-violet-300);
-    --sh-accent-subtle:var(--sh-violet-50); --sh-on-accent:#FFFFFF;
-    --sh-danger:#DC2626; --sh-danger-hover:#B91C1C; --sh-on-danger:#FFFFFF;
-    --sh-focus-ring:var(--sh-violet-600); --sh-focus-halo:var(--sh-violet-50);
-    --sh-scrim:rgb(0 0 0 / 55%);
-    --sh-code-bg:#0D0A14; --sh-code-header:#1F1830; --sh-code-text:#F3F0FA;
-    --sh-code-keyword:#C4B5FD; --sh-code-comment:var(--sh-ink-600);
+    --sh-clay-50:           #14110E;
+    --sh-clay-100:          #1C1815;
+    --sh-clay-200:          #262019;
+    --sh-clay-300:          #373026;
+    --sh-clay-400:          #4C4237;
+    --sh-clay-500:          #6B5F51;
+    --sh-clay-600:          #9C8E7C;
+    --sh-clay-700:          #C0B3A3;
+    --sh-clay-800:          #E2D8CB;
+    --sh-clay-900:          #FAF6F0;
+    --sh-terracotta:        #B4502E;
+    --sh-terracotta-bright: #E07A52;
+    --sh-bg:                #14110E;
+    --sh-surface:           #1C1815;
+    --sh-surface-alt:       #262019;
+    --sh-surface-raised:    #262019;
+    --sh-border:            #373026;
+    --sh-border-strong:     #4C4237;
+    --sh-text:              #FAF6F0;
+    --sh-text-secondary:    #C0B3A3;
+    --sh-text-muted:        #9C8E7C;
+    --sh-accent:            #B4502E;
+    --sh-accent-hover:      #C05531;
+    --sh-accent-active:     #A04729;
+    --sh-accent-subtle:     #2F1A12;
+    --sh-accent-border:     #7C3B24;
+    --sh-accent-text:       #E07A52;
+    --sh-accent-on-subtle:  #E07A52;
+    --sh-on-accent:         #FFFFFF;
+    --sh-danger:            #C0143C;
+    --sh-danger-hover:      #A01032;
+    --sh-on-danger:         #FFFFFF;
+    --sh-success:           #4FD08A;
+    --sh-success-bg:        #0E2A1D;
+    --sh-warning:           #E0A72A;
+    --sh-warning-bg:        #2A2110;
+    --sh-error:             #F2708F;
+    --sh-error-bg:          #2C1219;
+    --sh-info:              #6FA8F0;
+    --sh-info-bg:           #10203A;
+    --sh-skeleton:          #373026;
+    --sh-switch-knob:       #E2D8CB;
+    --sh-focus-ring:        #E07A52;
+    --sh-focus-halo:        #2F1A12;
+    --sh-scrim:             rgb(0 0 0 / 58%);
   }
 }
-
-/* ── surfaces that stay dark in BOTH themes (toast, tooltip, current page) ──
-   These must be tokens, not [data-theme] component overrides: the default
-   "system" theme stamps nothing on :root, so a [data-theme="dark"] rule would
-   never apply for viewers on system-dark. */
-:root{
-  --sh-toast-bg:#16121F; --sh-toast-fg:#FFFFFF; --sh-toast-sub:#C3BADF;
-  --sh-toast-border:transparent; --sh-toast-action:#C4B5FD;
-  --sh-tooltip-bg:#16121F; --sh-tooltip-fg:#FFFFFF; --sh-tooltip-border:transparent;
-  --sh-page-current-bg:#16121F; --sh-page-current-fg:#F7F6FB; --sh-page-current-border:#16121F;
-}
-:root[data-theme="dark"]{
-  --sh-toast-bg:#241D33; --sh-toast-fg:#F3F0FA; --sh-toast-sub:#BEB4D6;
-  --sh-toast-border:#322847; --sh-toast-action:#A78BFA;
-  --sh-tooltip-bg:#241D33; --sh-tooltip-fg:#F3F0FA; --sh-tooltip-border:#322847;
-  --sh-page-current-bg:#241D33; --sh-page-current-fg:#F3F0FA; --sh-page-current-border:#453A63;
-}
-@media (prefers-color-scheme: dark){
-  :root:not([data-theme="light"]){
-    --sh-toast-bg:#241D33; --sh-toast-fg:#F3F0FA; --sh-toast-sub:#BEB4D6;
-    --sh-toast-border:#322847; --sh-toast-action:#A78BFA;
-    --sh-tooltip-bg:#241D33; --sh-tooltip-fg:#F3F0FA; --sh-tooltip-border:#322847;
-    --sh-page-current-bg:#241D33; --sh-page-current-fg:#F3F0FA; --sh-page-current-border:#453A63;
-  }
-}
-
-/* ── Appended for the dashboard implementation (P1g) ───────────────────────────
-   The block above is the exported token layer, copied verbatim from
-   design-exports/07-html/tokens.css, which is generated from the Pencil boards.
-   It is the reference; this file is the implementation. tokens.test.ts asserts
-   that every role token the design system doc names is defined in both themes,
-   and that no dashboard stylesheet reaches past a role token to a ramp step
-   (D-178: "a component that names a ramp step directly is a bug"). That guard is
-   worth more than byte-equality with the export, because it enforces the rule
-   the export exists to communicate. */

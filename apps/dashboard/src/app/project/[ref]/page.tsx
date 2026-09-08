@@ -49,7 +49,7 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
 
       {/* In progress renders as progress, never as an error (§6). */}
       {settling ? (
-        <div className="sh-banner sh-banner--info" role="status" style={{ marginBottom: 'var(--sh-space-5, 20px)' }}>
+        <div className="sh-banner sh-banner--info" role="status" style={{ marginBottom: 'var(--sh-space-20)' }}>
           <span className="sh-banner__icon" aria-hidden="true">
             <svg viewBox="0 0 12 12"><path d="M6 2v4l3 2" /></svg>
           </span>
@@ -73,7 +73,7 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
                 a fixed 55% fill, which is a number on screen that is not real
                 (§8 Q19) and reads as stuck rather than as working. */}
             <div className="sh-progress sh-progress--indeterminate"
-                 style={{ marginTop: 'var(--sh-space-3)' }}>
+                 style={{ marginTop: 'var(--sh-space-12)' }}>
               <div className="sh-progress__fill" />
             </div>
           </div>
@@ -81,7 +81,7 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
       ) : null}
 
       {p?.status === 'failed' ? (
-        <div className="sh-banner sh-banner--error" role="alert" style={{ marginBottom: 'var(--sh-space-5, 20px)' }}>
+        <div className="sh-banner sh-banner--error" role="alert" style={{ marginBottom: 'var(--sh-space-20)' }}>
           <span className="sh-banner__icon" aria-hidden="true">
             <svg viewBox="0 0 12 12"><path d="M2 2 10 10M10 2 2 10" /></svg>
           </span>
@@ -101,7 +101,7 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
           the original is still serving — two live databases and nothing that can
           reconcile them afterwards. */}
       {p?.status === 'restored' ? (
-        <div className="sh-banner sh-banner--warning" role="status" style={{ marginBottom: 'var(--sh-space-5, 20px)' }}>
+        <div className="sh-banner sh-banner--warning" role="status" style={{ marginBottom: 'var(--sh-space-20)' }}>
           <span className="sh-banner__icon" aria-hidden="true">
             <svg viewBox="0 0 12 12"><path d="M6 2v5M6 9v1" /></svg>
           </span>
@@ -124,7 +124,7 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
                 which is the same rule the soft-delete banner follows. The second
                 window is said out loud too: expiry is not destruction. */}
             {q.data?.restore?.expires_at ? (
-              <div className="sh-banner__text" style={{ marginTop: 'var(--sh-space-2)' }}>
+              <div className="sh-banner__text" style={{ marginTop: 'var(--sh-space-8)' }}>
                 <strong>This copy is removed on{' '}
                   {new Date(q.data.restore.expires_at).toLocaleString()}</strong>{' '}
                 — its data then stays recoverable for the usual window, so an expiry
@@ -136,7 +136,7 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
       ) : null}
 
       {p?.deleted_at || p?.status === 'soft_deleted' ? (
-        <div className="sh-banner sh-banner--warning" role="status" style={{ marginBottom: 'var(--sh-space-5, 20px)' }}>
+        <div className="sh-banner sh-banner--warning" role="status" style={{ marginBottom: 'var(--sh-space-20)' }}>
           <span className="sh-banner__icon" aria-hidden="true">
             <svg viewBox="0 0 12 12"><path d="M6 2v5M6 9v1" /></svg>
           </span>

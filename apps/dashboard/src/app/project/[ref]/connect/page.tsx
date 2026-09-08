@@ -98,11 +98,11 @@ function Connect({ projectRef }: { projectRef: string }) {
             ))}
           </div>
 
-          <div style={{ marginTop: 'var(--sh-space-4)' }}>
+          <div style={{ marginTop: 'var(--sh-space-16)' }}>
             <Snippet tab={tab} db={db} name={p?.name ?? projectRef} />
           </div>
 
-          <section className="section" style={{ marginTop: 'var(--sh-space-8)' }}>
+          <section className="section" style={{ marginTop: 'var(--sh-space-32)' }}>
             <div className="section__head">
               <h2 className="section__title">Which one do I use?</h2>
             </div>

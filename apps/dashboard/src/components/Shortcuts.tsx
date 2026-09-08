@@ -56,7 +56,7 @@ export function Shortcuts({ open, onClose }: { open: boolean; onClose: () => voi
           Everything here also lives in the command palette.
         </div>
         {GROUPS.map((g) => (
-          <div key={g.title} style={{ marginBottom: 'var(--sh-space-4)' }}>
+          <div key={g.title} style={{ marginBottom: 'var(--sh-space-16)' }}>
             <div className="palette__group" style={{ padding: '0 0 6px' }}>{g.title}</div>
             {g.keys.map(([k, what]) => (
               <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 12, height: 30 }}>

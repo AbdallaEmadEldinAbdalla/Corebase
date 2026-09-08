@@ -75,7 +75,7 @@ export default function NewOrgPage() {
         </div>
 
         {create.error ? (
-          <div style={{ marginBottom: 'var(--sh-space-4)' }}>
+          <div style={{ marginBottom: 'var(--sh-space-16)' }}>
             <ErrorSurface error={create.error} />
           </div>
         ) : null}
@@ -90,7 +90,7 @@ export default function NewOrgPage() {
               <span className="sh-help">What people in your team will see.</span>
             </div>
 
-            <div className="sh-field" style={{ marginTop: 'var(--sh-space-4)' }}>
+            <div className="sh-field" style={{ marginTop: 'var(--sh-space-16)' }}>
               <label className="sh-label" htmlFor="org-slug">
                 URL <span className="muted">· appears in every link</span>
               </label>

@@ -12,96 +12,115 @@ The canonical artefact is the pair of design boards in Pencil (`pencil-new.pen`)
 
 ### 1. Brand decision
 
-The accent is **Electric Violet** — `#7C3AED` in light, `#8B5CF6` in dark.
+The accent is **Terracotta** — `#B4502E`, in **both** themes. Neutrals are warm
+clay, carrying a trace of the accent's hue so the terracotta reads as native to the
+surface rather than applied on top of a cool grey.
 
-Chosen over coral, emerald, deep forest and cyan after building all five as full light/dark systems. The deciding factors were practical rather than aesthetic:
+It comes from the identity rather than from a palette bake-off: the mark is a
+chiselled S whose lower bowl is the ground it stands in (D-408), and that ground is
+fired earth. **This supersedes D-177's Electric Violet (D-417).** D-177's two
+objections were practical, not aesthetic, and both are answered rather than waved
+past:
 
-- **White text clears contrast on the accent in both modes.** It was the only candidate where this held. Cyan `#06B6D4` fails white at 2.6:1 and forces dark labels on every primary button; bright emerald and coral need dark labels in dark mode. Violet needs no per-mode exception, which removes a whole class of component special-casing.
-- **No collision with any semantic colour.** Success green, warning amber, error red and info blue all stay unmistakable beside violet. Both green candidates conflated brand with success; cyan forced info to move to indigo.
-- **Differentiation.** The managed-Postgres market is blue and green (Supabase, Neon, Firebase, Planetscale). Violet reads as neither.
+- **White must clear contrast on the accent in both themes.** It does, at 5.09:1,
+  because the fill **does not lift in dark mode**. D-177's own "the accent lifts one
+  step in dark" rule had put the dark accent at `violet/600`, where white is 4.23:1
+  and ink 4.36:1 — so the dark primary button failed AA with *either* label for the
+  entire life of that system, and nobody noticed because §7 justified the accent by
+  measuring only the light value. Holding one fill across both themes keeps
+  `on-accent` unconditional, which is what D-177 was really buying.
+- **`error` must never be a hue the brand also uses.** Terracotta is red-adjacent,
+  so the rule is kept by moving the semantics instead: error to the *cool* side of
+  red, warning to a true ochre, both ≥25° from the accent, asserted in
+  `tokens.test.ts` rather than asserted here.
+
+**The limitation, stated:** the accent *tint* cannot be hue-separated from both
+semantic tints simultaneously, because the brand hue sits between error and warning
+— 20° is already near-equidistant, and moving away from one moves toward the other.
+That separation is carried by chroma and a deeper foreground (`accent-on-subtle`,
+D-420) instead, with D-180's mandatory text labels underneath. This is a permanent
+consequence of a warm brand, not a defect to be fixed later.
 
 ### 2. Colour tokens
 
-**Brand ramp**
+**The values are not in this document.** They live in
+[`apps/dashboard/src/styles/tokens.build.mjs`](../../apps/dashboard/src/styles/tokens.build.mjs),
+which generates `tokens.css` (D-418), and the constraints below are executed by
+`tokens.test.ts` rather than described here. A table of hexes in Markdown is a
+second source of truth that drifts silently; the previous version of this section
+carried one and it is exactly where the failing dark accent hid.
 
-| Token | Light | Dark |
-|---|---|---|
-| `violet/50` | `#F5F3FF` | `#2A1D4A` |
-| `violet/100` | `#EDE9FE` | `#3A2A63` |
-| `violet/300` | `#C4B5FD` | `#6D48C9` |
-| `violet/500` | `#7C3AED` **accent** | `#7C3AED` |
-| `violet/600` | `#6D28D9` hover | `#8B5CF6` **accent** |
-| `violet/700` | `#5B21B6` active | `#A78BFA` hover |
+What the token layer guarantees, and fails the build over:
 
-**Neutrals** — cool, violet-tinted. Never pure grey; the faint violet cast is what makes the accent feel native rather than applied.
+| Guarantee | Floor |
+|---|---|
+| White on every accent and danger **fill**, both themes | 4.5:1 |
+| `text`, `text-secondary`, `text-muted` on `bg`, `surface`, `surface-alt` | 4.5:1 |
+| Every semantic colour on its own tint | 4.5:1 |
+| `accent-on-subtle` on `accent-subtle` (the tinted badge) | 4.5:1 |
+| Focus ring against `bg` and `surface` (WCAG 2.2) | 3:1 |
+| `accent` ↔ `warning` / `error` / `danger` hue separation | 25° |
+| A skeleton against the surface it loads on | 1.25:1 |
+| Ramps monotonic in luminance | — |
+| No colour literal in any component stylesheet or component | — |
 
-| Token | Light | Dark |
-|---|---|---|
-| `ink/50` | `#F7F6FB` | `#120F1A` |
-| `ink/100` | `#EFECF8` | `#1A1526` |
-| `ink/200` | `#E1DCF0` | `#241D33` |
-| `ink/300` | `#C3BADF` | `#322847` |
-| `ink/400` | `#8B82A3` | `#453A63` |
-| `ink/500` | `#6B6285` | `#5D5080` |
-| `ink/600` | `#4B4360` | `#8E85A8` |
-| `ink/700` | `#2C2640` | `#BEB4D6` |
-| `ink/800` | `#1F1A2E` | `#DDD6EE` |
-| `ink/900` | `#16121F` | `#F3F0FA` |
+**Role tokens** are the only names a component may use — `--sh-surface`,
+`--sh-text`, `--sh-accent`. Naming a ramp step (`--sh-clay-700`) is a bug (D-178),
+and so is writing a colour literally (D-420): a literal is the same violation and
+harder to see, which is how the old violet `#BEB4D6` survived a whole brand rebuild
+inside the code panel's copy button.
 
-**Semantic** — state colours, deliberately away from the brand hue. Light mode uses deep values on pale tints; dark mode inverts to light values on deep tints, or the banners glow.
-
-| Token | Light | Light bg | Dark | Dark bg |
-|---|---|---|---|---|
-| `success` | `#1E9E6A` | `#E4F5EE` | `#4ADE80` | `#0F2E1E` |
-| `warning` | `#C77A02` | `#FDF1DC` | `#FBBF24` | `#2E2410` |
-| `error` | `#B3261E` | `#F9E3E1` | `#F87171` | `#2E1614` |
-| `info` | `#2F6FB5` | `#E4EEF8` | `#60A5FA` | `#12233A` |
-
-**Semantic role tokens** — components reference these, never raw ramp steps:
-
-| Role | Light | Dark |
-|---|---|---|
-| `bg` | `ink/50` | `ink/50` (dark scale) |
-| `surface` | `#FFFFFF` | `ink/100` |
-| `surface-alt` | `ink/100` | `ink/200` |
-| `border` | `ink/200` | `ink/300` |
-| `border-strong` | `ink/300` | `ink/400` |
-| `text` | `ink/900` | `ink/900` (dark scale) |
-| `text-secondary` | `ink/600` | `ink/700` |
-| `text-muted` | `ink/400` | `ink/600` |
-| `accent-subtle` | `violet/100` | `violet/50` (dark scale) |
-| `on-accent` | `#FFFFFF` | `#FFFFFF` |
-
-**Binding rule:** `error` must never be a hue the brand also uses. This is why a red-adjacent brand accent was rejected during the coral round — a destructive action and a primary action must never be confusable.
+Four things are roles in their own right because reusing something else was
+measurably wrong (D-420): `accent-on-subtle`, `skeleton`, `switch-knob`, and the
+code panel's copy affordance.
 
 ### 3. Typography
 
-Two families only.
+Three families (**D-419**, widening D-179's two).
 
-- **Inter** — everything in the interface. `Inter, system-ui, sans-serif`. Weights 400 / 500 / 600 / 700.
-- **JetBrains Mono** — anything the user may copy or is authoring: SQL, connection strings, API keys, project refs, request IDs, log lines. `"JetBrains Mono", monospace`.
+- **Zilla Slab** — display, `heading-1`, `heading-2`. Weights 600 / 700 only. It is
+  the typographic half of the identity: flat slabs answering the mark's stone-cut
+  terminals. Confined to three roles at two weights so D-179's loading-budget
+  argument still holds.
+- **Space Grotesk** — the entire interface. Weights 400 / 500 / 600 / 700.
+- **JetBrains Mono** — anything the user may copy or is authoring: SQL, connection
+  strings, API keys, project refs, request IDs, log lines. This keeps D-179's real
+  point, which was never the count: mono signals "this is data you can copy", a
+  genuine affordance in a database product.
 
-| Token | Size / line-height | Weight | Use |
+| Token | Size / line-height | Family | Use |
 |---|---|---|---|
-| `display` | 32 / 40, tracking −0.6 | bold | Page hero, empty states |
-| `heading/1` | 24 / 32, tracking −0.4 | bold | Page title |
-| `heading/2` | 20 / 28, tracking −0.2 | semibold | Section title |
-| `heading/3` | 16 / 24 | semibold | Card title, table group |
-| `body/l` | 16 / 24 | normal | Lead paragraph |
-| `body/m` | 14 / 20 | normal | Default body, table cells |
-| `body/s` | 13 / 18 | normal | Secondary detail |
-| `caption` | 12 / 16, tracking +0.4 | medium | Labels, metadata, table headers |
-| `code` | 13 / 20 | normal | Code, keys, identifiers (mono) |
+| `display` | 32 / 40, tracking −0.6 | slab | Page hero, empty states |
+| `heading-1` | 26 / 34, tracking −0.4 | slab | Page title |
+| `heading-2` | 20 / 28, tracking −0.2 | slab | Section title |
+| `heading-3` | 16 / 24 | sans | Card title, table group |
+| `body-l` | 16 / 24 | sans | Lead paragraph |
+| `body-m` | 14 / 20 | sans | Default body, table cells |
+| `body-s` | 13 / 18 | sans | Secondary detail |
+| `caption` | 12 / 16, tracking +0.4 | sans | Labels, metadata, table headers |
+| `code` | 13 / 20 | mono | Code, keys, identifiers |
 
 Negative tracking on headings only. Never on body or mono.
 
 ### 4. Shape, spacing, surfaces
 
-- **Radius:** `sm` 6 (badges, small controls), `md` 10 (buttons, inputs), `lg` 14 (cards, dialogs), `full` 999 (pills, avatars).
-- **Spacing:** 4-point scale — 4, 8, 12, 16, 24, 32, 48. 16 is the default gutter, 24 separates groups, 32+ separates sections.
-- **Surfaces:** three levels — `bg` (page), `surface` (cards/panels), `surface-alt` (table headers, inline code, skeletons). Popovers and menus use `surface` with `border-strong`.
+- **Radius:** `sm` 6 (badges, small controls), `md` 10 (buttons, inputs), `lg` 14
+  (cards, dialogs), `full` 999 (pills, avatars).
+- **Spacing:** 4, 8, 12, 16, 20, 24, 32, 48 — and **each token is named by its
+  value**: `--sh-space-16` is 16px. The previous scale was named by a skipping index
+  (`space-1/2/3/4/6/8/12`), which made `--sh-space-5` read as a real token; it was
+  written in five components that had no such thing, and an undefined custom
+  property with no fallback voids the whole declaration, so five margins silently
+  rendered as zero (D-414). 20 is on the scale because three components wanted it.
+  A test asserts every spacing name equals its value.
+- **Surfaces:** three levels — `bg` (page, and it is paper, never `#FFF`),
+  `surface` (cards/panels), `surface-alt` (table headers, inline code). Popovers and
+  menus use `surface` with `border-strong`.
 
-**No drop shadows anywhere.** Depth comes from surface tint plus border weight. Shadows over a tinted background read as grey smudges, and the token set stays legible in both modes without a second shadow scale.
+**No drop shadows anywhere.** Depth comes from surface tint plus border weight. The
+rule is enforced as *blur radius*, not as `box-shadow`, because the system requires
+two zero-blur shadows: the focus ring and the active nav item's 3px accent bar
+(D-180).
 
 ### 5. Component inventory
 
@@ -146,30 +165,57 @@ Every component below exists on the board with its variants drawn.
 
 ### 6. Theming
 
-Both themes ship. Dark is not an inversion — it is a second set of values for the same role tokens.
+Both themes ship. Dark is not an inversion — it is a second set of values for the
+same role tokens.
 
-Implementation contract: role tokens as CSS custom properties on `:root`, redefined under `[data-theme="dark"]` and under `@media (prefers-color-scheme: dark)` guarded by `:root:not([data-theme="light"])`. Components reference role tokens only. A component that names a ramp step directly is a bug.
+**Implementation contract.** Role tokens are CSS custom properties on `:root`,
+redefined under `[data-theme="dark"]` and under `@media (prefers-color-scheme: dark)`
+guarded by `:root:not([data-theme="light"])`. Both dark blocks are required: an
+explicit choice stamps the attribute, and the default "system" setting stamps
+nothing at all, so a viewer on system-dark has nothing on `:root` to select.
 
-Three things that change between modes beyond the obvious:
+Those blocks are **generated, not written** (D-418), and the test asserts their
+bodies are identical. `light-dark()` would collapse them into one declaration and
+was rejected for a specific reason: a custom property parses permissively, so an
+unsupported `light-dark()` is accepted at parse time and fails at *substitution*
+time, which unsets the colour instead of falling back to the light value — a broken
+UI on an older browser rather than a degraded one.
+
+Two things change between modes beyond the obvious:
 
 - **Semantic colours swap direction** — deep-on-pale becomes light-on-deep.
-- **Border weight does more work in dark**, because tint differences compress; `border` moves up one ramp step relative to surface.
-- **The accent lifts one step** (`violet/500` → `violet/600`) so it holds against a dark surface.
+- **Border weight does more work in dark**, because tint differences compress;
+  `border` moves up one ramp step relative to surface.
+
+And one thing deliberately does *not*: **the accent fill is the same value in both
+themes** (D-417). Lifting it is what made the previous system's dark primary button
+fail AA.
 
 ### 7. Accessibility floor
 
-- Body text meets 4.5:1 against its surface; `text-muted` is reserved for non-essential metadata and meets 4.5:1 against `bg`.
-- White on `violet/500` is 4.6:1 — clears AA for normal text, which is what made this accent viable.
-- Focus is a 2px accent ring plus a `violet/100` outer halo — never outline-none, never colour-only.
-- Never colour as the sole carrier of meaning (rule 2 above).
+The floor is executable. Every row of §2's guarantee table is an assertion in
+`tokens.test.ts`, and each was verified by breaking it and watching the build fail.
+This section used to *state* that white on the accent cleared AA "which is what made
+this accent viable" — a claim that was true of the light value, false of the dark
+one, and unfalsifiable because prose does not run.
+
+- Body text meets 4.5:1 against its surface; `text-muted` meets 4.5:1 against `bg`,
+  `surface` **and** `surface-alt` — the last of which is the one that fails first,
+  since a table header is the darkest light surface.
+- Focus is a 2px accent ring plus an `accent-subtle` outer halo, at ≥3:1 against
+  both `bg` and `surface` (WCAG 2.2). Never `outline: none`, never colour-only.
+- Never colour as the sole carrier of meaning (D-180).
+- A skeleton must be visible against the surface it loads on. Not an AA matter — a
+  skeleton is not text — but at 1.09:1 a placeholder is indistinguishable from
+  content that never arrived, which defeats one of §6's four required states.
 
 ## Decisions
 
-**D-177 — The brand accent is Electric Violet (`#7C3AED` light / `#8B5CF6` dark) with cool violet-tinted neutrals; the full token set and component inventory in this doc are binding for every Steadhold surface.** *(Rationale: it was the only candidate of five where white text clears AA contrast on the accent in both themes, removing per-mode label exceptions across every component; it collides with no semantic colour, where both green candidates conflated brand with success and cyan forced info off blue; and it differentiates from a market that is uniformly blue and green.)*
+**D-177 — Superseded by D-417.** ~~The brand accent is Electric Violet (`#7C3AED` light / `#8B5CF6` dark) with cool violet-tinted neutrals; the full token set and component inventory in this doc are binding for every Steadhold surface.~~ **Superseded by D-417:** the accent is Terracotta `#B4502E`, unlifted in dark, with warm clay neutrals. D-177's two practical criteria are preserved and are now executed as tests rather than asserted in prose — one of them was false of its own dark value. *(Rationale: it was the only candidate of five where white text clears AA contrast on the accent in both themes, removing per-mode label exceptions across every component; it collides with no semantic colour, where both green candidates conflated brand with success and cyan forced info off blue; and it differentiates from a market that is uniformly blue and green.)*
 
 **D-178 — Light and dark are both first-class and ship together. Components reference semantic role tokens only, never ramp steps; dark mode is a second set of role values, not an inversion.** *(Rationale: retrofitting dark mode means auditing every component twice; naming role tokens from day one makes the second theme a config change instead of a redesign, and it is the only way the "accent lifts one step in dark" rule can be applied centrally.)*
 
-**D-179 — No drop shadows in the system; elevation is surface tint plus border weight. Type families are frozen at two: Inter for interface, JetBrains Mono for anything copyable.** *(Rationale: shadows over tinted backgrounds read as grey smudges and would need a second scale for dark mode; two families keep the loading budget small and make the mono/UI distinction meaningful — mono signals "this is data you can copy", which is a real affordance in a database product.)*
+**D-179 — No drop shadows in the system; elevation is surface tint plus border weight. ~~Type families are frozen at two: Inter for interface, JetBrains Mono for anything copyable.~~ Widened by D-419** to three: Zilla Slab (display/h1/h2, two weights), Space Grotesk (interface), JetBrains Mono (copyable). The no-shadow half stands, and is enforced as blur radius rather than as `box-shadow`. *(Rationale: shadows over tinted backgrounds read as grey smudges and would need a second scale for dark mode; two families keep the loading budget small and make the mono/UI distinction meaningful — mono signals "this is data you can copy", which is a real affordance in a database product.)*
 
 **D-180 — State is never communicated by colour alone: every project state carries a distinct text label, and selection uses a left accent bar rather than a tint alone.** *(Rationale: project state is the most-read element in the dashboard (per [dashboard IA](01-dashboard-ia.md)); colour-only state fails colour-blind users, greyscale, and screenshots in support tickets.)*
 

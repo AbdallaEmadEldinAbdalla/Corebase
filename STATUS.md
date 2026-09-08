@@ -3892,6 +3892,91 @@ distinguish an S. The full record of what was cut and why is in
 [`design-exports/steadhold/README.md`](design-exports/steadhold/README.md); the
 rejected rounds are kept rather than deleted.
 
+## 4i. The token layer, rebuilt
+
+Not a numbered plan step either. It sits before Phase 7 because a dashboard cannot
+be rebuilt against a visual layer that contradicts the brand.
+
+### Palette · done · D-417
+
+Terracotta `#B4502E` on warm clay neutrals, replacing Electric Violet. It comes from
+the identity rather than a bake-off. **D-177 chose violet over coral on two
+practical grounds and both had to be answered, not waved past:**
+
+1. *White must clear AA on the accent in both themes.* The fix is that the accent
+   **does not lift in dark mode** — one fill value, white at 5.09:1 everywhere,
+   `on-accent` unconditional. `accent-bright` is a *text* colour for dark surfaces,
+   never a fill.
+2. *Error must never be a hue the brand also uses.* Terracotta is red-adjacent, so
+   the semantics moved: error to the **cool** side of red (~346°), warning to a true
+   ochre (~41°), both ≥25° from the accent and asserted in the suite.
+
+**The pre-existing defect this uncovered:** `violet/600`, the *dark* accent, is
+4.23:1 against white and 4.36:1 against ink. It failed AA with **either** label, for
+as long as the system existed. §7 of the design-system doc justified the accent by
+citing only `violet/500`, the light value — the claim lived in prose, and prose does
+not run. That is why the whole contrast floor is now executable.
+
+**The limitation, recorded rather than hidden:** the accent *tint* cannot be
+hue-separated from both semantic tints at once, because the brand hue sits between
+error and warning; 20° is already near-equidistant. Separation is carried by chroma
+and a deeper foreground instead. Permanent consequence of a warm brand.
+
+### Generated, not hand-written · done · D-418
+
+`tokens.css` is emitted by
+[`tokens.build.mjs`](apps/dashboard/src/styles/tokens.build.mjs) and the test asserts
+byte-equality. A theme pair has to be declared three times in plain CSS, and the old
+file carried all three by hand under a comment reading *"keep the two blocks in
+sync"* — a hope, not a mechanism. `light-dark()` would collapse them and was
+rejected for a concrete reason: a custom property parses permissively, so an
+unsupported `light-dark()` is accepted and then fails at *substitution* time, which
+unsets the colour rather than falling back to the light value. That is a broken UI on
+an older browser, not a degraded one. Generating the duplication is the only option
+with a single source **and** no compatibility floor — the same reasoning as the logo
+(D-409).
+
+### Type · done · D-419
+
+Zilla Slab (display/h1/h2, 600/700 only), Space Grotesk (interface), JetBrains Mono
+(copyable). Three families widens D-179's two; its loading-budget argument is
+respected by confining the slab to three roles at two weights. D-179's real point
+survives intact: mono means "data you can copy".
+
+### Spacing · done
+
+Named by value — `--sh-space-16` is 16px — with 20 added because three components
+genuinely wanted it. The old scale was a skipping index, which is what made
+`--sh-space-5` read as a real token (D-414). Migrated in one atomic pass keyed on the
+old index, because old `space-4` meant 16px and new `space-4` means 4px: a partial
+rename would have silently shrunk 54 paddings. Verified by resolved pixel value — all
+158 references preserved exactly.
+
+### What the rebuild found · four defects, all fixed
+
+| Defect | Why it survived |
+|---|---|
+| `violet/600` dark accent fails AA either way | The doc measured only the light value |
+| `badge--accent` was 4.33:1 (accent over its own tint) | No constraint existed for that pairing; a screenshot found it |
+| `.sh-skeleton` at 1.09:1 on a dark card | Reused `surface-alt`; a placeholder nobody can see |
+| `color:#BEB4D6` in `.sh-code__copy` — the old violet | D-178's guard matched ramp *names*; a hex literal has none |
+
+The last one is the instructive one: it sat in the code panel through the entire
+brand rebuild. A literal is the same violation as a ramp step and harder to see, so
+it is now the same rule, enforced over stylesheets **and** components (D-420).
+
+**Verification.** Dashboard suite **74/74** (from 13), typecheck 14/14, `next build`
+green, `tokens.css` byte-identical to its generator. Every new guard was proven by
+breaking it and watching it fail: a hand-edited `tokens.css`, an accent fill pushed
+below AA, error moved back next to the accent hue, `--sh-space-5: 20px`, and
+`#BEB4D6` put back. Looked at in a browser in both themes — login and signup in the
+real app, plus every component class rendered against the real `components.css`.
+Ran the D-224 `ux-review` gate: pass, two gate failures fixed in the change, none
+recorded as gaps.
+
+**What it broke:** nothing outside the dashboard. No service, migration or test
+outside `apps/dashboard` changed.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -4539,11 +4624,12 @@ should clear the variable itself (§5 already says a test declares its fixture i
 every dimension). Pre-existing, not rename fallout — the same sensitivity existed
 against `CB_STATIC_TOKEN`.
 
-**The design token system is the Pencil-derived layer, and it is being replaced.**
-`apps/dashboard/src/styles/tokens.css` and `components.css` predate the identity
-above and share none of its palette or type. Phase 7 rebuilds them from the
-identity; until then the dashboard renders in colours the brand no longer uses, and
-the D-178/D-179 tests enforce the *old* system's rules.
+**The token layer is rebuilt; the components on top of it are not.** §4i replaced
+`tokens.css`, `Logo.tsx` and the palette/type system, and `components.css` still
+carries the Pencil boards' *component* geometry — the class library was repointed at
+the new tokens and its three colour literals removed, but the shapes, densities and
+component inventory are unchanged. Phase 7 is where the screens get rebuilt; this
+step only means they will be rebuilt against a layer that is correct.
 
 ## 9. Where to look when you pick this up
 

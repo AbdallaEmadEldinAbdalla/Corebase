@@ -1,39 +1,50 @@
 /**
- * The Steadhold mark — a core held within a structural base.
+ * The Steadhold mark — the chiselled S, cut at the waist.
  *
- * The geometry is the supplied artwork, used verbatim: a rounded-square container
- * (480 inset in 512, r=128) holding a diamond with its centre punched out by
- * `fillRule="evenodd"`. Two adjustments, both deliberate.
+ * The geometry is the identity's, verbatim from
+ * `design-exports/steadhold/build-identity.py`: one spine, stroke 28, `butt` caps
+ * that land on a vertical tangent so both terminals read as a flat stone cut, and
+ * Bézier controls pulled to the corners to square the bowls. The ground line at
+ * y=126 falls exactly where the two bowls lock, which is what makes the accent a
+ * whole stratum rather than a sliver (D-408). It replaces a diamond with a punched
+ * centre that predated the brand entirely.
  *
- * The colours come from role tokens rather than the literals in the source, which
- * were Supabase's green. The design system has one brand colour (D-177) and
- * components reference role tokens only (D-178), so a logo carrying its own hex is
- * the one element guaranteed to be wrong in the other theme.
+ * **The split is done with nested `<svg>` viewports, not `clipPath`.** A nested
+ * `<svg>` clips its content to its own viewport and needs no `id`, which matters
+ * here for the reason the previous version of this file already recorded about
+ * `<title id>`: the mark renders more than once per page — top bar and auth panel
+ * — and duplicate ids are invalid HTML. `clipPath` would need a unique id per
+ * instance, and `useId` is a hook, which this component cannot use without
+ * becoming a client component for no other reason.
  *
- * And the accessible name is an `aria-label` rather than `<title id="title">`. The
- * mark renders more than once on a page — top bar and an auth panel — and fixed ids
- * would collide, which is invalid HTML and makes a screen reader announce the wrong
- * one. `role="img"` plus a label says the same thing without an id.
- *
- * The punch-out is what makes it work on both grounds: the hole shows whatever is
- * behind the glyph rather than being painted, so the badge and the bare form need
- * no second colour.
+ * Colours are role tokens (D-178), which lands exactly on the identity's two
+ * finishes: `text` + `accent-text` gives ink-on-paper in light and
+ * paper-on-bright-terracotta in dark, with no per-theme branch here.
  */
-const MARK = 'M256 62 L450 256 L256 450 L62 256 Z M256 174 L174 256 L256 338 L338 256 Z';
+const SPINE = 'M146 60 C146 38 126 28 100 28 C72 28 52 44 52 66 '
+  + 'C52 84 66 94 90 100 C114 106 148 114 148 134 '
+  + 'C148 156 126 172 100 172 C72 172 54 160 54 138';
+const CUT = 126;
 
-export function Logo({ size = 22, badge = true }: {
-  size?: number;
-  /** Rounded-square badge (top bar, favicon) vs. bare glyph (beside a wordmark). */
-  badge?: boolean;
-}) {
+/** One half of the letter, clipped by its own viewport. */
+function Half({ from, to, stroke }: { from: number; to: number; stroke: string }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 512 512" fill="none"
+    <svg x={0} y={from} width={200} height={to - from} viewBox={`0 ${from} 200 ${to - from}`}>
+      <path d={SPINE} fill="none" stroke={stroke} strokeWidth={28} strokeLinecap="butt" />
+    </svg>
+  );
+}
+
+export function Logo({ size = 22 }: { size?: number }) {
+  // Free-standing, always. D-410 allows a field behind the mark in exactly one
+  // place — a browser tab, whose ground is unknown — and that is now a static
+  // `app/icon.svg` from the identity's own asset set, not this component. So the
+  // badge variant this file used to carry had no caller left.
+  return (
+    <svg width={size} height={size} viewBox="0 0 200 200" fill="none"
       role="img" aria-label="Steadhold">
-      {badge ? (
-        <rect x="16" y="16" width="480" height="480" rx="128" fill="var(--sh-accent)" />
-      ) : null}
-      <path d={MARK} fillRule="evenodd" clipRule="evenodd"
-        fill={badge ? 'var(--sh-on-accent)' : 'var(--sh-accent)'} />
+      <Half from={0} to={CUT} stroke="var(--sh-text)" />
+      <Half from={CUT} to={200} stroke="var(--sh-accent-text)" />
     </svg>
   );
 }

@@ -93,7 +93,7 @@ function LoginForm() {
         </p>
 
         {error ? (
-          <div style={{ marginBottom: 'var(--sh-space-4)' }}>
+          <div style={{ marginBottom: 'var(--sh-space-16)' }}>
             <ErrorSurface error={error} title={rateLimited ? 'Too many attempts' : 'Sign-in failed'} />
           </div>
         ) : null}

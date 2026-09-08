@@ -21,8 +21,8 @@
 
 .bar {
   grid-area: bar;
-  display: flex; align-items: center; gap: var(--sh-space-3);
-  padding: 0 var(--sh-space-4);
+  display: flex; align-items: center; gap: var(--sh-space-12);
+  padding: 0 var(--sh-space-16);
   background: var(--sh-surface);
   border-bottom: 1px solid var(--sh-border);
   position: sticky; top: 0; z-index: 30;
@@ -38,8 +38,8 @@
 .crumbs__sep { color: var(--sh-text-muted); font: var(--sh-body-s); padding: 0 2px; }
 
 .crumb {
-  display: flex; align-items: center; gap: var(--sh-space-2);
-  height: 30px; padding: 0 var(--sh-space-2) 0 var(--sh-space-3);
+  display: flex; align-items: center; gap: var(--sh-space-8);
+  height: 30px; padding: 0 var(--sh-space-8) 0 var(--sh-space-12);
   border: 1px solid transparent; border-radius: var(--sh-radius-sm);
   background: none; color: var(--sh-text); font: var(--sh-body-s); font-weight: 500;
   cursor: pointer; max-width: 220px;
@@ -55,7 +55,7 @@
   grid-area: nav;
   background: var(--sh-surface);
   border-right: 1px solid var(--sh-border);
-  padding: var(--sh-space-3) var(--sh-space-2);
+  padding: var(--sh-space-12) var(--sh-space-8);
   display: flex; flex-direction: column; gap: 2px;
   position: sticky; top: 48px; align-self: start;
   height: calc(100vh - 48px);
@@ -64,10 +64,10 @@
 .nav__label {
   font: var(--sh-caption); letter-spacing: var(--sh-tracking-caption);
   text-transform: uppercase; color: var(--sh-text-muted);
-  padding: var(--sh-space-3) var(--sh-space-3) var(--sh-space-1);
+  padding: var(--sh-space-12) var(--sh-space-12) var(--sh-space-4);
 }
 .nav .sh-nav-item { height: 34px; transition: background 140ms ease; }
-.nav__foot { margin-top: auto; padding: var(--sh-space-2); }
+.nav__foot { margin-top: auto; padding: var(--sh-space-8); }
 .nav__hint {
   display: flex; align-items: center; justify-content: space-between;
   font: var(--sh-caption); color: var(--sh-text-muted);
@@ -75,18 +75,18 @@
 
 /* ── content ──────────────────────────────────────────────────────────────── */
 .main { grid-area: main; min-width: 0; }
-.wrap { max-width: 1120px; padding: var(--sh-space-6) var(--sh-space-6) var(--sh-space-12); }
+.wrap { max-width: 1120px; padding: var(--sh-space-24) var(--sh-space-24) var(--sh-space-48); }
 .wrap--narrow { max-width: 620px; }
 
-.head { display: flex; align-items: flex-start; gap: var(--sh-space-4); margin-bottom: var(--sh-space-6); }
+.head { display: flex; align-items: flex-start; gap: var(--sh-space-16); margin-bottom: var(--sh-space-24); }
 .head__title { font: var(--sh-heading-1); letter-spacing: var(--sh-tracking-heading-1); margin: 0; }
 .head__sub { font: var(--sh-body-s); color: var(--sh-text-secondary); margin: 6px 0 0; }
-.head__actions { margin-left: auto; display: flex; align-items: center; gap: var(--sh-space-2); }
+.head__actions { margin-left: auto; display: flex; align-items: center; gap: var(--sh-space-8); }
 
-.section { margin-bottom: var(--sh-space-8); }
+.section { margin-bottom: var(--sh-space-32); }
 .section__head {
-  display: flex; align-items: baseline; gap: var(--sh-space-3);
-  margin-bottom: var(--sh-space-3); flex-wrap: wrap;
+  display: flex; align-items: baseline; gap: var(--sh-space-12);
+  margin-bottom: var(--sh-space-12); flex-wrap: wrap;
 }
 /* The title never wraps to make room for its own note — a two-line heading beside
    a one-line explanation reads as a layout accident. */
@@ -98,16 +98,16 @@
   background: var(--sh-surface); border: 1px solid var(--sh-border);
   border-radius: var(--sh-radius-lg); overflow: hidden;
 }
-.card__body { padding: var(--sh-space-6); }
+.card__body { padding: var(--sh-space-24); }
 .card__foot {
-  padding: var(--sh-space-3) var(--sh-space-6);
+  padding: var(--sh-space-12) var(--sh-space-24);
   border-top: 1px solid var(--sh-border); background: var(--sh-surface-alt);
   font: var(--sh-body-s); color: var(--sh-text-secondary);
-  display: flex; align-items: center; gap: var(--sh-space-3);
+  display: flex; align-items: center; gap: var(--sh-space-12);
 }
 
 /* Definition rows. Label column is fixed so values line up across cards. */
-.facts { display: grid; grid-template-columns: 160px 1fr; gap: var(--sh-space-3) var(--sh-space-6); }
+.facts { display: grid; grid-template-columns: 160px 1fr; gap: var(--sh-space-12) var(--sh-space-24); }
 .facts__k {
   font: var(--sh-caption); letter-spacing: var(--sh-tracking-caption);
   text-transform: uppercase; color: var(--sh-text-muted); padding-top: 3px;
@@ -124,7 +124,7 @@
 .tablewrap .sh-table tbody tr { cursor: pointer; }
 .tablecount {
   display: flex; align-items: center; justify-content: space-between;
-  padding: var(--sh-space-3) var(--sh-space-4);
+  padding: var(--sh-space-12) var(--sh-space-16);
   border-top: 1px solid var(--sh-border); background: var(--sh-surface-alt);
   font: var(--sh-body-s); color: var(--sh-text-secondary);
 }
@@ -142,13 +142,13 @@ tr:hover .rowbtn, .rowbtn:focus-visible, .rowbtn[aria-expanded="true"] { opacity
 .rowbtn:hover { background: var(--sh-surface); border-color: var(--sh-border); color: var(--sh-text); }
 
 /* ── project cards (identity view) ────────────────────────────────────────── */
-.cards { display: grid; gap: var(--sh-space-4); grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); }
+.cards { display: grid; gap: var(--sh-space-16); grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); }
 
 /* ── the segmented view toggle ────────────────────────────────────────────── */
 .seg { display: inline-flex; padding: 2px; background: var(--sh-surface-alt);
        border: 1px solid var(--sh-border); border-radius: var(--sh-radius-md); }
 .seg button {
-  height: 28px; padding: 0 var(--sh-space-3); border: 0; background: none;
+  height: 28px; padding: 0 var(--sh-space-12); border: 0; background: none;
   border-radius: var(--sh-radius-sm); font: var(--sh-body-s); font-weight: 500;
   color: var(--sh-text-secondary); cursor: pointer; transition: background 140ms ease;
 }
@@ -159,10 +159,10 @@ tr:hover .rowbtn, .rowbtn:focus-visible, .rowbtn[aria-expanded="true"] { opacity
   position: fixed; inset: 0; z-index: 50;
   background: var(--sh-scrim);
   display: grid; place-items: start center;
-  padding: 12vh var(--sh-space-4) var(--sh-space-4);
+  padding: 12vh var(--sh-space-16) var(--sh-space-16);
   animation: layer-in 140ms ease;
 }
-.layer--center { place-items: center; padding: var(--sh-space-4); }
+.layer--center { place-items: center; padding: var(--sh-space-16); }
 
 .palette {
   width: 100%; max-width: 560px;
@@ -171,21 +171,21 @@ tr:hover .rowbtn, .rowbtn:focus-visible, .rowbtn[aria-expanded="true"] { opacity
   animation: rise-in 160ms ease;
 }
 .palette__input {
-  width: 100%; height: 52px; padding: 0 var(--sh-space-4);
+  width: 100%; height: 52px; padding: 0 var(--sh-space-16);
   border: 0; border-bottom: 1px solid var(--sh-border);
   background: none; color: var(--sh-text); font: var(--sh-body-l);
 }
 .palette__input:focus { outline: none; }
 .palette__input::placeholder { color: var(--sh-text-muted); }
-.palette__list { max-height: 46vh; overflow-y: auto; padding: var(--sh-space-1); }
+.palette__list { max-height: 46vh; overflow-y: auto; padding: var(--sh-space-4); }
 .palette__group {
   font: var(--sh-caption); letter-spacing: var(--sh-tracking-caption);
   text-transform: uppercase; color: var(--sh-text-muted);
-  padding: var(--sh-space-3) var(--sh-space-3) var(--sh-space-1);
+  padding: var(--sh-space-12) var(--sh-space-12) var(--sh-space-4);
 }
 .palette__item {
-  display: flex; align-items: center; gap: var(--sh-space-3);
-  width: 100%; height: 38px; padding: 0 var(--sh-space-3);
+  display: flex; align-items: center; gap: var(--sh-space-12);
+  width: 100%; height: 38px; padding: 0 var(--sh-space-12);
   border: 0; border-radius: var(--sh-radius-sm); background: none;
   color: var(--sh-text); font: var(--sh-body-m); text-align: left; cursor: pointer;
 }
@@ -194,9 +194,9 @@ tr:hover .rowbtn, .rowbtn:focus-visible, .rowbtn[aria-expanded="true"] { opacity
 .palette__item[data-active="true"] { background: var(--sh-accent-subtle); }
 .palette__item mark { background: none; color: var(--sh-accent); font-weight: 600; }
 .palette__hint { margin-left: auto; font: var(--sh-code); color: var(--sh-text-muted); flex: none; }
-.palette__empty { padding: var(--sh-space-6) var(--sh-space-3); font: var(--sh-body-s); color: var(--sh-text-muted); text-align: center; }
+.palette__empty { padding: var(--sh-space-24) var(--sh-space-12); font: var(--sh-body-s); color: var(--sh-text-muted); text-align: center; }
 .palette__foot {
-  display: flex; gap: var(--sh-space-4); padding: var(--sh-space-3) var(--sh-space-4);
+  display: flex; gap: var(--sh-space-16); padding: var(--sh-space-12) var(--sh-space-16);
   border-top: 1px solid var(--sh-border); background: var(--sh-surface-alt);
   font: var(--sh-caption); color: var(--sh-text-muted);
 }
@@ -210,8 +210,8 @@ tr:hover .rowbtn, .rowbtn:focus-visible, .rowbtn[aria-expanded="true"] { opacity
 
 /* ── toasts ───────────────────────────────────────────────────────────────── */
 .toasts {
-  position: fixed; z-index: 60; bottom: var(--sh-space-6); right: var(--sh-space-6);
-  display: flex; flex-direction: column; gap: var(--sh-space-2);
+  position: fixed; z-index: 60; bottom: var(--sh-space-24); right: var(--sh-space-24);
+  display: flex; flex-direction: column; gap: var(--sh-space-8);
 }
 .toasts .sh-toast { animation: rise-in 160ms ease; }
 
@@ -229,7 +229,7 @@ tr:hover .rowbtn, .rowbtn:focus-visible, .rowbtn[aria-expanded="true"] { opacity
 /* ── code, full width in a page context ───────────────────────────────────── */
 .codeblock { max-width: none; }
 .codeblock pre {
-  margin: 0; padding: var(--sh-space-4);
+  margin: 0; padding: var(--sh-space-16);
   font: var(--sh-code); color: var(--sh-code-text);
   /* Wrap rather than scroll. A connection URI is one very long token, and a
      horizontal scrollbar that macOS only draws while you are scrolling means the
@@ -267,7 +267,7 @@ tr:hover .rowbtn, .rowbtn:focus-visible, .rowbtn[aria-expanded="true"] { opacity
    wrong in a 1120px content column — it leaves the empty state floating in the
    top-left corner looking like a stray card. Centre it and give it room, without
    editing the exported component. */
-.emptywrap { display: grid; place-items: center; padding: var(--sh-space-12) var(--sh-space-4); }
+.emptywrap { display: grid; place-items: center; padding: var(--sh-space-48) var(--sh-space-16); }
 .emptywrap .sh-empty { max-width: 420px; }
 
 /* An anchor that looks like a control must not carry a text underline.

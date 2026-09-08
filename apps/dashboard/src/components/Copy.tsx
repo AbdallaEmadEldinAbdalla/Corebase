@@ -43,7 +43,7 @@ export function CopyField({ value, what, children }: {
   children?: ReactNode;
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--sh-space-3)' }}>
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--sh-space-12)' }}>
       <code style={{ flex: 1, minWidth: 0, font: 'var(--sh-code)', overflowWrap: 'anywhere' }}>
         {children ?? value}
       </code>

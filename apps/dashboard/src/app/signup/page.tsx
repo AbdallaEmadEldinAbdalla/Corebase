@@ -57,7 +57,7 @@ export default function SignupPage() {
         <p className="auth__sub">One command to a production backend.</p>
 
         {error ? (
-          <div style={{ marginBottom: 'var(--sh-space-4)' }}>
+          <div style={{ marginBottom: 'var(--sh-space-16)' }}>
             <ErrorSurface error={error}
                           title={taken ? 'That email is already registered' : 'Sign-up failed'} />
           </div>

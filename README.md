@@ -484,21 +484,50 @@ display, Space Grotesk UI.
 
 ## The design system
 
-Accent is **Electric Violet** — `#7C3AED` light, `#8B5CF6` dark — on cool violet-tinted neutrals. It was chosen over coral, emerald, deep forest and cyan for two reasons that outlived taste: it is the only candidate where white text clears AA contrast on the accent in *both* themes, and it collides with no semantic colour. In a product whose scariest button is *Delete project*, the brand hue must never be confusable with the error hue.
+Accent is **Terracotta** — `#B4502E`, in *both* themes — on warm clay neutrals. It
+comes from the [identity](design-exports/steadhold/identity.html): the mark's lower
+bowl is the ground it stands in, and that ground is fired earth.
 
-The written spec is [docs/09-dashboard/04-design-system.md](docs/09-dashboard/04-design-system.md). The artefacts are under [design-exports/](design-exports/INDEX.md):
+It replaced Electric Violet (D-417), whose two practical criteria had to be answered
+rather than waved past. White must clear AA on the accent in both themes — so the
+accent **does not lift in dark mode**, which keeps white at 5.09:1 everywhere. And
+in a product whose scariest button is *Delete project*, the brand hue must never be
+confusable with the error hue — so error moved to the *cool* side of red and warning
+to a true ochre, both ≥25° away, asserted in the test suite.
+
+Rebuilding it found a defect that had shipped: `violet/600`, the old *dark* accent,
+was 4.23:1 against white and 4.36:1 against ink — it failed AA with either label,
+because the spec justified the accent by measuring only its light value. The floor is
+executable now.
+
+**`tokens.css` is generated** from
+[`tokens.build.mjs`](apps/dashboard/src/styles/tokens.build.mjs), and the test
+asserts byte-equality:
+
+```bash
+node apps/dashboard/src/styles/tokens.build.mjs > apps/dashboard/src/styles/tokens.css
+```
+
+A theme pair must be declared three times in plain CSS, and the old file carried all
+three by hand under a comment saying "keep the two blocks in sync". Now they cannot
+diverge. (`light-dark()` would collapse them but cannot degrade — an unsupported
+`light-dark()` in a custom property is accepted at parse time and fails at
+substitution, unsetting the colour.)
+
+Type is **Zilla Slab** (display/h1/h2), **Space Grotesk** (interface), **JetBrains
+Mono** (anything copyable). The written spec is
+[docs/09-dashboard/04-design-system.md](docs/09-dashboard/04-design-system.md).
+
+The `design-exports/` artefacts below are the **Pencil boards**, which predate the
+identity: their component geometry is still the reference, their palette and type are
+not. `design-exports/steadhold/` is the current brand.
 
 | Folder | What's in it |
 |---|---|
-| [`06-tokens/`](design-exports/06-tokens) | `tokens.css` (both themes), `colours.json`, `typography.json` |
-| [`07-html/`](design-exports/07-html) | Live reference: all 43 components with their markup, plus one standalone file per component |
-| `00-boards/` … `05-palette/` | 142 PNGs at 2x — full boards, sections, every component cropped alone, font specimens, palette ramps |
-
-Open the HTML reference with a local server so the relative CSS resolves:
-
-```bash
-cd design-exports/07-html && python3 -m http.server 8000
-```
+| [`steadhold/`](design-exports/steadhold/README.md) | The identity: mark, assets, the four rounds and what was cut |
+| [`06-tokens/`](design-exports/06-tokens) | Superseded — the violet token export |
+| [`07-html/`](design-exports/07-html) | Live reference: all 43 components with their markup |
+| `00-boards/` … `05-palette/` | 142 PNGs at 2x — boards, components, specimens, ramps |
 
 Three rules in the token layer are load-bearing, and a naive light-to-dark inversion breaks all three:
 

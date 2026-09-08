@@ -40,7 +40,7 @@ export function ErrorSurface({ error, onRetry, title }: {
         <div className="sh-banner__title">{title ?? api?.code ?? 'Error'}</div>
         <div className="sh-banner__text">{message}</div>
         {api?.requestId ? (
-          <div className="reqid" style={{ marginTop: 'var(--sh-space-2)' }}>
+          <div className="reqid" style={{ marginTop: 'var(--sh-space-8)' }}>
             <span>{api.requestId}</span>
             <button type="button" className="sh-btn sh-btn--ghost sh-btn--sm" onClick={copy}>
               {copied ? 'Copied' : 'Copy'}

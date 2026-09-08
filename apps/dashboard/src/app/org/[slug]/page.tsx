@@ -117,7 +117,7 @@ export default function ProjectsPage({ params }: { params: Promise<{ slug: strin
             <>
               <div className="cards">{live.map((p) => <ProjectCard key={p.id} project={p} />)}</div>
               {projects.hasNextPage ? (
-                <div className="row" style={{ justifyContent: 'center', marginTop: 'var(--sh-space-4)' }}>
+                <div className="row" style={{ justifyContent: 'center', marginTop: 'var(--sh-space-16)' }}>
                   <button type="button" className="sh-btn sh-btn--secondary"
                           disabled={projects.isFetchingNextPage}
                           onClick={() => void projects.fetchNextPage()}>
@@ -130,7 +130,7 @@ export default function ProjectsPage({ params }: { params: Promise<{ slug: strin
       ) : null}
 
       {recoverable.length > 0 ? (
-        <section className="section" style={{ marginTop: 'var(--sh-space-8)' }}>
+        <section className="section" style={{ marginTop: 'var(--sh-space-32)' }}>
           <div className="section__head">
             <h2 className="section__title">Recently deleted</h2>
             <p className="section__note">

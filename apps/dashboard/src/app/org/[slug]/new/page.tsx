@@ -74,7 +74,7 @@ export default function NewProjectPage({ params }: { params: Promise<{ slug: str
       </div>
 
       {create.error ? (
-        <div style={{ marginBottom: 'var(--sh-space-4)' }}>
+        <div style={{ marginBottom: 'var(--sh-space-16)' }}>
           <ErrorSurface error={create.error} />
         </div>
       ) : null}
@@ -101,7 +101,7 @@ export default function NewProjectPage({ params }: { params: Promise<{ slug: str
                 </span>}
           </div>
 
-          <div className="facts" style={{ marginTop: 'var(--sh-space-5, 20px)' }}>
+          <div className="facts" style={{ marginTop: 'var(--sh-space-20)' }}>
             <div className="facts__k">Region</div>
             <div className="facts__v">eu-central <span className="muted">· the only region today</span></div>
             <div className="facts__k">Plan</div>
