@@ -140,6 +140,35 @@ const runner = createRunner({
     jobSeconds.observe({ job_type: jobType, outcome }, seconds);
     jobsTotal.inc({ job_type: jobType, outcome });
   },
+  /**
+   * Say so when a project is never coming up.
+   *
+   * A dead-lettered `provision_project` used to leave the project at `creating`
+   * indefinitely — retries spent, saga stopped, and the dashboard still showing
+   * CREATING because nothing in the worker ever moved the status. Half an hour of
+   * that is what surfaced it.
+   *
+   * Only the *building* sagas map to `failed`, and that is the whole subtlety. A
+   * `pause_project` that gives up leaves a project that is still running and still
+   * usable; calling it failed would be a worse lie than the one being fixed. Those
+   * keep their status and are visible as a dead-lettered job, which is where an
+   * operator looks for them.
+   */
+  onDeadLetter: async (job) => {
+    const BUILDING = new Set(['provision_project', 'restore_project']);
+    if (!BUILDING.has(job.job_type)) return;
+    const ref = (job.payload as { ref?: string } | null)?.ref;
+    if (!ref) {
+      log('error', 'dead-lettered job has no ref in its payload — cannot mark the project',
+        { id: job.id, job_type: job.job_type });
+      return;
+    }
+    await pool.query(
+      `UPDATE projects SET status = 'failed', updated_at = now()
+        WHERE ref = $1 AND status NOT IN ('deleted', 'soft_deleted')`, [ref]);
+    log('error', 'project marked failed after its job dead-lettered',
+      { ref, job_type: job.job_type, id: job.id });
+  },
 });
 // The sweeper's stale threshold must match the runner's, or the two disagree
 // about whether a row is orphaned: a sweeper that sweeps sooner re-delivers work

@@ -30,6 +30,20 @@ export interface RunnerOptions {
    */
   onStep?: (jobType: string, step: string, seconds: number) => void;
   onJob?: (jobType: string, outcome: 'succeeded' | 'failed' | 'dead_letter', seconds: number) => void;
+  /**
+   * A job has given up for good.
+   *
+   * Separate from `onJob`, which is a metric, because this one has to *change
+   * something*. Until it existed, a dead-lettered `provision_project` left the
+   * project sitting at `creating` forever: the saga had stopped, the retries were
+   * spent, and the dashboard went on showing CREATING — for half an hour in the
+   * case that produced this hook — because nothing in the worker ever called
+   * `markStatus`. A state nobody will ever leave has to be said out loud.
+   *
+   * Awaited, and its own failure is logged rather than thrown: the job is already
+   * terminal, so there is no outcome left to protect.
+   */
+  onDeadLetter?: (job: JobRecord) => Promise<void>;
 }
 
 export class UnknownJobTypeError extends Error {}
@@ -136,7 +150,15 @@ export function createRunner(opts: RunnerOptions) {
           { id: claimed.id, ...ctxLabels(claimed), error: (err as Error).message });
         opts.onJob?.(claimed.job_type, terminal ? 'dead_letter' : 'failed',
           (now() - jobStartedAt) / 1000);
-        if (terminal) return { outcome: 'dead_letter', stepsRun };
+        if (terminal) {
+          try {
+            await opts.onDeadLetter?.(claimed);
+          } catch (hookErr) {
+            log('error', 'dead-letter hook failed',
+              { id: claimed.id, error: (hookErr as Error).message });
+          }
+          return { outcome: 'dead_letter', stepsRun };
+        }
         throw err;   // let BullMQ apply its backoff
       } finally {
         clearInterval(beat);
