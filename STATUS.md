@@ -4160,6 +4160,14 @@ the entire dashboard shell, because `style={{}}` can write a custom property jus
 as easily as a rule can and nothing was looking there. Ask what *else* can express
 the mistake, and put the guard around that instead (D-414).
 
+**Vitest compiling a file is not the file typechecking.** Vitest transpiles per
+file and does not resolve types across modules, so a test that imports a type from
+a module which declares it locally without re-exporting runs green and fails
+`tsc --noEmit`. That shipped in a commit here because the new test was verified
+with vitest and the typecheck was run afterwards, on the next commit — the same
+shape as the standing rule that `tsc` passing does not mean `next build` will,
+pointed the other way. Run `turbo run typecheck` before committing, not after.
+
 **Ask what a step wrote, and where.** A container is not a project. Provisioning
 writes into two different places — the mounted volume, which survives, and the
 container filesystem, which does not — and pause/resume replaces the container. The

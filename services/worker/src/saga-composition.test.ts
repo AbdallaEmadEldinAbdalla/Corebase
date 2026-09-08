@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildSagas, type SagaStep, type SagaContext } from './jobs/sagas.ts';
+import { buildSagas } from './jobs/sagas.ts';
+import type { SagaStep, SagaContext } from './jobs/runner.ts';
 
 /**
  * Rules about which steps a saga must contain, as opposed to what any one step
