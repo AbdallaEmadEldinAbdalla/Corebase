@@ -2417,6 +2417,30 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
       createNetwork,                 // P2a — idempotent
       startContainer,                // T5d — finds the kept volume
       waitHealthy,                   // T5d
+      /**
+       * Backups have to be reconfigured, and this is the same omission the
+       * comment below makes about PostgREST — made twice, and worse here because
+       * nothing visibly fails.
+       *
+       * `configure_backups` writes `/etc/pgbackrest/pgbackrest.conf` into the
+       * **container filesystem**, and the spec mounts only
+       * `/var/lib/postgresql/data` as a volume. Pause removes the container and
+       * resume creates a fresh one, so a resumed project came back with no
+       * pgbackrest config at all: `archive_command` failing on every WAL segment,
+       * scheduled backups failing with `[037] backup command requires option:
+       * pg1-path`, the D-078 final-backup gate refusing to let the project ever
+       * be *deleted*, and a second pause dead-lettering. All while the dashboard
+       * showed READY, because no request anyone makes touches any of it.
+       *
+       * Placed before the pooler and the data API rather than after, because WAL
+       * starts accumulating the moment Postgres is healthy, and archiving is the
+       * thing that stops the node filling up. Both steps are idempotent — the
+       * cipher-pass is reused, the conf overwritten, `stanza-create` is
+       * check-then-act — which is what makes them safe on a path that runs for a
+       * project that already has a repo.
+       */
+      configureBackups,              // P3a — the conf did not survive the pause
+      verifyArchiving,               // P3a — prove the segment reaches the repo
       startPooler,                   // P2b
       waitPoolerHealthy,             // P2b
       // Without these a resumed project has a database and a pooler and **no data

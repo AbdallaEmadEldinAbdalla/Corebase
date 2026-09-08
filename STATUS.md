@@ -4099,6 +4099,16 @@ the entire dashboard shell, because `style={{}}` can write a custom property jus
 as easily as a rule can and nothing was looking there. Ask what *else* can express
 the mistake, and put the guard around that instead (D-414).
 
+**Ask what a step wrote, and where.** A container is not a project. Provisioning
+writes into two different places — the mounted volume, which survives, and the
+container filesystem, which does not — and pause/resume replaces the container. The
+resume saga has now lost something for that reason twice: PostgREST once, recorded
+in its own comment, and then pgbackrest's config, which took backups and deletion
+down silently for every project that had ever been resumed (D-423). Both times the
+saga read as complete because every step in it succeeded. The question that finds
+this is not "does resume work" — it does — but "what did provisioning write that
+resume does not".
+
 **A test suite that has been tuned until it passes is hiding something.** The
 worker's e2e files each built their Docker client with a different timeout — 20s,
 30s, 60s, 120s — numbers arrived at by raising whichever file was failing. That
