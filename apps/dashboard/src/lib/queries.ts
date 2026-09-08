@@ -16,6 +16,7 @@ export const keys = {
   projects: (orgId: string) => ['org', orgId, 'projects'] as const,
   project: (ref: string) => ['project', ref] as const,
   projectKeys: (ref: string) => ['project', ref, 'keys'] as const,
+  projectUsage: (ref: string) => ['project', ref, 'usage'] as const,
   members: (orgId: string) => ['org', orgId, 'members'] as const,
   invites: (orgId: string) => ['org', orgId, 'invites'] as const,
 };
@@ -102,6 +103,28 @@ export function useProjectKeys(ref: string, enabled = true) {
   return useQuery({
     queryKey: keys.projectKeys(ref),
     queryFn: () => api.projectKeys(ref),
+    enabled,
+  });
+}
+
+/**
+ * Project usage.
+ *
+ * A minute's `staleTime` and no polling: the numbers behind it come from sweeps
+ * that run every few minutes, so a one-second refetch — which is what `useProject`
+ * does while a project settles — would be traffic in exchange for the same answer.
+ * The page prints when each figure was measured, so a slightly stale read is
+ * visible rather than misleading.
+ *
+ * `retry: false` for the 409. A project with no database yet is a real answer, not
+ * a transport failure, and retrying it three times only delays the message.
+ */
+export function useProjectUsage(ref: string, enabled = true) {
+  return useQuery({
+    queryKey: keys.projectUsage(ref),
+    queryFn: () => api.projectUsage(ref),
+    staleTime: 60_000,
+    retry: false,
     enabled,
   });
 }

@@ -6,10 +6,10 @@ import { useProject, useOrgs } from '../../../lib/queries.ts';
 import { useAutoResume, ResumeBanner } from '../../../components/PausedProject.tsx';
 
 /**
- * Project chrome: four sections, all of which are real.
+ * Project chrome: five sections, all of which are real.
  *
- * Overview, Connect, API keys and Settings are exactly what the control plane can
- * answer today. The rest of the IA's sidebar — table editor, SQL editor, auth,
+ * Overview, Connect, API keys, Usage and Settings are exactly what the control
+ * plane can answer today. The rest of the IA's sidebar — table editor, SQL editor, auth,
  * storage, logs, backups — has no endpoints behind it, and none of it appears here
  * until it works (§7's honesty rule and gate question 20).
  *
@@ -42,6 +42,7 @@ export default function ProjectLayout({ children, params }: {
         <NavItem href={`/project/${ref}`} current={path === `/project/${ref}`} icon="overview">Overview</NavItem>
         <NavItem href={`/project/${ref}/connect`} current={path.endsWith('/connect')} icon="connect">Connect</NavItem>
         <NavItem href={`/project/${ref}/keys`} current={path.endsWith('/keys')} icon="keys">API keys</NavItem>
+        <NavItem href={`/project/${ref}/usage`} current={path.endsWith('/usage')} icon="usage">Usage</NavItem>
         <NavItem href={`/project/${ref}/settings`} current={path.endsWith('/settings')} icon="settings">Settings</NavItem>
         <div className="nav__foot">
           <div className="nav__hint">

@@ -183,6 +183,35 @@ export interface Org {
   project_count: number;
 }
 
+/** `serializeProjectUsage` in services/api/src/modules/control-plane/serialize.ts. */
+export interface ProjectUsage {
+  disk: {
+    used_bytes: number | null;
+    limit_bytes: number;
+    /** `ok | warn | critical | read_only`. */
+    state: string;
+    checked_at: string | null;
+  };
+  /** Reserved for placement — *not* a measurement of what the container uses. */
+  memory: { limit_bytes: number; booked_bytes: number };
+  archiving: {
+    /** `unknown | ok | warn | critical`. */
+    state: string;
+    lag_seconds: number | null;
+    pending_segments: number | null;
+    last_archived_at: string | null;
+    failed_count: number;
+  };
+  backups: {
+    last_success_at: string | null;
+    last_success_bytes: number | null;
+    successful_runs: number;
+    checked_at: string | null;
+    check_ok: boolean | null;
+  };
+  activity: { last_active_at: string | null };
+}
+
 /** `serializeProject` in services/api/src/modules/control-plane/serialize.ts. */
 export interface Project {
   id: string;              // prj_<uuid>
@@ -342,6 +371,17 @@ export const api = {
       throw err;
     }
   },
+
+  /**
+   * What a project is using (P7e).
+   *
+   * Its own request, not fields on `project()`, because that one polls every
+   * second while a project settles and these figures are refreshed by a sweep
+   * every few minutes. A 409 here is meaningful and is left to the caller: it is
+   * the control plane saying the project has no database to measure yet.
+   */
+  projectUsage: (ref: string) =>
+    request<{ usage: ProjectUsage }>(`/v1/projects/${encodeURIComponent(ref)}/usage`),
 
   /**
    * Delete a project — which is a **soft** delete (D-038).
