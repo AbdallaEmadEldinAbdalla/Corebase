@@ -234,6 +234,14 @@
 }
 .cards .sh-card__title:focus-visible { outline: none; }
 
+/* Banners space themselves apart.
+   Two stacked error surfaces sat flush against each other — the projects page can
+   render one for the organization and one for the list, and nothing separated
+   them. A bottom margin on the banner itself rather than an
+   `.sh-banner + .sh-banner` rule, because a banner is followed by page content as
+   often as by another banner, and both want the gap. */
+.sh-banner { margin-bottom: var(--sh-space-12); }
+
 /* ── a person as a card ───────────────────────────────────────────────────────
    The default view for People, because the table could not hold this content in
    the width it gets. A display name sits beside an email address, an email is one
