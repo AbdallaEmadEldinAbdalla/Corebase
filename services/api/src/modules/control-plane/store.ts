@@ -152,6 +152,27 @@ export interface ControlPlaneStore {
     | { project: Project; job: JobRow; source: Project; expiresAt: Date }
   >;
 
+  /**
+   * Try a failed project again.
+   *
+   * Resets the **existing** dead-lettered job rather than inserting a new one,
+   * and deliberately keeps its checkpoint: every saga step is check-then-act, so
+   * a resumed run skips what already succeeded and retries only the step that
+   * wedged. A fresh job would be correct too — the steps are idempotent — and it
+   * would redo minutes of work and split one project's provisioning history
+   * across two rows.
+   *
+   * `retryCount` is returned because the delivery id has to differ from the one
+   * the dead worker held: `enqueueRecovery` falls back to `key#recover-N`, and N
+   * has to increase or the second retry is silently dropped as a duplicate. It is
+   * counted from the audit trail, so it survives without a schema column.
+   */
+  requestRetry?(ref: string, actor?: Actor): Promise<
+    | { project: Project; job: JobRow; retryCount: number }
+    | { project: Project; conflict: string }
+    | { refused: string }
+    | undefined>;
+
   requestLifecycle?(ref: string, kind: 'pause' | 'resume', actor?: Actor): Promise<
     | { project: Project; job: JobRow; alreadyRequested: boolean }
     | { project: Project; conflict: string }

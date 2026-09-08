@@ -175,6 +175,11 @@ describe('P1b — the guard that keeps the exit criterion true', () => {
     // P2d: audits `project.credentials_rotation_requested` inside requestRotation,
     // in the same transaction as the job insert.
     'POST /v1/projects/:ref/rotate-credentials',
+    // P7j: audits `project.retry_requested` inside requestRetry, in the same
+    // transaction as the job reset and the status change. The metadata carries the
+    // retry number, which is what the recovery delivery id is derived from — so
+    // the log is the only record of how many times a project has been retried.
+    'POST /v1/projects/:ref/retry',
     // P3d: audits `project.restore_requested` inside requestRestore, in the same
     // transaction as the new project, its lineage row and its job. The audit names
     // the *source* as its resource, not the copy — "who asked to restore this

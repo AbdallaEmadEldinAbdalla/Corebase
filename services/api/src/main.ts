@@ -1,5 +1,6 @@
 import { Pool } from 'pg';
-import { createRedis, createQueue, enqueueProvisioning, type ProvisioningJobData } from '@steadhold/queue';
+import { createRedis, createQueue, enqueueProvisioning, enqueueRecovery,
+         type ProvisioningJobData } from '@steadhold/queue';
 import { buildApp } from './app.ts';
 import { parseOrigins } from './kernel/cors.ts';
 import { createPgStore, ensureBootstrapOrg } from './modules/control-plane/store.pg.ts';
@@ -63,14 +64,26 @@ const store = await (async () => {
 })();
 
 const redisUrl = process.env.SH_REDIS_URL;
-const enqueue = redisUrl
+/**
+ * One queue, two delivery rules.
+ *
+ * `enqueue` is the producer's: a second create with the same idempotency key must
+ * not become a second delivery. `enqueueRetry` is the opposite, and has to be —
+ * Redis still holds the delivery the dead worker was given, so the producer's rule
+ * would make a retry do nothing at all.
+ */
+const delivery = redisUrl
   ? (() => {
       const queue = createQueue(createRedis(redisUrl));
-      return async (job: ProvisioningJobData) => {
-        await enqueueProvisioning(queue, job);
+      return {
+        enqueue: async (job: ProvisioningJobData) => { await enqueueProvisioning(queue, job); },
+        enqueueRetry: async (job: ProvisioningJobData, attempt: number) => {
+          await enqueueRecovery(queue, job, attempt);
+        },
       };
     })()
   : undefined;
+const enqueue = delivery?.enqueue;
 if (!redisUrl) {
   console.warn(JSON.stringify({ level: 'warn', service: 'api',
     msg: 'SH_REDIS_URL not set — jobs will only be delivered by the worker sweeper.' }));
@@ -447,6 +460,7 @@ const app = buildApp({
     : {}),
   ...(actorUserId ? { actorUserId } : {}),
   ...(enqueue ? { enqueue } : {}),
+  ...(delivery ? { enqueueRecovery: delivery.enqueueRetry } : {}),
   ...(gateway ? { gateway } : {}),
   ...(storage ? { storage } : {}),
 });

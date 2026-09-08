@@ -14,6 +14,10 @@ import type { PrincipalDeps } from './kernel/principal.ts';
 export interface BuildOptions {
   store?: ControlPlaneStore;
   enqueue?: Enqueue;
+  /** Retry's delivery path — see `ControlPlaneDeps.enqueueRecovery`. */
+  enqueueRecovery?: (job: {
+    job_row_id: string; idempotency_key: string; job_type: string; project_id: string | null;
+  }, attempt: number) => Promise<void>;
   onEnqueueError?: (err: Error) => void;
   staticToken?: string;
   logger?: boolean;
@@ -126,6 +130,7 @@ export function buildApp(opts: BuildOptions = {}): FastifyInstance {
     ...(opts.projectsPerOrgLimit !== undefined
       ? { projectsPerOrgLimit: opts.projectsPerOrgLimit } : {}),
     ...(opts.enqueue ? { enqueue: opts.enqueue } : {}),
+    ...(opts.enqueueRecovery ? { enqueueRecovery: opts.enqueueRecovery } : {}),
     ...(opts.onEnqueueError ? { onEnqueueError: opts.onEnqueueError } : {}),
   });
   return app;

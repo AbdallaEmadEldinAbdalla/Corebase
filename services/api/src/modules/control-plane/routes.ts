@@ -31,6 +31,18 @@ export interface ControlPlaneDeps {
   /** Optional: without it the sweeper is the only delivery path (slower, still correct). */
   enqueue?: Enqueue;
   /**
+   * Re-delivery for a retry, which `enqueue` cannot do.
+   *
+   * The producer's rule — "this key is already queued, do nothing" — is right for
+   * create and wrong for retry: Redis still holds the delivery the dead worker was
+   * handed, and honouring it would make retry silently do nothing. This one keeps
+   * the plain key when it is free and falls back to `key#recover-N` when it is not,
+   * which is why it needs the attempt number.
+   */
+  enqueueRecovery?: (job: {
+    job_row_id: string; idempotency_key: string; job_type: string; project_id: string | null;
+  }, attempt: number) => Promise<void>;
+  /**
    * The keys a project publishes but is not signing with (P4h).
    *
    * Optional, and absent means "this project publishes only its signing key" —
@@ -824,6 +836,76 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
       effect: body.terminate === true
         ? 'Established sessions will be terminated. Applications must reconnect with the new credentials.'
         : 'Established sessions are unaffected. New connections need the new credentials.',
+    });
+  });
+
+  /**
+   * Try a failed project again (P7j).
+   *
+   * `project.lifecycle`, alongside pause and resume: all three are "make this
+   * project run", and the member who was allowed to create it is the member who
+   * should be able to get it running. It is not `project.delete`, because nothing
+   * here destroys anything.
+   *
+   * The delivery uses `enqueueRecovery` rather than `enqueueProvisioning`. The
+   * producer's "already queued, do nothing" rule is exactly wrong here: Redis
+   * still holds the delivery the dead worker was given, and treating that as a
+   * reason to skip would make retry a no-op. `enqueueRecovery` keeps the plain key
+   * when it is free and falls back to `key#recover-N` when it is not.
+   */
+  app.post('/v1/projects/:ref/retry', async (req, reply) => {
+    await requireAuth(req);
+    const { ref } = req.params as { ref: string };
+    const requestId = String(reply.getHeader('x-request-id') ?? req.id);
+
+    let actor: Actor = actorFor(req as never, requestId);
+    if (deps.orgs && deps.principals) {
+      const project = await deps.store.getProject(ref);
+      if (!project) throw ApiError.notFound('Project');
+      const scoped = await scope(req, encodeId('organization', project.organization_id));
+      if (scoped) {
+        require_(scoped.role, 'project.lifecycle');
+        actor = { type: 'user', userId: scoped.userId, ip: req.ip ?? null, requestId };
+      }
+    }
+
+    if (!deps.store.requestRetry) {
+      throw new ApiError(501, ERROR_CODES.INTERNAL,
+        'This deployment cannot retry projects.');
+    }
+    const result = await deps.store.requestRetry(ref, actor);
+    if (!result) throw ApiError.notFound('Project');
+
+    if ('refused' in result) {
+      throw new ApiError(409, ERROR_CODES.VALIDATION_FAILED, result.refused);
+    }
+    if ('conflict' in result) {
+      // Only a failed project has anything to retry, and naming the state it is
+      // actually in is more use than "cannot retry".
+      throw new ApiError(409, ERROR_CODES.VALIDATION_FAILED,
+        `This project is ${result.conflict}, so there is nothing to retry.`);
+    }
+
+    const { project, job, retryCount } = result;
+    if (deps.enqueueRecovery) {
+      try {
+        await deps.enqueueRecovery({
+          job_row_id: job.id,
+          idempotency_key: job.idempotency_key,
+          job_type: job.kind,
+          project_id: project.id,
+        }, retryCount);
+      } catch (err) {
+        // The row of record says pending and the sweeper will deliver it, so the
+        // retry is genuinely under way. Reporting failure would be a lie.
+        req.log.warn({ err, project: ref }, 'retry enqueue failed; sweeper will recover');
+        deps.onEnqueueError?.(err as Error);
+      }
+    }
+    return reply.status(202).send({
+      project: serializeProject(project),
+      job: { id: encodeId('job', job.id), type: job.kind, state: 'pending' },
+      retry: retryCount,
     });
   });
 

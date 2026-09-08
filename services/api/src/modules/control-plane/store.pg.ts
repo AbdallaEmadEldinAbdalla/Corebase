@@ -362,6 +362,81 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
      * requests still collapse — the row lock serialises them and the loser sees the
      * winner's job — while a genuine second cycle gets a genuine second job.
      */
+    async requestRetry(ref, actor) {
+      const client: PoolClient = await pool.connect();
+      /** Only the sagas that *build* a project leave it unusable when they fail. */
+      const BUILDING = ['provision_project', 'restore_project'];
+      try {
+        await client.query('BEGIN');
+        const found = await client.query<ProjectRowDb>(
+          `SELECT ${PROJECT_COLUMNS.replace(/p\./g, '')} FROM projects
+            WHERE ref = $1 AND status <> 'deleted' FOR UPDATE`, [ref]);
+        const row = found.rows[0];
+        if (!row) { await client.query('ROLLBACK'); return undefined; }
+
+        if (row.status !== 'failed') {
+          await client.query('ROLLBACK');
+          return { conflict: row.status, project: toProject(row) };
+        }
+
+        // The most recent dead-lettered build. `FOR UPDATE` because two retries
+        // arriving together must not both reset it and enqueue twice.
+        const dead = await client.query<{
+          id: string; job_type: string; project_id: string;
+          idempotency_key: string; state: string;
+        }>(`SELECT id, job_type, project_id, idempotency_key, state::text AS state
+              FROM provisioning_jobs
+             WHERE project_id = $1 AND job_type = ANY($2::text[])
+               AND state = 'dead_letter'
+             ORDER BY created_at DESC LIMIT 1
+               FOR UPDATE`, [row.id, BUILDING]);
+        const job = dead.rows[0];
+        if (!job) {
+          // The project says failed and no build job gave up, so something else
+          // marked it. Saying that beats enqueueing a job nobody asked for.
+          await client.query('ROLLBACK');
+          return { refused: 'This project has no failed build to retry.' };
+        }
+
+        // Monotonic across retries, and derived rather than stored: the delivery
+        // id falls back to `key#recover-N` and a repeated N is dropped as a
+        // duplicate, so the second retry would silently do nothing.
+        const seen = await client.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM audit_logs
+            WHERE project_id = $1 AND action = 'project.retry_requested'`, [row.id]);
+        const retryCount = (seen.rows[0]?.n ?? 0) + 1;
+
+        // `checkpoint` is deliberately untouched — the saga resumes from it.
+        await client.query(
+          `UPDATE provisioning_jobs
+              SET state = 'pending', attempts = 0, last_error = NULL,
+                  started_at = NULL, finished_at = NULL, heartbeat_at = NULL,
+                  scheduled_for = now(), updated_at = now()
+            WHERE id = $1`, [job.id]);
+
+        const updated = await client.query<ProjectRowDb>(
+          `UPDATE projects SET status = 'creating', updated_at = now() WHERE ref = $1
+        RETURNING ${PROJECT_COLUMNS.replace(/p\./g, '')}`, [ref]);
+
+        await writeAudit(client, actor ?? SYSTEM, {
+          action: 'project.retry_requested',
+          resourceType: 'project', resourceId: ref,
+          organizationId: row.organization_id, projectId: row.id,
+          metadata: { job_type: job.job_type, retry: retryCount },
+        });
+        await client.query('COMMIT');
+        return {
+          project: toProject(updated.rows[0]!),
+          job: jobFromDb(job as never),
+          retryCount,
+        };
+      } catch (err) {
+        await client.query('ROLLBACK'); throw err;
+      } finally {
+        client.release();
+      }
+    },
+
     async requestLifecycle(ref, kind, actor) {
       const client: PoolClient = await pool.connect();
       const jobType = kind === 'pause' ? 'pause_project' : 'resume_project';
