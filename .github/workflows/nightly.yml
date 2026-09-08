@@ -111,6 +111,29 @@ jobs:
         if: always() && matrix.drill.task == 'load'
         run: cat docs/14-roadmap/measurements/p5f-latency.json || true
 
+      # ── the one thing the drill does not print ─────────────────────────────
+      #
+      # The bench already dumps the worker and api logs on a failure — it keeps
+      # them in memory and prints them to stderr — and that is what diagnosed the
+      # twice-failing T5f: the stalled provision's last line was
+      # `configure_backups — stanza created`, and the step after it never logged.
+      #
+      # What the bench cannot show is the *job row*: attempts, last_error, and how
+      # far the checkpoint got. `if: failure()` so a green night stays quiet, and
+      # before `tear down`, which removes the database this reads.
+      - name: the job rows behind a failure
+        if: failure()
+        run: |
+          docker exec sh-control-db psql -U steadhold -d steadhold_control -x -c "
+            SELECT p.ref, p.status AS project_status, j.job_type, j.state,
+                   j.attempts, j.last_error,
+                   j.checkpoint -> 'completed' AS steps_done,
+                   j.created_at, j.started_at, j.heartbeat_at
+              FROM provisioning_jobs j
+              JOIN projects p ON p.id = j.project_id
+             WHERE j.state <> 'succeeded'
+             ORDER BY j.created_at DESC LIMIT 10;" || true
+
       - name: tear down
         if: always()
         run: ./scripts/staging.sh nuke || true

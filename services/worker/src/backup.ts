@@ -236,7 +236,23 @@ const PGB_TIMEOUT_MS: Record<string, number> = {
   restore: 600_000,
   'stanza-create': 60_000,
   'stanza-upgrade': 60_000,
-  check: 60_000,            // forces a WAL switch; seconds in practice
+  /**
+   * `check` forces a WAL switch and waits for the segment to reach the repo. It
+   * takes **754ms at p50 and 1.28s at worst** across 21 provisions (T5f's own
+   * per-step figures), so 15s is roughly twelve times the observed maximum.
+   *
+   * It was 60s, and that is the number that failed the nightly drill twice. A
+   * ceiling has to be a *fraction* of the budget it lives inside: T5f allows 60s
+   * per create, so a `check` permitted to hang for 60s consumes the whole budget
+   * before the saga can fail the step and retry it. The provision that failed had
+   * logged `stanza created` and then nothing — stalled here, with no time left to
+   * recover. Nineteen of twenty passed; the twentieth was lost to the ceiling
+   * rather than to anything it measured.
+   *
+   * D-427 lowered this from 600s to 60s to restore a fast-fail and stopped one
+   * step short of making it fast enough to be one.
+   */
+  check: 15_000,
   info: 30_000,
   expire: 120_000,
 };
