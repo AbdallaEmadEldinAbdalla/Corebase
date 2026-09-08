@@ -4710,6 +4710,14 @@ both go to the bottom. The sidebar footer and the collapse row each claimed it, 
 own the free space, and which one depends on what is rendered — so the rule moves
 with the condition, not onto both. (D-450.)
 
+**A ceiling equal to the deadline it sits inside is not a ceiling, it is the
+deadline.** `pgbackrest check` had a 60-second exec timeout and T5f allows 60
+seconds per create — so a stalled check consumed the entire budget and the drill
+reported a failed provision having measured nothing, twice. The step takes 754ms
+at p50. A per-operation timeout is not chosen against the operation alone; it is
+chosen against the deadline it is nested in, with enough room left for the retry
+that timeout exists to enable. (D-455.)
+
 **A `globalSetup` probe owns the whole run's liveness.** It executes before any
 test and outside every test's timeout, so a wait it does not bound and a handle it
 does not release hang the entire suite rather than failing one file. D-440's queue
