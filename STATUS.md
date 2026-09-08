@@ -3833,16 +3833,20 @@ running one:
 - Two of the three project images changed content, so the node's image store has to
   be re-seeded, not re-tagged.
 
-**Still outward-facing and not done by me:** `steadhold.dev` and `steadhold.app` are
-not registered, and the GitHub repository is still named `Corebase`. Renaming the
-repository breaks existing clones and remotes, so it is the owner's call:
+**The GitHub repository is renamed**, by the owner: `AbdallaEmadEldinAbdalla/Corebase`
+→ `abdallaemadeldin/Steadhold`. The account handle changed alongside the repository,
+so `git remote set-url` was needed rather than relying on GitHub's redirect, and
+anyone with an existing clone needs the same:
 
 ```bash
-gh repo rename Steadhold
+git remote set-url origin https://github.com/abdallaemadeldin/Steadhold.git
 ```
 
-The local working directory is still `~/Desktop/Corebase`; renaming it mid-session
-would break every absolute path in flight.
+**Still outward-facing and open:** `steadhold.dev` and `steadhold.app` are not
+registered — deliberately deferred until the product is closer to production. The
+local working directory is still `~/Desktop/Corebase`; renaming it mid-session
+would break every absolute path in flight, and it has no effect on anything the
+repository builds.
 
 ### The mark · done · four rounds, 30 candidates, 1 shipped
 
@@ -4516,12 +4520,14 @@ resolver.
 
 
 
-**The rename is applied in the code but not outside it.** Everything in the
-repository says Steadhold (§4h, D-407), but `steadhold.dev` and `steadhold.app` are
-**not registered**, the GitHub repository is still named `Corebase`, and OQ-099
-— whether "Steadhold" is registrable as a word mark in EU/US software classes — is
-still open. All three are commercial tasks outside this corpus, and the third could
-in principle force a second rename.
+**The rename is applied in the code and to the repository, but the names are not
+owned.** Everything here says Steadhold (§4h, D-407) and the GitHub repository is
+`abdallaemadeldin/Steadhold`, but `steadhold.dev` and `steadhold.app` are **not
+registered** — deferred until closer to production — and OQ-099, whether
+"Steadhold" is registrable as a word mark in EU/US software classes, is still open.
+Both are commercial tasks outside this corpus, and the second could in principle
+force a second rename, which is the one that would be expensive: this one cost 352
+files and four days' worth of decisions to do carefully.
 
 **One test reads the ambient environment.**
 `services/api/src/credentials-guard.test.ts` builds `buildApp({})` and asserts an
