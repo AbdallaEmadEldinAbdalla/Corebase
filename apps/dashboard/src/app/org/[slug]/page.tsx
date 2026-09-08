@@ -51,8 +51,20 @@ export default function ProjectsPage({ params }: { params: Promise<{ slug: strin
   };
 
   const rows = projects.projects;
+  /**
+   * Soft-deleted projects are not shown at all.
+   *
+   * They used to appear in a "Recently deleted" table under the grid, which meant
+   * an organization with one deleted project and no live ones rendered the empty
+   * state *and* a table — an empty page that was not empty. The grid is for things
+   * you can use.
+   *
+   * The cost is named in STATUS §8: D-038 keeps a deleted project recoverable for
+   * seven days, and with this section gone the dashboard has no surface for that
+   * window. Recovery is CLI or support until it gets a proper home — org settings
+   * is where it belongs, next to the danger zone that created the state.
+   */
   const live = rows.filter((p) => !p.deleted_at);
-  const recoverable = rows.filter((p) => p.deleted_at);
 
   return (
     <div className="wrap">
@@ -130,24 +142,12 @@ export default function ProjectsPage({ params }: { params: Promise<{ slug: strin
           )
       ) : null}
 
-      {recoverable.length > 0 ? (
-        <section className="section" style={{ marginTop: 'var(--sh-space-32)' }}>
-          <div className="section__head">
-            <h2 className="section__title">Recently deleted</h2>
-            <p className="section__note">
-              Data is kept until the deadline shown, then destroyed permanently.
-            </p>
-          </div>
-          <ProjectTable projects={recoverable} deleted />
-        </section>
-      ) : null}
     </div>
   );
 }
 
-function ProjectTable({ projects, deleted, hasMore, loadingMore, onLoadMore }: {
+function ProjectTable({ projects, hasMore, loadingMore, onLoadMore }: {
   projects: Project[];
-  deleted?: boolean;
   hasMore?: boolean;
   loadingMore?: boolean;
   onLoadMore?: () => void;
@@ -162,29 +162,25 @@ function ProjectTable({ projects, deleted, hasMore, loadingMore, onLoadMore }: {
             <th scope="col">Ref</th>
             <th scope="col">Status</th>
             <th scope="col">Region</th>
-            <th scope="col">{deleted ? 'Recoverable until' : 'Created'}</th>
+            <th scope="col">Created</th>
             <th scope="col"><span className="sh-sr">Actions</span></th>
           </tr>
         </thead>
         <tbody>
           {projects.map((p) => (
             <tr key={p.id}
-                onClick={() => { if (!deleted) router.push(`/project/${p.ref}`); }}>
+                onClick={() => router.push(`/project/${p.ref}`)}>
               <td className="sh-table__name">
-                {deleted ? p.name : (
-                  // A real link, so the row is keyboard-reachable and
+                                  // A real link, so the row is keyboard-reachable and
                   // middle-click/⌘-click open a new tab like anywhere else.
                   <Link href={`/project/${p.ref}`}
                         style={{ textDecoration: 'none', color: 'inherit' }}>{p.name}</Link>
-                )}
               </td>
               <td className="sh-mono">{p.ref}</td>
               <td><ProjectStateBadge status={p.status} /></td>
               <td>{p.region}</td>
               <td>
-                {deleted
-                  ? (p.restorable_until ? new Date(p.restorable_until).toLocaleDateString() : '—')
-                  : new Date(p.created_at).toLocaleDateString()}
+                {new Date(p.created_at).toLocaleDateString()}
               </td>
               <td className="td-actions" onClick={(e) => e.stopPropagation()}>
                 <div className="sh-row sh-row--tight" style={{ justifyContent: 'flex-end' }}>

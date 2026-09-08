@@ -51,6 +51,7 @@ body{margin:0;background:var(--sh-bg);color:var(--sh-text);font:var(--sh-body-m)
   color:var(--sh-text-muted);cursor:not-allowed}
 .sh-help{font:var(--sh-caption);color:var(--sh-text-muted)}
 .sh-help--error{color:var(--sh-error)}
+.sh-select:disabled{background-color:var(--sh-surface-alt);color:var(--sh-text-muted);cursor:not-allowed}
 .sh-select{appearance:none;background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),
   linear-gradient(135deg,currentColor 50%,transparent 50%);
   background-position:calc(100% - 18px) 17px,calc(100% - 13px) 17px;
@@ -212,6 +213,23 @@ body{margin:0;background:var(--sh-bg);color:var(--sh-text);font:var(--sh-body-m)
   border-radius:0;margin-top:4px}
 
 /* ── overlays & states ──────────────────────────── */
+/* The exported `.sh-dialog` and `.sh-scrim` are *boxes* — a 420px panel and a
+   tinted container — because a design board can draw a dialog but cannot express
+   an overlay. Without a layer they render in flow, which is why a confirm dialog
+   placed inside a table cell appeared inside the cell. `.sh-modal` is that layer:
+   fixed, above the popups (`.pop__menu` is z-index 40), centring its dialog. */
+.sh-modal{position:fixed;inset:0;z-index:60;display:grid;place-items:center;
+  padding:var(--sh-space-24);
+  /* An overlay must not inherit typography from wherever it happens to be
+     declared. `position: fixed` takes it out of *flow*, but inheritance follows
+     the DOM — so a dialog opened from a right-aligned table cell came out
+     right-aligned and read as RTL. `start` rather than `left` so a genuinely
+     right-to-left locale still aligns correctly; the point is to stop inheriting
+     the call site, not to hard-code a direction. */
+  text-align:start;font:var(--sh-body-m);color:var(--sh-text)}
+.sh-modal .sh-scrim{position:absolute;inset:0;width:100%;height:100%;padding:0;
+  border:0;border-radius:0;cursor:default}
+.sh-modal .sh-dialog{position:relative}
 .sh-scrim{background:var(--sh-scrim);padding:var(--sh-space-32);border-radius:var(--sh-radius-md)}
 .sh-dialog{width:420px;max-width:100%;background:var(--sh-surface);border:1px solid var(--sh-border);
   border-radius:var(--sh-radius-lg);padding:var(--sh-space-24)}

@@ -248,6 +248,48 @@ describe('design tokens', () => {
     }
   });
 
+  /**
+   * No control drawn by the operating system (D-429).
+   *
+   * `.sh-select` puts `appearance: none` on a native `<select>` and draws its own
+   * caret, so the closed control looks right — and the moment it opens, the list is
+   * OS chrome that CSS cannot reach: system font, system metrics, system highlight,
+   * dropped into a warm clay palette. There is no styling fix, because the popup is
+   * not in the page. `components/Menu.tsx` exports a branded `Select` built on the
+   * primitive that already has the focus behaviour the review gate wants.
+   *
+   * A bare `type="checkbox"` is the same problem at lower volume: `.sh-check` only
+   * tints the OS box with `accent-color`, while `.sh-switch` hides the input and
+   * draws the track — the same real input underneath, so it keeps its semantics for
+   * a screen reader and the keyboard, with pixels that are ours.
+   *
+   * The rule is about *rendering*, not about elements: `<input type="text">` and
+   * `<textarea>` are fully styleable and stay.
+   */
+  it('renders no control the operating system draws (D-429)', () => {
+    // Comments are stripped first: this file's own docblocks discuss `<select>`
+    // at length, and a guard that cannot tell prose from markup fails on the
+    // explanation of why it exists.
+    const code = (src: string) =>
+      src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    for (const { file, css: raw } of CONSUMERS) {
+      if (!file.endsWith('.tsx')) continue;
+      const css = code(raw);
+      expect(css.match(/<select\b/g) ?? [],
+        `${file} uses a native <select>; its open list is OS chrome. `
+        + `Use the branded Select from components/Menu.tsx.`,
+      ).toEqual([]);
+      // The switch's own input is the sanctioned use, so the check is for a
+      // checkbox that is *not* inside an `sh-switch` label.
+      const bare = (css.match(/type="checkbox"/g) ?? []).length;
+      const switches = (css.match(/sh-switch/g) ?? []).length;
+      expect(bare <= switches,
+        `${file} has a checkbox outside an sh-switch; sh-check leaves the box to `
+        + `the OS. Use the switch.`,
+      ).toBe(true);
+    }
+  });
+
   it('names the spacing scale by value, so a missing step is self-evident', () => {
     // D-414's root cause was an index that skipped: space-1/2/3/4/6/8/12 for
     // 4/8/12/16/24/32/48 made `--sh-space-5` read as a real token.

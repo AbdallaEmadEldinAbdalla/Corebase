@@ -91,6 +91,10 @@ const PATHS: Record<string, string> = {
   overview: 'M4 12a8 8 0 0 1 16 0M12 12l4-3',
   connect: 'M8 4v6a4 4 0 0 0 8 0V4M12 14v6',
   keys: 'M14.5 5a4.5 4.5 0 1 0-3.2 7.7L4 20v0h3v-2h2v-2h2l1.3-1.3A4.5 4.5 0 0 0 14.5 5Z',
+  // Two figures, not one: the section is about a group, and a single silhouette
+  // reads as "account" — which is a different page.
+  members: 'M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7ZM2.5 20a6.5 6.5 0 0 1 13 0'
+    + 'M16.5 11.5a3 3 0 1 0 0-6M18 20h3.5a5.5 5.5 0 0 0-4-5.3',
 };
 
 export function SectionIcon({ name }: { name: keyof typeof PATHS | string }) {

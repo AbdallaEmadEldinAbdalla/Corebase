@@ -77,9 +77,16 @@ export function RotateCredentials({ projectRef }: { projectRef: string }) {
               </div>
             ) : null}
 
-            <label className="row" style={{ alignItems: 'flex-start', gap: 'var(--sh-space-12)' }}>
-              <input type="checkbox" className="sh-check" checked={terminate}
+            {/* `sh-switch`, not `sh-check`. The check keeps the operating system's
+                box and only tints it with `accent-color`, so it is the one control
+                on the page still drawn by the OS. The switch hides the input and
+                draws the track itself — same input underneath, so it stays a real
+                checkbox for a screen reader and for the keyboard, and the pixels
+                are ours. */}
+            <label className="sh-switch" style={{ alignItems: 'flex-start' }}>
+              <input type="checkbox" checked={terminate}
                      onChange={(e) => setTerminate(e.target.checked)} />
+              <span className="sh-switch__track" aria-hidden="true" />
               <span style={{ font: 'var(--sh-body-s)' }}>
                 <strong>Also disconnect everything now.</strong>
                 <br />

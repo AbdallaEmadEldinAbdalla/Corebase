@@ -19,6 +19,7 @@ const groups = (meta: string): { title: string; keys: [string, string][] }[] => 
   ] },
   { title: 'Go to', keys: [
     ['g p', 'Projects'],
+    ['g m', 'Members'],
     ['g o', 'Project overview'],
     ['g c', 'Connect'],
     ['g k', 'API keys'],

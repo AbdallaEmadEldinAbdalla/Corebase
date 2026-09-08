@@ -1,6 +1,7 @@
 'use client';
 
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import type { Role } from '@steadhold/types';
 import { api, type Org } from './api.ts';
 import { SETTLING } from '../components/ProjectState.tsx';
 
@@ -15,6 +16,8 @@ export const keys = {
   projects: (orgId: string) => ['org', orgId, 'projects'] as const,
   project: (ref: string) => ['project', ref] as const,
   projectKeys: (ref: string) => ['project', ref, 'keys'] as const,
+  members: (orgId: string) => ['org', orgId, 'members'] as const,
+  invites: (orgId: string) => ['org', orgId, 'invites'] as const,
 };
 
 export const useMe = () => useQuery({ queryKey: keys.me, queryFn: api.me });
@@ -163,6 +166,65 @@ export function usePauseProject(ref: string, orgId?: string) {
       void qc.invalidateQueries({ queryKey: keys.project(ref) });
       if (orgId) void qc.invalidateQueries({ queryKey: keys.projects(orgId) });
     },
+  });
+}
+
+export function useMembers(orgId: string | undefined) {
+  return useQuery({
+    queryKey: keys.members(orgId ?? 'none'),
+    queryFn: () => api.members(orgId!),
+    enabled: Boolean(orgId),
+  });
+}
+
+export function useInvites(orgId: string | undefined) {
+  return useQuery({
+    queryKey: keys.invites(orgId ?? 'none'),
+    queryFn: () => api.invites(orgId!),
+    enabled: Boolean(orgId),
+  });
+}
+
+export function useSetMemberRole(orgId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { userId: string; role: Role }) =>
+      api.setMemberRole(orgId, v.userId, v.role),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: keys.members(orgId) });
+      // A role change can be the *current* user demoting themselves, which
+      // changes what the whole shell may offer — so the identity that drives
+      // every affordance has to be refetched too, not just the row that moved.
+      void qc.invalidateQueries({ queryKey: keys.me });
+    },
+  });
+}
+
+export function useRemoveMember(orgId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: string) => api.removeMember(orgId, userId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: keys.members(orgId) });
+      void qc.invalidateQueries({ queryKey: keys.orgs });
+      void qc.invalidateQueries({ queryKey: keys.me });
+    },
+  });
+}
+
+export function useInvite(orgId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { email: string; role: Role }) => api.invite(orgId, v.email, v.role),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: keys.invites(orgId) }); },
+  });
+}
+
+export function useRevokeInvite(orgId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (inviteId: string) => api.revokeInvite(orgId, inviteId),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: keys.invites(orgId) }); },
   });
 }
 

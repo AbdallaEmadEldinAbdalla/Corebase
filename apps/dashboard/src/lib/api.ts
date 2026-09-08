@@ -164,7 +164,14 @@ export interface MeResponse {
   principal: string;
 }
 
-export type Role = 'owner' | 'admin' | 'member';
+/**
+ * Imported and re-exported, not redeclared. The capability matrix now lives in
+ * `@steadhold/types` so the API and the dashboard answer "may this person invite
+ * someone" from one table (D-428); a second `Role` union here would be the start
+ * of the same drift one layer down.
+ */
+import type { Role } from '@steadhold/types';
+export type { Role };
 
 export interface Org {
   id: string;              // org_<uuid>
@@ -225,6 +232,23 @@ export interface ApiKey {
 export interface Pagination { next_cursor?: string | null; has_more?: boolean }
 
 /** The project states the shell renders. Anything else falls through to neutral. */
+export interface Member {
+  user_id: string;
+  email: string;
+  display_name: string | null;
+  role: Role;
+  joined_at: string;
+}
+
+export interface Invite {
+  id: string;
+  email: string;
+  role: Role;
+  expires_at: string;
+  created_at?: string;
+  invited_by?: string;
+}
+
 export const PROJECT_STATES = [
   'provisioning', 'ready', 'paused', 'resuming', 'restoring', 'failed', 'deleting', 'deleted',
 ] as const;
@@ -318,6 +342,42 @@ export const api = {
       throw err;
     }
   },
+
+  // ── organization members and invites ─────────────────────────────────────
+  members: (orgId: string) =>
+    request<{ members: Member[] }>(`/v1/orgs/${encodeURIComponent(orgId)}/members`),
+
+  setMemberRole: (orgId: string, userId: string, role: Role) =>
+    request<{ member: Member }>(
+      `/v1/orgs/${encodeURIComponent(orgId)}/members/${encodeURIComponent(userId)}`,
+      { method: 'PATCH', body: { role } }),
+
+  removeMember: (orgId: string, userId: string) =>
+    request<void>(
+      `/v1/orgs/${encodeURIComponent(orgId)}/members/${encodeURIComponent(userId)}`,
+      { method: 'DELETE' }),
+
+  invites: (orgId: string) =>
+    request<{ invites: Invite[] }>(`/v1/orgs/${encodeURIComponent(orgId)}/invites`),
+
+  /**
+   * Create an invite.
+   *
+   * The response carries a **one-time token** and `delivery: 'not_emailed_yet'`,
+   * because the email sender is a later phase — the API says so in its own
+   * `warning` field. The caller has to surface that: a UI that says "invitation
+   * sent" would be describing something that did not happen.
+   */
+  invite: (orgId: string, email: string, role: Role) =>
+    request<{
+      invite: Invite; token: string; delivery: string; warning: string;
+    }>(`/v1/orgs/${encodeURIComponent(orgId)}/invites`,
+      { method: 'POST', body: { email, role } }),
+
+  revokeInvite: (orgId: string, inviteId: string) =>
+    request<void>(
+      `/v1/orgs/${encodeURIComponent(orgId)}/invites/${encodeURIComponent(inviteId)}`,
+      { method: 'DELETE' }),
 
   projectKeys: (ref: string) =>
     request<{ api_keys: ApiKey[] }>(`/v1/projects/${encodeURIComponent(ref)}/keys`),

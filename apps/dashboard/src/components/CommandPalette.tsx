@@ -120,6 +120,11 @@ export function CommandPalette({ open, onClose, orgSlug, projectRef }: {
     if (currentOrg) {
       list.push({ id: 'go-projects', group: 'Go to', label: 'Projects',
                   hint: 'g p', run: go(`/org/${currentOrg.slug}`) });
+      // Every section in the sidebar is also in here. A page reachable only by
+      // clicking is reachable one way, and §2 asks for three.
+      list.push({ id: 'go-members', group: 'Go to', label: 'Members',
+                  keywords: 'people team invite roles',
+                  hint: 'g m', run: go(`/org/${currentOrg.slug}/members`) });
     }
     if (projectRef) {
       list.push(

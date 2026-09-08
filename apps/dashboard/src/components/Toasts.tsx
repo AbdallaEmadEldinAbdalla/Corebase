@@ -1,6 +1,8 @@
 'use client';
 
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
+import { ApiError } from '../lib/api.ts';
+import { copyText } from '../lib/copy.ts';
 
 /**
  * Toasts, because the UX standard §5 requires every mutation to answer for itself.
@@ -27,6 +29,16 @@ const Ctx = createContext<{
   show: (t: Omit<Toast, 'id'>) => void;
   /** The common case, so it does not get written out eleven times. */
   copied: (what: string) => void;
+  /**
+   * A failed request, with everything §8 question 17 asks for.
+   *
+   * It was missing, so every caller wrote `detail: err.message` — a sentence with
+   * no `code` and no `request_id`, leaving a user nothing to quote and support
+   * nothing to search. `ErrorSurface` gets this right for banners; the toast path
+   * had no equivalent, which is how one rule ends up honoured on one surface and
+   * quietly dropped on the other.
+   */
+  apiError: (title: string, err: unknown) => void;
 } | null>(null);
 
 /** Long enough to read a sentence, short enough not to sit in the way. */
@@ -45,6 +57,18 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const value = useMemo(() => ({
     show,
     copied: (what: string) => show({ title: `${what} copied`, tone: 'success' }),
+    /** D-032: code, sentence, request_id, and a way to copy it. */
+    apiError: (title: string, err: unknown) => {
+      const api = err instanceof ApiError ? err : null;
+      const detail = api
+        ? [api.code, api.message, api.requestId].filter(Boolean).join(' · ')
+        : (err instanceof Error ? err.message : 'Something went wrong.');
+      const rid = api?.requestId;
+      show({
+        tone: 'error', title, detail,
+        ...(rid ? { action: { label: 'Copy ID', run: () => { void copyText(rid); } } } : {}),
+      });
+    },
   }), [show]);
 
   return (

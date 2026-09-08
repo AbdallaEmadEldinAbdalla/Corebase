@@ -9,10 +9,15 @@ import { rememberOrg } from '../../../lib/last-org.ts';
  * Org chrome. A layout and not a per-page wrapper so the sidebar and breadcrumb
  * survive navigation between org pages (UX standard §1).
  *
- * The sidebar holds **Projects only**, because that is the only org-level page that
- * exists. Members, billing, settings and the audit viewer are all planned and none
- * are built, and a greyed-out nav item for an unbuilt feature is a promise the
- * product has not made (§7, and the IA's own no-teaser rule).
+ * The sidebar lists **only pages that exist** — Projects and Members. Billing,
+ * settings and the audit viewer are planned and unbuilt, and a greyed-out nav item
+ * for an unbuilt feature is a promise the product has not made (§7, and the IA's
+ * own no-teaser rule), so they are absent rather than disabled. The nav grows as
+ * pages land; gate question 20 is the reason it is written this way round.
+ *
+ * Members is shown to every role, including a plain member: `member.read` is a
+ * member capability, so "who else is in this org" is a question they may ask. What
+ * the page *offers* them is narrower, and that is the page's business (D-428).
  */
 export default function OrgLayout({ children, params }: {
   children: ReactNode;
@@ -29,6 +34,7 @@ export default function OrgLayout({ children, params }: {
       <>
         <div className="nav__label">{org?.name ?? 'Organization'}</div>
         <NavItem href={`/org/${slug}`} current={path === `/org/${slug}`} icon="projects">Projects</NavItem>
+        <NavItem href={`/org/${slug}/members`} current={path.endsWith('/members')} icon="members">Members</NavItem>
         <div className="nav__foot">
           <div className="nav__hint">
             <span>Shortcuts</span><span className="kbd">?</span>

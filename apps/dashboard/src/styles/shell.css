@@ -118,8 +118,23 @@
 /* ── tables ───────────────────────────────────────────────────────────────── */
 .tablewrap {
   background: var(--sh-surface); border: 1px solid var(--sh-border);
-  border-radius: var(--sh-radius-lg); overflow: hidden;
+  border-radius: var(--sh-radius-lg);
+  /* NOT `overflow: hidden`.
+     It was there to clip the table's square corners to this rounded border, and
+     it also clipped every row's `⋯` menu, which is absolutely positioned inside a
+     cell. So the row menu was unusable in every table in the app — invisible
+     until hover (fixed above), and then clipped to nothing when opened. Two
+     defects stacked, which is why neither got noticed.
+     The corners are rounded on the table's own outer cells instead, below. The
+     trade-off: a table wider than its wrapper can no longer be given
+     `overflow-x: auto` here without bringing the clip back — if that is ever
+     needed, the menu has to move to a portal. */
 }
+/* The corner clipping `overflow: hidden` used to do. */
+.tablewrap .sh-table thead th:first-child { border-top-left-radius: var(--sh-radius-lg); }
+.tablewrap .sh-table thead th:last-child { border-top-right-radius: var(--sh-radius-lg); }
+.tablewrap .sh-table tbody tr:last-child td:first-child { border-bottom-left-radius: var(--sh-radius-lg); }
+.tablewrap .sh-table tbody tr:last-child td:last-child { border-bottom-right-radius: var(--sh-radius-lg); }
 .tablewrap .sh-table tbody tr:last-child td { border-bottom: 0; }
 .tablewrap .sh-table tbody tr { cursor: pointer; }
 .tablecount {
@@ -136,9 +151,17 @@
   width: 28px; height: 28px; display: grid; place-items: center;
   border: 1px solid transparent; border-radius: var(--sh-radius-sm);
   background: none; color: var(--sh-text-muted); cursor: pointer;
-  opacity: 0; transition: opacity 140ms ease;
+  transition: color 140ms ease, background 140ms ease;
 }
-tr:hover .rowbtn, .rowbtn:focus-visible, .rowbtn[aria-expanded="true"] { opacity: 1; }
+/* No `opacity: 0` default. It used to be invisible until the row was hovered,
+   which is gate question 8 — an affordance that exists only on hover — and it
+   made the row menu unfindable: a user looking for "revoke this invitation"
+   found a blank column. The muted colour is what keeps it quiet; hover and
+   focus give it a surface, which is the same treatment every other quiet
+   control here gets. */
+tr:hover .rowbtn, .rowbtn:focus-visible, .rowbtn[aria-expanded="true"] {
+  color: var(--sh-text);
+}
 .rowbtn:hover { background: var(--sh-surface); border-color: var(--sh-border); color: var(--sh-text); }
 
 /* ── project cards (identity view) ────────────────────────────────────────── */
@@ -219,6 +242,10 @@ tr:hover .rowbtn, .rowbtn:focus-visible, .rowbtn[aria-expanded="true"] { opacity
 .pop { position: relative; }
 .pop__menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 40; animation: rise-in 140ms ease; }
 .pop__menu--right { left: auto; right: 0; }
+/* A value picker's list belongs to its control: `.sh-menu` is a fixed 300px,
+   which is right for the switchers and wrong here. */
+.pop__menu--fit { min-width: 100%; }
+.pop__menu--fit .sh-menu { width: 100%; min-width: max-content; }
 .pop__menu .sh-menu { margin-top: 0; }
 .sh-menu__item { cursor: pointer; width: 100%; border: 0; background: none; text-align: left; }
 .sh-menu__item:hover, .sh-menu__item:focus-visible { background: var(--sh-surface-alt); }

@@ -51,6 +51,7 @@ export function AppShell({ children, orgSlug, projectRef, nav }: {
     keys: { '?': openShortcuts },
     go: {
       p: () => { if (orgSlug) router.push(`/org/${orgSlug}`); },
+      m: () => { if (orgSlug) router.push(`/org/${orgSlug}/members`); },
       o: () => { if (projectRef) router.push(`/project/${projectRef}`); },
       c: () => { if (projectRef) router.push(`/project/${projectRef}/connect`); },
       k: () => { if (projectRef) router.push(`/project/${projectRef}/keys`); },
@@ -101,6 +102,7 @@ export function AppShell({ children, orgSlug, projectRef, nav }: {
  */
 function Crumbs({ orgSlug, projectRef }: { orgSlug?: string; projectRef?: string }) {
   const router = useRouter();
+  const pathname = usePathname();
   const orgs = useOrgs();
   const org = orgs.data?.orgs.find((o) => o.slug === orgSlug);
   const projects = useProjects(org?.id);
@@ -147,7 +149,7 @@ function Crumbs({ orgSlug, projectRef }: { orgSlug?: string; projectRef?: string
                   <button ref={ref} type="button" className="crumb"
                           aria-haspopup="menu" aria-expanded={open} onClick={toggle}>
                     <span className="crumb__label">
-                      {project?.name ?? (projectRef ? projectRef : 'Projects')}
+                      {project?.name ?? (projectRef ? projectRef : orgSection(pathname))}
                     </span>
                     <span className="crumb__caret" aria-hidden="true">▾</span>
                   </button>
@@ -274,6 +276,28 @@ export function NavItem({ href, children, current, icon }: {
       {children}
     </Link>
   );
+}
+
+/**
+ * The org-level section, for the breadcrumb.
+ *
+ * The IA specifies the breadcrumb as `org / project / section`, and on an
+ * org-level page there is no project — so the slot after the org is the section.
+ * It used to read the literal word "Projects" whenever no project ref was set,
+ * which meant standing on Members while the breadcrumb said Projects.
+ *
+ * Derived from the path rather than passed in as a prop, because AppShell is
+ * called from the *layout* (so the chrome survives navigation between sections,
+ * UX standard §1) and a layout does not re-render per child — it cannot know
+ * which of its pages is showing.
+ *
+ * The control stays the project switcher: jumping into a project from an org page
+ * is worth keeping. Only its label was lying.
+ */
+function orgSection(pathname: string): string {
+  if (/\/org\/[^/]+\/members$/.test(pathname)) return 'Members';
+  if (/\/org\/[^/]+\/new$/.test(pathname)) return 'New project';
+  return 'Projects';
 }
 
 /** Reads the active section from the path so a nav does not take a prop per page. */

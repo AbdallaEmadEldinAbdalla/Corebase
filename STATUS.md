@@ -4017,6 +4017,68 @@ staging: a real project provisioned, paused, opened in the browser, seen to
 auto-resume with the banner and the badge, and the duplicate-banner bug that first
 attempt introduced found by looking and fixed.
 
+### P7b — organization members and invitations · done · D-428…D-432
+
+Six API routes existed with no UI. What shipped: one list of people where an
+invitation is a person in a pending state, role changes, removal, invite creation,
+and revocation.
+
+**The capability matrix is now shared** (`@steadhold/types`, D-428) rather than
+re-implemented in the client, so the dashboard offers exactly what the API permits
+— a member sees no Invite form, an admin sees no `owner` in a role list. The API
+stays the authority; this only stops the UI promising things that return 403. Proven
+faithful by the 12 existing permission tests passing unchanged.
+
+**An invite is not an email.** The platform returns a one-time token and
+`delivery: 'not_emailed_yet'` because the sender is a later phase, and its own
+response carries a `warning` to pass the token on by hand. The page renders that
+field rather than paraphrasing it, so when the sender ships and the value changes,
+the page stops saying it. A confirmation reading "Invitation sent" would describe
+something that did not happen.
+
+**What the review gate caught, after I had already shown the page.** I built this
+and then fixed what the user pointed at, one screenshot at a time, before running
+D-224's gate — which is the reactive habit the gate exists to replace. Running it
+found four failures nobody had mentioned: Members was in neither the command palette
+nor the shortcut sheet (Q6); every error toast carried only a message, with no code
+or `request_id` to quote (Q17) — `ErrorSurface` had implemented D-032 for banners and
+the toast path had no equivalent, so one rule was honoured on one surface and
+silently dropped on the other; role changes and revocations succeeded in silence
+(Q14); and removal had no confirmation at all (Q15).
+
+It also **missed one**: `.rowbtn` was `opacity: 0` until hover, which is Q8 exactly,
+and I checked Q8 against the code panel's copy button and never against the row
+menu. The user found it by looking for a revoke option that was invisible.
+
+**Three structural defects surfaced, all pre-existing and all affecting the whole
+app** (D-431, D-432): the row `⋯` menu was invisible until hover *and* clipped to
+nothing by `.tablewrap { overflow: hidden }` when opened, so it was unusable in
+every table including the projects grid; and the exported `.sh-dialog`/`.sh-scrim`
+are only boxes, because a design board can draw a dialog but not a layer — so a
+confirm dialog rendered in flow, inside the table cell it was invoked from, and
+inherited that cell's `text-align: right` because `position: fixed` escapes flow
+but not inheritance.
+
+**Recorded gaps, not fixed:**
+
+- **Q15 deviation.** The gate asks a destructive action to be confirmed by typing
+  the name. That is calibrated for deleting a project, the one irreversible act;
+  removing a member is undone by re-inviting, and making someone type a colleague's
+  email teaches them to click past the confirmations that matter. Both destructive
+  actions here confirm in a dialog; neither requires typing.
+- **D-038's recovery window has no UI.** Soft-deleted projects are hidden from the
+  grid (a deliberate product decision), which removed the only surface for the
+  seven-day recovery. Restoring is CLI or support until it gets a home — org
+  settings, beside the danger zone that creates the state.
+- **`/accept-invite/[token]` is not built.** The page tells an inviter where the
+  invitee must go and that route does not exist yet, which is the one place this
+  surface currently promises something absent.
+
+**Verification.** Dashboard 92/92, typecheck 14/14, `next build` green. Driven live
+against a real org: invites created and revoked, the dialog's focus landing on
+Cancel rather than the destructive button, and the modal's alignment and centring
+measured rather than eyeballed.
+
 ### The rest of Phase 7 — not started, and what blocks it
 
 The scope is ~30 routes. What is missing is mostly **API, not UI**:
