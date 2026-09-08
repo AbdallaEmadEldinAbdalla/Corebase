@@ -40,7 +40,7 @@ findable by project ref or request id, and the "job stuck" alert has been watche
 firing.
 
 Since then, Phase 1 has put a platform around that spine. You can sign up, log in
-(scrypt, rate-limited, timing-equalised), hold a session or a `cbp_` personal access
+(scrypt, rate-limited, timing-equalised), hold a session or a `shp_` personal access
 token, create organizations, invite people to them, and hold one of three roles that
 actually decides what you can do — a member can create and pause projects but not
 delete them, an admin can do everything but delete the org or grant owner, and no
@@ -655,7 +655,7 @@ with a reason the operator sees and the client never does.
 Sessions are opaque ids in Redis under a SHA-256 of the key, with a 7-day idle and
 30-day absolute TTL, `HttpOnly`/`SameSite=Lax`, and CSRF enforced inside the
 principal resolver for mutating methods — not in a hook someone can forget to add.
-PATs are `cbp_`-prefixed, hashed at rest, and shown exactly once (D-060): the list
+PATs are `shp_`-prefixed, hashed at rest, and shown exactly once (D-060): the list
 endpoint cannot leak one even if it is wrong.
 
 `resolvePrincipal` tries session cookie, then PAT, then the static token — which
@@ -705,7 +705,7 @@ calling us.
 
 One bug worth keeping: both keys' `key_prefix` came out as `eyJhbGciOiJF` — the
 base64 of the JWT header, identical for every key ever minted, which made the column
-useless for the one job it has. It is now a label, `cbk_anon_<ref4>` (**D-218**).
+useless for the one job it has. It is now a label, `shk_anon_<ref4>` (**D-218**).
 
 ### P1f — CI · done · *exit criterion 3*
 
@@ -3892,6 +3892,45 @@ distinguish an S. The full record of what was cut and why is in
 [`design-exports/steadhold/README.md`](design-exports/steadhold/README.md); the
 rejected rounds are kept rather than deleted.
 
+### The credential prefixes · done · D-433, D-434
+
+The rename shipped in three passes, and the third one is the interesting failure.
+`CB_`/`cb-`/`cb_` went first; `cb:`/`cb.` were missed and swept second (D-422). Both
+sweeps required a **separator immediately after `cb`**, so every prefix with a
+letter there survived both — and those were the credentials:
+
+| was | is | breaking? | why |
+|---|---|---|---|
+| `cbp_` | `shp_` | **yes** | Gated on the prefix at `principal.ts:76` before any lookup, and again in `verify`. An existing token is rejected; its holder must re-mint. |
+| `cbi_` | `shi_` | no | Acceptance resolves `WHERE token_hash = $1` with no prefix gate, so an in-flight invite still works. Only new ones carry `shi_`. |
+| `cbk_` | `shk_` | no | Verification compares against the stored kid *value*. Existing keys keep verifying; rotation migrates them. |
+| `X-CB-Tag` | `X-SH-Tag` | no | Outbound mail header, no consumer. |
+| `CB-TENANT-INPUT` | `SH-TENANT-INPUT` | no | iptables chain; the rename now tears the old one down. |
+
+**The consequences were checked, not assumed** — and one of them was the opposite of
+what I had written down. I planned on in-flight invites breaking; they do not,
+because an invite's prefix is decoration while a PAT's is a routing gate. The
+difference is entirely whether anything branches on it.
+
+**Two latent bugs surfaced that the rename did not cause** (D-434). `principal.ts:76`
+decided whether a bearer token was a PAT by testing the literal `'cbp_'`, beside a
+`TOKEN_PREFIX` constant used to mint and to verify — a second authority, harmless
+only while the two strings happened to agree. Changing the constant alone would have
+minted tokens the router refused to recognise *as tokens*, presenting as every PAT
+silently 401ing with a perfectly valid credential. And the D-218 key label was built
+from the same template in `sagas.ts` and `key-rotation.ts`; it is now `keyLabel()`
+in `@steadhold/jwt`.
+
+**The guard is now a shape, not a list.** `cb` + up to six alphanumerics + a
+separator, which describes a prefix instead of enumerating the ones already found.
+It was proven both ways — it fires on all seven known shapes and on a planted
+`cbz_`, and stays quiet on `shp_`, `dbconn_`, `webcam.jpg`. The one legitimate
+reason to write the old name is code that exists to *remove* it, so those lines
+carry a `pre-rename` marker the guard skips; the marker has to be typed, which is
+the point.
+
+**Verification.** api 216/216 e2e, unit 428/428 across six packages, typecheck 14/14.
+
 ## 4i. The token layer, rebuilt
 
 Not a numbered plan step either. It sits before Phase 7 because a dashboard cannot
@@ -4070,14 +4109,57 @@ but not inheritance.
   grid (a deliberate product decision), which removed the only surface for the
   seven-day recovery. Restoring is CLI or support until it gets a home — org
   settings, beside the danger zone that creates the state.
-- **`/accept-invite/[token]` is not built.** The page tells an inviter where the
-  invitee must go and that route does not exist yet, which is the one place this
-  surface currently promises something absent.
+- ~~**`/accept-invite/[token]` is not built.**~~ It was the one place this surface
+  promised something absent. **Closed by P7c below.**
 
 **Verification.** Dashboard 92/92, typecheck 14/14, `next build` green. Driven live
 against a real org: invites created and revoked, the dialog's focus landing on
 Cancel rather than the destructive button, and the modal's alignment and centring
 measured rather than eyeballed.
+
+### P7c — accepting an invitation · done · D-435
+
+P7b ended by pointing invitees at a route that did not exist. This is that route,
+plus the two redirect paths that make it reachable.
+
+**It does not accept on load** (D-435). A link that joins an organization just by
+being opened removes the moment where someone notices they are signed in as the
+wrong account, and it lets anything that *fetches* the URL — a link preview, a mail
+gateway's scanner — join on their behalf. The page states what will happen, names
+the account it will happen to, and waits for a click.
+
+**The 404 is relayed, not interpreted.** The platform returns one indistinguishable
+404 for expired, revoked, already-used and addressed-to-someone-else, because
+separating them would make an invite token an oracle for org membership. Guessing
+on the client rebuilds that oracle in the browser, so the page adds exactly one
+thing: which account is signed in — a fact about the reader's own session, and the
+likeliest explanation.
+
+**Signed out is the common case here.** An invitee usually has no account at all, so
+`useMe`'s 401 sends them to `/login?next=<here>` and back. That path was broken in
+the direction most invitees take it: **signup ignored `next`** and redirected to
+`/`, stranding the invitation after the account was created. Both auth screens now
+preserve `next`, including the cross-links between them.
+
+Success routes on the org **slug**, waited for rather than derived — the accept
+response carries an `org_id`, and building a URL from the id would make a 404 the
+new member's first view of the organization they just joined.
+
+**An open redirect, found in P7c's own wiring** (D-436). Both auth screens gated
+`next` on `next.startsWith('/')`, and signup's comment claimed that kept the
+redirect on-site. It does not: `//evil.com` starts with a slash and resolves to
+`https://evil.com`, and `/\evil.com` does the same through a backslash. Both call
+sites leaked all five variants tried. It is now `safeNext` — one module, one test,
+proven to fail against the guard it replaced.
+
+The reason it was reachable is the interesting part, and it is not carelessness
+about the regex. Before P7c, `next` was a convenience whose value the app always
+wrote itself; the invitation flow turned it into a parameter a **stranger** supplies
+on a page an invitee opens from a link someone sent them. The parameter did not
+change, the threat model around it did, and nothing about the old guard looked new
+enough to re-read.
+
+**Verification.** Dashboard 101/101 (7 new), typecheck 14/14.
 
 ### The rest of Phase 7 — not started, and what blocks it
 
@@ -4259,6 +4341,39 @@ success returned 401, and the only tests that stayed green were the ones asserti
 that things are refused. The lesson is the failure *shape*: when a suite fails and
 its negative tests all pass, suspect the fixture before the product.
 
+**Widening who can supply a value re-opens every check on it.** `?next=` was a
+convenience for months: a session that expired mid-task came back to that task, and
+the app wrote the value itself every time. P7c pointed a *stranger's* link at
+`/login?next=…`, which made the same parameter attacker-supplied — and the guard on
+it, `startsWith('/')`, had never been good enough for that. Nothing about the guard
+changed or looked new, so nothing prompted a re-read; what changed was upstream of
+it. So when a flow starts handing an existing parameter to people outside the app,
+the work is not only the new flow — it is re-deriving every check that parameter
+already had, against the threat model it now sits in. (D-436.)
+
+**A guard written as a list of known cases will pass while matching nothing new.**
+The pre-rename check has now been widened twice, and both times because it encoded
+the shapes somebody had already thought of rather than the shape of the thing. The
+first sweep matched `CB_`/`cb-`/`cb_`; `cb:` and `cb.` survived it. The second added
+those two; `cbp_`, `cbi_` and `cbk_` survived *that* — all five patterns required a
+separator immediately after `cb`, so every prefix with a letter there was invisible
+to both, and those happened to be the credentials. Widening it to "cb, then up to
+six alphanumerics, then a separator" then found two more nobody had mentioned, in a
+mail header and an iptables chain. The rule is that a guard must describe the
+**category** it defends against, not enumerate its known members, and it must be
+proven in both directions — fired on every shape it should catch *and* on a planted
+violation, silent on the things that merely resemble one. A guard nobody has watched
+fail is a guard with no evidence behind it. (D-433, extending D-412 and D-422.)
+
+**Ask whether a prefix is a gate or a decoration before claiming a rename breaks
+things.** Renaming three credential prefixes, I wrote down that in-flight invites
+would stop working. They do not: invite acceptance resolves on `token_hash` alone
+with no prefix check, so the prefix is decoration there. The personal access token
+*is* gated on its prefix before any lookup happens, so those genuinely break. Same
+rename, same shape of string, opposite consequences — and the only thing that
+decides it is whether any code branches on the prefix. Stating a breaking change
+without tracing it is how a migration note ends up warning about the wrong half.
+
 **A guard covers every surface that can break the rule, not the surface where it
 was first broken.** The token guard was written after five `var(--sh-space-5)`
 references with no fallback collapsed five paddings to zero. It scanned the
@@ -4340,10 +4455,20 @@ commit and something unrelated riding along in it.
 
 ## 6. Decisions made while building (not from the plan)
 
-One hundred and thirty-three decisions came out of running the thing rather than planning it —
-D-184…D-210 from Milestone 0, D-211…D-227 from Phase 1, D-228…D-262 from Phase 2, and D-263…D-312 from Phase 3, and D-313…D-316 from Phase 4.
-Full text in the [decision log](docs/00-foundation/05-decision-log.md); the log holds
-D-001…D-316 and is binding when two documents disagree.
+The [decision log](docs/00-foundation/05-decision-log.md) holds **424 decisions**,
+numbered D-001…D-435 — D-041…D-049 and D-158…D-159 were never allocated. It is
+binding when two documents disagree, and it is the authority; this section is not.
+
+**The table below is a historical extract, not a current index.** It covers
+D-184…D-316 — Milestone 0 (D-184…D-210), Phase 1 (D-211…D-227), Phase 2
+(D-228…D-262), Phase 3 (D-263…D-312) and Phase 4 (D-313…D-316) — and it stopped
+being maintained there. Everything since is recorded in the log and summarised in
+§4's per-step entries, each of which names the decisions it made.
+
+Rather than backfill 119 rows that would restate the log and diverge from it again,
+the duplication is being retired: this is the same one-authority rule as D-434, and
+two copies of a list that agree today are a divergence waiting for the first edit.
+This one had already diverged, silently, for three phases.
 
 | ID | What changed | Why it surfaced |
 |---|---|---|
@@ -4381,7 +4506,7 @@ D-001…D-316 and is binding when two documents disagree.
 | D-215 | `audit_logs` is append-only by **trigger**, not by `REVOKE` alone | Applied the REVOKE, then tried the UPDATE: it succeeded. Privileges do not bind a table's owner |
 | D-216 | The API connects as `steadhold_app`, which owns nothing and cannot run DDL; `steadhold` owns the schema | Three claims in the corpus were untrue while one role did both jobs |
 | D-217 | A project name is unique **within its organization**; the `ref` is the global identity | A global check lets one tenant deny "api" to everyone, and says so in the 409 |
-| D-218 | `key_prefix` is a label (`cbk_anon_<ref4>`), not a literal prefix | Both keys displayed as `eyJhbGciOiJF` — the base64 of the JWT header, identical for every key ever minted |
+| D-218 | `key_prefix` is a label (`shk_anon_<ref4>`), not a literal prefix | Both keys displayed as `eyJhbGciOiJF` — the base64 of the JWT header, identical for every key ever minted |
 | D-219 | CORS is an explicit allowlist, empty by default, never a wildcard, always `Vary: Origin` | A localhost default ships to production the first time someone forgets the variable, because the service starts fine either way |
 | D-220 | The dashboard uses the exported design-system class library, not Tailwind + shadcn (narrows D-025's UI half) | The design system already exists as an implementation; a second component system for the same design guarantees drift |
 | D-221 | Create and resume progress is polled, not streamed (resolves OQ-043 for those flows) | Provisioning is ~2.5 s; a stream needs a connection-holding endpoint and a reconnect story to answer what two GETs answer |

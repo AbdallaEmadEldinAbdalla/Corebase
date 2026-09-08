@@ -22,7 +22,7 @@ All of it is visible: Prometheus scrapes both services, Grafana has a provisione
 
 The [retro](docs/14-roadmap/06-milestone-0-retro.md) reconciled the cost model with six measurements and its main output is a refusal: the RAM and density planning numbers did not move, even though the first data is 3× favourable, because every number was taken in the cheapest corner of the state space.
 
-**The platform surface (Phase 1).** You can sign up and log in — scrypt hashing, rate-limited per identifier and per address, with nothing distinguishing an unknown email from a wrong password including the response time — and hold either a session cookie or a `cbp_` personal access token. You can create organizations, invite people to them, and hold one of three roles that genuinely decides what you can do: a member creates and pauses projects but cannot delete them, an admin does everything except delete the org or grant owner, and no admin can strip an owner to take the org. Projects belong to organizations, so listing them shows *yours*.
+**The platform surface (Phase 1).** You can sign up and log in — scrypt hashing, rate-limited per identifier and per address, with nothing distinguishing an unknown email from a wrong password including the response time — and hold either a session cookie or a `shp_` personal access token. You can create organizations, invite people to them, and hold one of three roles that genuinely decides what you can do: a member creates and pauses projects but cannot delete them, an admin does everything except delete the org or grant owner, and no admin can strip an owner to take the org. Projects belong to organizations, so listing them shows *yours*.
 
 Every mutating call leaves a row in an append-only audit table — enforced by a trigger, because `REVOKE` does not bind a table's owner, and by an application role that owns nothing and cannot run DDL. A test enumerates every mutating route and fails if one is unaudited.
 
@@ -426,7 +426,7 @@ Staging is Docker Compose plus Docker-in-Docker standing in for a control node a
 | `infra/docker/pgbouncer` | The per-project pooler image: transaction mode, `auth_query` against a lookup that allowlists one role, every rule baked in |
 | `infra/docker/staging` | The local stand-in for staging, including Prometheus, Loki, Alloy and Grafana with the dashboard provisioned as code |
 | `packages/metrics` | A Prometheus registry — counters, gauges, histograms, with label sets declared up front so the cardinality budget is hard to break |
-| `apps/dashboard` | The dashboard shell: login, signup, org switcher, projects grid, create-project flow, project overview — Next.js App Router, TanStack Query, session cookies, no BFF |
+| `apps/dashboard` | The dashboard: login, signup, org switcher, projects grid, create-project flow, project overview, the paused/resuming experience, org members and invitations, and accepting an invitation — Next.js App Router, TanStack Query, session cookies, no BFF |
 | `demo/auth` | The Phase 4 demo: a plain HTML page that signs up, verifies from a real email, logs in and explains the JWT claims — the auth API's first browser client |
 | `.github/workflows` | CI in two lanes — a one-minute unit lane run against dead database ports, and an integration lane that stands up the whole Docker stack — plus the nightly crash, lifecycle and reboot drills |
 
