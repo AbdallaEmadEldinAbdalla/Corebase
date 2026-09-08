@@ -4160,6 +4160,14 @@ the entire dashboard shell, because `style={{}}` can write a custom property jus
 as easily as a rule can and nothing was looking there. Ask what *else* can express
 the mistake, and put the guard around that instead (D-414).
 
+**A failed job is not a failed thing.** The nightly latency drill went red with
+every number inside budget: 22,139 requests, zero failures, gateway overhead P99
+3.9 ms. What failed was k6 writing its summary file, and the harness reporting a
+missing summary as a failed measurement (D-426). Read what actually broke before
+believing the label on it — and the reverse of the same rule bit earlier the same
+day, when two shards failing on a CSS-only commit turned out to be a real
+production defect rather than the flake it looked like.
+
 **Vitest compiling a file is not the file typechecking.** Vitest transpiles per
 file and does not resolve types across modules, so a test that imports a type from
 a module which declares it locally without re-exporting runs green and fails

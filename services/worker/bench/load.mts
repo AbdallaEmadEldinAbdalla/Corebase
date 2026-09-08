@@ -261,6 +261,22 @@ async function k6(script: string, extraEnv: Record<string, string>): Promise<Sum
     'run', '--rm', '-i',
     ...(linux ? ['--network', 'host'] : ['--add-host', 'host.docker.internal:host-gateway']),
     '-v', `${OUT_DIR}:/out`,
+    /**
+     * Write as the user who owns `OUT_DIR`, on Linux only.
+     *
+     * `grafana/k6` runs as its own non-root uid, and the harness creates `OUT_DIR`
+     * as the invoking user, so on Linux the container cannot write into it:
+     * `--summary-export` fails with `could not open '/out/…'`, k6 still exits 0,
+     * and the harness then reports "produced no summary" for a run whose numbers
+     * were fine. Docker Desktop remaps bind-mount ownership to the local user, so
+     * this passes on every developer machine and fails only on CI — the same
+     * platform split D-227 records for a bind-mount source the daemon creates as
+     * root, arriving here through uid rather than through mkdir.
+     *
+     * Guarded to Linux because the macOS path already works and there is nothing
+     * to gain from changing it.
+     */
+    ...(linux ? ['--user', `${process.getuid!()}:${process.getgid!()}`] : []),
     ...Object.entries(extraEnv).flatMap(([k, v]) => ['-e', `${k}=${v}`]),
     '-e', `K6_SUMMARY_EXPORT=/out/${script}.summary.json`,
     'grafana/k6:latest', 'run', '--quiet', '--summary-export', `/out/${script}.summary.json`, '-',
