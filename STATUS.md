@@ -3974,6 +3974,24 @@ role distinction exists, the tests present each role.
 
 
 
+**A long-lived Docker-in-Docker node degrades, and a degraded one looks like a
+hung test.** `interlocks.e2e.test.ts` took **8 hours 8 minutes** and failed on a
+node that had been up nine hours across two full worker-lane runs — thousands of
+container create/destroy cycles. The same file on a freshly built stack passes in
+**62 seconds**. Its six tests cap at 600s each, so the arithmetic alone says the
+stall was below the test layer. Recycle the stack between full lane runs rather
+than trusting a long-lived one; CI gets this for free because every job builds its
+own, and it is only the local loop that accumulates.
+
+**The node's healthcheck was red for its entire existence, and it did not matter
+until it did** (**D-416**). It offered dind's *server* certificate as a client
+credential, which `x509` refuses on key usage, so `docker ps` has always said
+`unhealthy` while every T2 check passed — `staging.sh` probes from the host with
+the correct pair. A permanently red signal is worse than no signal: it is the one
+an operator learns to scroll past. While diagnosing the stall above I treated
+"unhealthy" as the cause and spent real effort on it before checking whether it had
+ever been green.
+
 **A test's fixture includes the environment it did not set.** §5 already said a
 test declares its fixture in every dimension; two files were still reading ambient
 configuration. `project-auth.e2e.test.ts` and `credentials-guard.test.ts` now delete
