@@ -32,7 +32,7 @@ export interface RateLimitOptions {
 }
 
 export function createRateLimiter(redis: Redis, opts: RateLimitOptions): RateLimiter {
-  const prefix = opts.prefix ?? 'cb:rl:';
+  const prefix = opts.prefix ?? 'sh:rl:';
   return {
     async hit(key) {
       const k = `${prefix}${key}`;

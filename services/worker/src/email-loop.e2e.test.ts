@@ -84,7 +84,7 @@ beforeEach(async () => {
   await pool.query('truncate email_sends, email_suppressions, projects cascade');
   // The caps are Redis counters, so a leftover count from the previous test is a
   // cap already spent — the single most confusing way for these tests to fail.
-  const keys = await redis.keys('cb:mail:*');
+  const keys = await redis.keys('sh:mail:*');
   if (keys.length) await redis.del(...keys);
   await queue.obliterate({ force: true }).catch(() => undefined);
   await purgeSink();
@@ -282,7 +282,7 @@ describe('P4d — the gate', () => {
     await m.enqueue(job);
     expect((await rows()).find((r) => r.status === 'rate_limited')).toBeTruthy();
 
-    const keys = await redis.keys('cb:mail:*:r:*');
+    const keys = await redis.keys('sh:mail:*:r:*');
     if (keys.length) await redis.del(...keys);          // the window reopening
     await m.enqueue(job);
     // `ON CONFLICT DO UPDATE`, not DO NOTHING: otherwise the developer's view

@@ -292,6 +292,25 @@ jobs:
       # one, this lane would silently never run it while the unit lane excludes it
       # by pattern. That is a test nobody runs and nobody misses, so it fails here
       # instead.
+      - name: nothing still carries the pre-rename prefix
+        # D-412 moved CB_/cb-/cb_ to SH_/sh-/sh_, and the sweep keyed on those
+        # three separators — so `cb:` and `cb.` were invisible to it and survived
+        # in the places that matter least to read and most at runtime: Redis key
+        # prefixes (`cb:session:`, `cb:rl:`, `cb:mail:`), browser storage keys
+        # (`cb.csrf`, `cb.lastOrg`) and a DOM event name. A rename is not finished
+        # when the identifiers match; it is finished when nothing matches the old
+        # thing at all, and that is a grep, not a judgement.
+        run: |
+          hits="$(git grep -nIE '\bcb[-_.:]' \
+            -- ':!STATUS.md' ':!docs/00-foundation/05-decision-log.md' \
+               ':!.github/workflows/ci.yml' || true)"
+          if [ -n "$hits" ]; then
+            echo "These still carry the pre-rename prefix (D-412):"
+            echo "$hits"
+            exit 1
+          fi
+          echo "✓ no pre-rename prefix outside the docs that describe the rename"
+
       - name: no package outside worker/api has infrastructure tests
         run: |
           stray="$(git ls-files '*.e2e.test.ts' \

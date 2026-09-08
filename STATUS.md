@@ -131,11 +131,11 @@ account has no organization and lands on `/no-org`; the org endpoint exists but 
 no screen yet, so make one with the API:
 
 ```bash
-curl -sS -c /tmp/cb.jar -X POST http://127.0.0.1:8099/v1/auth/login -H 'content-type: application/json' -d '{"email":"you@example.com","password":"your-password-here"}'
+curl -sS -c /tmp/sh.jar -X POST http://127.0.0.1:8099/v1/auth/login -H 'content-type: application/json' -d '{"email":"you@example.com","password":"your-password-here"}'
 ```
 
 ```bash
-curl -sS -b /tmp/cb.jar -X POST http://127.0.0.1:8099/v1/orgs -H 'content-type: application/json' -H "x-csrf-token: $CSRF" -d '{"name":"Greenbull","slug":"greenbull"}'
+curl -sS -b /tmp/sh.jar -X POST http://127.0.0.1:8099/v1/orgs -H 'content-type: application/json' -H "x-csrf-token: $CSRF" -d '{"name":"Greenbull","slug":"greenbull"}'
 ```
 
 `$CSRF` is the `csrf_token` from the login response. Reload the dashboard and the
@@ -4118,6 +4118,16 @@ find-and-replace cannot tell a mention of the old name apart from a statement
 places said that after the rename: D-407, §4h's own heading and the README. The
 rule is to sweep for self-referential text afterwards and repair it by hand, and to
 leave a provenance line on any document preserved as a historical artifact.
+
+**A verification written from the same assumption as the change cannot fail.**
+The rename swept `CB_`, `cb-` and `cb_` because the survey looked for those three,
+and then the post-rename check confirmed success using the same three patterns. It
+was clean, and it was clean about the wrong thing: `cb:` and `cb.` had never been
+considered, so Redis key prefixes (`cb:session:`, `cb:rl:`, `cb:mail:`) and the
+browser storage keys for CSRF and last-visited org survived untouched (D-422).
+Found weeks later by reading unrelated code. When a check and a change share an
+assumption, the check is a restatement — so the invariant now lives in CI as a
+grep for the *old* thing, which can only pass by the old thing being absent.
 
 **A rename also has to reach what `git grep` cannot see.** Gitignored generated
 state, the contents of built images, and workspace symlinks all carry the old name

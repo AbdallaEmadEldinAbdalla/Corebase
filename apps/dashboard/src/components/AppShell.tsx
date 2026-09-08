@@ -61,8 +61,8 @@ export function AppShell({ children, orgSlug, projectRef, nav }: {
   // sheet opens or two layers stack. An event is the smallest coupling that does
   // not push palette state up into every page.
   useEffect(() => {
-    window.addEventListener('cb:shortcuts', openShortcuts);
-    return () => window.removeEventListener('cb:shortcuts', openShortcuts);
+    window.addEventListener('sh:shortcuts', openShortcuts);
+    return () => window.removeEventListener('sh:shortcuts', openShortcuts);
   });
 
   return (
@@ -207,7 +207,7 @@ function AccountMenu() {
             </div>
           ) : null}
           <div className="sh-menu__sep" />
-          <MenuItem onSelect={() => { close(); window.dispatchEvent(new Event('cb:shortcuts')); }}>
+          <MenuItem onSelect={() => { close(); window.dispatchEvent(new Event('sh:shortcuts')); }}>
             Keyboard shortcuts <span className="palette__hint">?</span>
           </MenuItem>
           <ThemeItems />

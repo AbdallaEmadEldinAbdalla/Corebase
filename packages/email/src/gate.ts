@@ -93,7 +93,7 @@ export async function checkAndConsume(
 
   const { hour, day } = windows(a.now);
   const r = rcpt(a.recipient);
-  const p = `cb:mail:${a.projectId}`;
+  const p = `sh:mail:${a.projectId}`;
   const spent: string[] = [];
 
   const bump = async (key: string, ttl: number, limit: number, cap: keyof EmailCaps) => {

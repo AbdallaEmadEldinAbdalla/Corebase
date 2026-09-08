@@ -32,7 +32,7 @@ describe('sessions', () => {
     expect(s.id).toMatch(/^[A-Za-z0-9_-]{43}$/);
     // A Redis dump, a KEYS listing or a debug log then contains no usable cookie.
     expect([...data.keys()][0]).not.toContain(s.id);
-    expect([...data.keys()][0]).toMatch(/^cb:session:[0-9a-f]{64}$/);
+    expect([...data.keys()][0]).toMatch(/^sh:session:[0-9a-f]{64}$/);
   });
 
   it('resolves and slides the idle window', async () => {

@@ -60,7 +60,7 @@ export class ApiError extends Error {
  * which the create flow does on redirect — would lose it and every subsequent
  * mutation would 403.
  */
-const CSRF_STORAGE_KEY = 'cb.csrf';
+const CSRF_STORAGE_KEY = 'sh.csrf';
 
 export function setCsrfToken(token: string): void {
   try { window.sessionStorage.setItem(CSRF_STORAGE_KEY, token); } catch { /* private mode */ }

@@ -212,7 +212,7 @@ export function CommandPalette({ open, onClose, orgSlug, projectRef }: {
           onClose();
         } },
       { id: 'shortcuts', group: 'Actions', label: 'Keyboard shortcuts',
-        hint: '?', run: () => { onClose(); window.dispatchEvent(new Event('cb:shortcuts')); } },
+        hint: '?', run: () => { onClose(); window.dispatchEvent(new Event('sh:shortcuts')); } },
     );
 
     if (me.data?.user) {

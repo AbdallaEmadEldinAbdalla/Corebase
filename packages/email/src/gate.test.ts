@@ -77,12 +77,12 @@ describe('P4d — caps', () => {
     const redis = fakeRedis();
     const caps = { ...CAPS['free']!, perRecipientPerHour: 1 };
     await checkAndConsume(redis, args({ caps }));
-    const before = redis.keys.get('cb:mail:p1:h:' + new Date().toISOString().slice(0, 13));
+    const before = redis.keys.get('sh:mail:p1:h:' + new Date().toISOString().slice(0, 13));
     await checkAndConsume(redis, args({ caps }));
     // The refused attempt must not have consumed the project's hourly budget.
     // Increment-then-compare is what makes the check atomic against concurrent
     // enqueues; the rollback is what stops a refusal costing anything.
-    expect(redis.keys.get('cb:mail:p1:h:' + new Date().toISOString().slice(0, 13)))
+    expect(redis.keys.get('sh:mail:p1:h:' + new Date().toISOString().slice(0, 13)))
       .toBe(before);
   });
 

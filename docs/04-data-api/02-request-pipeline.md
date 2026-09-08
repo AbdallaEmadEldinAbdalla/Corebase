@@ -114,9 +114,9 @@ Two SLOs fall out: **origin processing ≤ 20 ms p50 / ≤ 100 ms p99** (what we
 
 | Cache | Location | Contents | Invalidation |
 |---|---|---|---|
-| Routing table | gateway process memory | `ref → {project_id, node_ip, ports, status, JWKS(kids), tier}` | Redis pub/sub `cb:routing` on any project mutation (provision, pause, resume, suspend, delete) + full refresh every 60 s (D-051, D-104) |
+| Routing table | gateway process memory | `ref → {project_id, node_ip, ports, status, JWKS(kids), tier}` | Redis pub/sub `sh:routing` on any project mutation (provision, pause, resume, suspend, delete) + full refresh every 60 s (D-051, D-104) |
 | Project JWKS (verify side) | inside routing entry | active public keys by `kid` | same channel, on key rotation ([api-keys-and-roles](03-api-keys-and-roles.md)) |
-| API-key revocation set | gateway process memory | SHA-256 hashes of revoked keys ([data model](../02-control-plane/01-data-model.md) `project_api_keys.revoked_at`) | Redis pub/sub `cb:keys` — **≤ 30 s propagation SLO** (D-104) |
+| API-key revocation set | gateway process memory | SHA-256 hashes of revoked keys ([data model](../02-control-plane/01-data-model.md) `project_api_keys.revoked_at`) | Redis pub/sub `sh:keys` — **≤ 30 s propagation SLO** (D-104) |
 | Rate-limit buckets | Redis | sliding-window counters | TTL expiry |
 | PostgREST schema cache | PostgREST process | catalog: tables, FKs, functions | `NOTIFY pgrst, 'reload schema'` event trigger on DDL (D-100) |
 | PostgREST JWKS file + config | container fs + process | signing keys, pool sizes | provisioner re-render + `NOTIFY pgrst, 'reload config'` / SIGUSR2 |

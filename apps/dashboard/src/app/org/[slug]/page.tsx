@@ -26,7 +26,7 @@ import { api, type Project } from '../../../lib/api.ts';
  * because that is the most common reason to come here at all.
  */
 type View = 'table' | 'cards';
-const VIEW_KEY = 'cb.projectsView';
+const VIEW_KEY = 'sh.projectsView';
 
 /** "an owner", "an admin", "a member". Testing the word beats listing exceptions. */
 const article = (word: string) => (/^[aeiou]/i.test(word) ? 'an' : 'a');

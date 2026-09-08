@@ -1191,7 +1191,7 @@ describe('P4c + P4d — a signup link that actually arrives', () => {
       const queueRedis = createRedis(process.env.SH_REDIS_URL ?? 'redis://127.0.0.1:56379');
       const queue = createAuthEmailQueue(queueRedis);
       await queue.obliterate({ force: true }).catch(() => undefined);
-      const stale = await redis.keys('cb:mail:*');
+      const stale = await redis.keys('sh:mail:*');
       if (stale.length) await redis.del(...stale);
       await fetch(`${MAILPIT}/api/v1/messages`, { method: 'DELETE' }).then((r) => r.text());
 

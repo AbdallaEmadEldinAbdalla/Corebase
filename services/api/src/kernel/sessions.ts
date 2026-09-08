@@ -23,7 +23,7 @@ export const CSRF_HEADER = 'x-csrf-token';
 export const IDLE_TTL_SECONDS = 7 * 24 * 60 * 60;
 export const ABSOLUTE_TTL_SECONDS = 30 * 24 * 60 * 60;
 
-const KEY_PREFIX = 'cb:session:';
+const KEY_PREFIX = 'sh:session:';
 const ID_BYTES = 32;
 
 export interface SessionRecord {
