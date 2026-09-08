@@ -8,5 +8,9 @@ export default defineConfig({
     // symptom is a test failing for a reason that has nothing to do with the code
     // it covers, which is worse than the lost wall-clock.
     fileParallelism: false,
+    // Refuses the run outright when a worker is already consuming the queues.
+    // See the file — the short version is that this guard existed for one suite
+    // and the problem then happened in a different one.
+    globalSetup: ['./vitest.global-setup.ts'],
   },
 });
