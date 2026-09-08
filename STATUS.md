@@ -4161,6 +4161,79 @@ enough to re-read.
 
 **Verification.** Dashboard 101/101 (7 new), typecheck 14/14.
 
+### P7d — project settings, and the pause that undid itself · done · D-437…D-441
+
+Pause had no UI anywhere. Resume had two affordances — the grid's inline button and
+D-131's auto-resume — so the platform could start a project by hand and could only
+stop one by waiting seven days for the idle sweeper. That asymmetry is why this
+came before the API-blocked screens.
+
+`/project/[ref]/settings` has three sections: **General** (name, ref, environment,
+created), **Availability** (pause), and a **Danger zone** gated on
+`can(role, 'project.delete')`. Reachable five ways — sidebar, `g s`, the command
+palette, the printed shortcut sheet, and the URL.
+
+**Pausing is deliberately not confirmed** (D-437). D-431's dialog is for
+destructive actions, and its value is entirely in what it comes to mean; a dialog
+in front of a reversible action teaches people to click through the ones that
+matter. Deleting takes the dialog *and* takes gate question 15 literally — the
+project's name must be typed. `ConfirmDialog` gained `requireText`, which its own
+doc comment had been describing for a while as though it existed.
+
+**Three refusals are printed on the page rather than hidden.** Renaming (no
+`PATCH /v1/projects/:ref`), self-serve restore (nothing flips `soft_deleted` back —
+`/restore` is PITR-to-a-new-project), and the length of the recovery window, which
+is `SH_SOFT_DELETE_WINDOW` and therefore not the UI's to assert. The toast prints
+`restorable_until` from the response instead: a date, not a promise.
+
+#### What verification found that the gate did not
+
+Four defects, each invisible to a static read of the diff:
+
+- **The pause button undid itself** (D-438). `pause_project` succeeded at 11:34:15
+  and `resume_project` at 11:34:56, with nobody asking: auto-resume could not tell
+  *arriving* at a paused project from watching one become paused. The job history
+  was the only place it was visible. Fixed in the pure machine with `sawReady`, and
+  it changed an existing expectation, which is recorded in the test with its
+  reason.
+- **The paused banner named a cause it cannot know** — "paused after 7 days of
+  inactivity", now false for anyone who presses Pause. The control plane stores
+  `paused_at` and no reason. Reworded, and given the Resume button that previously
+  existed only as a side effect of navigating.
+- **`Esc` dropped focus to `<body>`** (D-439). `useReturnFocus` requires the caller
+  to capture at the opening click; this page was the first new caller after that
+  rule was written and forgot. The dialog now does it itself.
+- **`.card__foot` is a flex row with a 12px gap**, so an inline `<strong>` in it
+  became its own flex item and the sentence rendered "is  paused  ." with the
+  period adrift. Every foot before this one was a bare string, which is why the
+  trap had never shown.
+
+And one found by looking at the *other* theme: the reference row used `.sh-code`,
+which is the code **block** container — dark ink background in both themes with its
+own `pre` colour. On an inline element the text inherited the page colour, so it was
+invisible in dark and a solid black bar in light. `.facts__v code` already existed
+for this.
+
+#### Icons (D-441)
+
+`keys` was filled, and a filled key head has no counter — the feature that makes a
+key a key was solid, so it was a lollipop. `settings` took three attempts: radial
+spokes around a small hub rendered a sun, shortening them onto a dominant ring
+rendered a ship's wheel, and the answer was teeth that are part of the *outline*.
+`usage` was added ahead of its page. All judged as rasters at 16/20/24/72 and then
+in the real sidebar; reading the path data would have caught none of it.
+
+**Verification.** Dashboard 110/110 (7 new on the resume machine), typecheck 14/14,
+`next build` green. Driven live against a provisioned project: typed confirmation
+gating partial and wrong-case input, `Esc` returning focus to the exact trigger,
+pause held for 60 s with no resume job, both themes, and the banner's geometry
+measured (`x=256`, matching the page's content edge; 24 px below the header) rather
+than eyeballed.
+
+**Gaps.** Q11 asks for exactly one primary action and this page has none — every
+action is either secondary or destructive, and promoting Pause would be wrong. The
+seven-day recovery still has no self-serve restore (D-038), which is an API gap.
+
 ### The rest of Phase 7 — not started, and what blocks it
 
 The scope is ~30 routes. What is missing is mostly **API, not UI**:
@@ -4170,12 +4243,17 @@ The scope is ~30 routes. What is missing is mostly **API, not UI**:
 | Table editor, SQL editor | No query/DDL execution endpoint exists |
 | Auth users, storage browser | Data-plane only (`/auth/v1/admin/*`, `/storage/v1/*`), which needs a `service_role` key — and a session-cookie dashboard (D-062) must never hold one in the browser. Needs a control-plane proxy, which is an architectural decision, not a screen |
 | Logs, metrics, backups list, audit | No endpoints |
-| Org members, settings, account, invites | **API exists** — these are the genuinely UI-only steps |
+| **Usage per project** | The *data* exists — `project_databases.disk_used_bytes`, `disk_limit_mb`, `disk_state`, `disk_checked_at`, plus `backup_runs.size_bytes` — but `serializeProject` exposes none of it, so this needs a control-plane field before it can be a page. CPU, RAM, connections and request rate have no source at all. |
+| Org settings, account | **API exists** (`PATCH`/`DELETE /v1/orgs/:id`, and `/v1/auth/tokens` for personal access tokens, which have no UI at all) — the genuinely UI-only steps left |
+| ~~Project settings~~ | **Built — P7d.** Pause/resume and the danger zone; renaming still blocked on a missing route |
 
-`D-130` specifies Tailwind + shadcn/ui and the dashboard has neither, using the
-hand-written token layer instead. That divergence predates this phase and is still
-unrecorded, which CLAUDE.md calls a doc bug; it needs a decision either way before
-the screens are built on it.
+~~`D-130` specifies Tailwind + shadcn/ui and the divergence is unrecorded.~~ **This
+was wrong, and the error was in this file.** D-025 chose Tailwind + shadcn; **D-220
+already overturned the UI half of it** in favour of the exported token layer, with
+its own "revisit when" trigger — the table and SQL editors, if a component needs
+focus management worth a library. D-130 is about the *architecture* (pure frontend,
+TanStack Query, no BFF), which the dashboard follows exactly. Nothing was
+undecided, and nothing was blocked on deciding it.
 
 **Exit criterion 1 — "the first-five-minutes flow completable without docs,
 hallway-tested on ≥3 people, timed <5 min" — cannot be self-certified and will be
@@ -4340,6 +4418,43 @@ recipe — which is a recipe for running the *services* — turned 78 passing te
 success returned 401, and the only tests that stayed green were the ones asserting
 that things are refused. The lesson is the failure *shape*: when a suite fails and
 its negative tests all pass, suspect the fixture before the product.
+
+**Adding a way to cause a state re-opens every rule that reacts to it.** Auto-resume
+had one job — a paused project you navigate to gets started — and it read that state
+off `status === 'paused'`, which was sufficient for as long as the only thing that
+could pause a project was a seven-day idle sweeper that cannot fire while a page is
+open polling. The settings page added a *person* who can cause `paused`, and the
+same rule then undid their action 41 seconds later, silently, with the job history
+the only evidence. The banner beside it had the same shape of bug: it named a cause
+("after 7 days of inactivity") that had been the only possible cause and was now
+one of two. Neither line of code changed or looked wrong; what changed was who
+could produce their input. (D-438.)
+
+**A rule that every call site must remember decays at the first call site that
+forgets — and that was me, on the first one.** `useReturnFocus` documents exactly
+why the capture must happen at the opening click, and the members page does it. The
+settings page, written after the rule and after reading the comment, did not, and
+`Esc` dropped a keyboard user to the top of the page. The fix was not to remember
+harder; it was to move the capture inside the component so omission is impossible.
+The same reasoning produced the worker suite's `globalSetup`: a guard that lived in
+the one file where the problem had been noticed, while eight files could hit it.
+(D-439, D-440.)
+
+**A shared container's layout applies to the prose you put in it.** `.card__foot`
+is a flex row with a 12px gap, for aligning an action to the right. Every existing
+foot held a bare string, so nothing revealed that inline markup becomes separate
+flex items — until a `<strong>` in one rendered the sentence with the period adrift
+by 12px. Measured, not guessed: `getComputedStyle(strong).display` came back
+`block`, which is a flex item, not a typo. Prose going into a flex container needs
+one wrapper. (D-437.)
+
+**Look at the other theme, and look at rasters at their real size.** Two defects in
+this step were visible in exactly one view. `.sh-code` on an inline element is
+invisible in dark, because its background matches the page, and a solid black bar in
+light. And the icon set's failures — a filled key with no counter, a cog that was
+first a sun and then a ship's wheel — could not be read out of the path data at any
+size; they needed candidates rendered side by side at 16px and then checked in the
+real sidebar. (D-441.)
 
 **Widening who can supply a value re-opens every check on it.** `?next=` was a
 convenience for months: a session that expired mid-task came back to that task, and
