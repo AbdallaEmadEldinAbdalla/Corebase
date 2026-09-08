@@ -4214,7 +4214,7 @@ own `pre` colour. On an inline element the text inherited the page colour, so it
 invisible in dark and a solid black bar in light. `.facts__v code` already existed
 for this.
 
-#### Icons (D-441)
+#### Icons (D-441, ~~hand-drawn~~ → **superseded by D-444**)
 
 `keys` was filled, and a filled key head has no counter — the feature that makes a
 key a key was solid, so it was a lollipop. `settings` took three attempts: radial
@@ -4222,6 +4222,10 @@ spokes around a small hub rendered a sun, shortening them onto a dominant ring
 rendered a ship's wheel, and the answer was teeth that are part of the *outline*.
 `usage` was added ahead of its page. All judged as rasters at 16/20/24/72 and then
 in the real sidebar; reading the path data would have caught none of it.
+
+**And then the hand-drawn set was abandoned — see P7f below.** The `usage` entry
+was spliced away by a later edit to its neighbour, the sidebar rendered a fallback
+square, and it shipped.
 
 **Verification.** Dashboard 110/110 (7 new on the resume machine), typecheck 14/14,
 `next build` green. Driven live against a provisioned project: typed confirmation
@@ -4287,6 +4291,35 @@ seconds before, which is how the defaulted-state bug surfaced. Both themes.
 
 **Gaps.** Q11 — no primary action, as on the settings page: this is a read-only
 surface and there is nothing to promote.
+
+### P7f — the icons are Lucide, and the map is the type · done · D-444
+
+Reported from a screenshot: the Usage row was a filled rounded square. That is
+`SectionIcon`'s fallback for a name it cannot resolve, and `usage` had been
+**deleted** — an earlier edit replaced the `settings` entry by splicing an
+index range, and `usage` sat inside it. A 10px accent square looks enough like a
+deliberate bullet that it passed through several of my own screenshots and a
+commit.
+
+The hand-drawn set is gone. Lucide is on the same 24-unit grid at the same 2px
+stroke it was imitating, is ISC-licensed, and tree-shakes per icon — the bundle
+did not grow (102 kB shared, unchanged). It also fixed `connect`, which had been a
+tuning fork and is now a cable. The **logo is untouched** and stays generated from
+`build-identity.py`: a sidebar glyph is not brand.
+
+**The fix that matters is the type, not the artwork.** `NavItem.icon` was `string`,
+which is exactly why `icon="usage"` kept compiling against a map that no longer
+contained it. It is now `SectionName = keyof typeof ICONS`, and required. Proven by
+deleting `usage` a second time on purpose and watching
+`layout.tsx(45,83): error TS2322` name the call site.
+
+`.sh-nav-item__icon` is now dead CSS. It is left in place because `components.css`
+is generated from the Pencil boards and the board still defines it; deleting it by
+hand would diverge the export from its source (D-418).
+
+**Verification.** Dashboard 124/124, typecheck 14/14, `next build` green, and all
+seven rows read back from the DOM as real 16×16 SVGs at stroke 2 with no fallback
+square — five in the project sidebar, two at org level.
 
 ### The rest of Phase 7 — not started, and what blocks it
 
@@ -4472,6 +4505,22 @@ recipe — which is a recipe for running the *services* — turned 78 passing te
 success returned 401, and the only tests that stayed green were the ones asserting
 that things are refused. The lesson is the failure *shape*: when a suite fails and
 its negative tests all pass, suspect the fixture before the product.
+
+**A fallback that looks like a design element hides the thing it stands in for.**
+`SectionIcon` answered an unknown name with a 10px rounded square in the accent
+colour, which is indistinguishable from a deliberate bullet — so when an edit
+deleted the `usage` icon, the sidebar did not look broken, it looked designed. It
+passed several of my own screenshots and a commit, and a user caught it in one
+glance. A placeholder for a missing asset has to be *visibly* missing, or the
+absence has to be impossible: the fix here was the second, making the icon map the
+type so a missing entry cannot compile. (D-444.)
+
+**A splice by index range can take its neighbour with it.** The edit that replaced
+the `settings` icon selected from a comment to the end of an entry and rewrote the
+span — and the `usage` entry had been inserted inside that span. Nothing failed:
+the file stayed valid, it typechecked, the tests passed, and the app rendered a
+square. When an edit is defined as "everything between here and there", what is
+between here and there has to be *read*, not assumed. (D-444.)
 
 **A `NOT NULL DEFAULT` is not an observation.** `disk_state` defaults to `'ok'`, so
 the usage page reported a brand-new project's disk state as *ok* while the line
