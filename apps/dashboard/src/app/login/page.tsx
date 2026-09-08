@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { api, setCsrfToken, ApiError } from '../../lib/api.ts';
+import { safeNext } from '../../lib/next-path.ts';
 import { ErrorSurface } from '../../components/ErrorSurface.tsx';
 import { Logo } from '../../components/Logo.tsx';
 import { ThemeToggle } from '../../components/ThemeToggle.tsx';
@@ -54,7 +55,7 @@ function LoginForm() {
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
 
-  const next = params.get('next');
+  const next = safeNext(params.get('next'));
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -68,7 +69,7 @@ function LoginForm() {
       // Drop anything cached for the previous principal. Without this, a second
       // account on the same browser sees the first one's orgs for 30 seconds.
       qc.clear();
-      router.replace(next && next.startsWith('/') ? next : '/');
+      router.replace(next ?? '/');
     } catch (err) {
       setError(err);
     } finally {
@@ -115,7 +116,12 @@ function LoginForm() {
         </form>
 
         <div className="auth__foot">
-          No account? <Link href="/signup">Create one</Link>
+          No account?{' '}
+          {/* `next` travels with the link. Without it an invitee who needs an
+              account loses the invitation they arrived with. */}
+          <Link href={next ? `/signup?next=${encodeURIComponent(next)}` : '/signup'}>
+            Create one
+          </Link>
           {/* Password reset needs the Phase-4 email sender. Absent rather than a
               dead link, which is worse than not offering it at all. */}
         </div>

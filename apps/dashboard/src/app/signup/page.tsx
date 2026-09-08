@@ -1,10 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { api, setCsrfToken, ApiError } from '../../lib/api.ts';
+import { safeNext } from '../../lib/next-path.ts';
 import { ErrorSurface, FieldError } from '../../components/ErrorSurface.tsx';
 import { Logo } from '../../components/Logo.tsx';
 import { ThemeToggle } from '../../components/ThemeToggle.tsx';
@@ -13,9 +14,43 @@ import { ThemeToggle } from '../../components/ThemeToggle.tsx';
  *  learns the rule while typing, and on the server because this check is advice. */
 const MIN_PASSWORD = 12;
 
+/**
+ * Same Suspense split as the login page, and for the same reason: reading
+ * `?next=` opts the route out of static prerendering unless the read sits under a
+ * boundary.
+ *
+ * Signup needed `next` at all because of the invitation flow. An invitee arrives
+ * at `/accept-invite/<token>`, is bounced to `/login?next=…`, and the one thing
+ * they almost certainly need is the "Create one" link — which used to drop `next`
+ * and send them to `/` after signing up, stranding the invitation they came for.
+ */
 export default function SignupPage() {
+  return (
+    <Suspense fallback={<SignupSkeleton />}>
+      <SignupForm />
+    </Suspense>
+  );
+}
+
+function SignupSkeleton() {
+  return (
+    <div className="auth">
+      <div className="auth__panel" aria-busy="true">
+        <div className="sh-skeleton" style={{ width: 140, height: 24 }} />
+        <div className="sh-skeleton" style={{ width: '100%', height: 40, marginTop: 24 }} />
+        <div className="sh-skeleton" style={{ width: '100%', height: 40, marginTop: 16 }} />
+        <div className="sh-skeleton" style={{ width: '100%', height: 40, marginTop: 16 }} />
+      </div>
+    </div>
+  );
+}
+
+function SignupForm() {
   const router = useRouter();
+  const params = useSearchParams();
   const qc = useQueryClient();
+  /** Only in-app paths — see `safeNext`, which a leading-slash test is not. */
+  const next = safeNext(params.get('next'));
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -36,8 +71,9 @@ export default function SignupPage() {
       qc.clear();
       // Signup signs you in — the account was just proven to belong to whoever
       // holds the password, so a login form here would be friction with no
-      // security value. There is no org yet, so the entry point routes.
-      router.replace('/');
+      // security value. `next` takes precedence over the entry point: someone who
+      // arrived from an invitation wants the invitation, not the org router.
+      router.replace(next ?? '/');
     } catch (err) {
       setError(err);
     } finally {
@@ -92,7 +128,10 @@ export default function SignupPage() {
         </form>
 
         <div className="auth__foot">
-          Already have an account? <Link href="/login">Sign in</Link>
+          Already have an account?{' '}
+          <Link href={next ? `/login?next=${encodeURIComponent(next)}` : '/login'}>
+            Sign in
+          </Link>
         </div>
       </div>
     </div>
