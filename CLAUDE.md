@@ -29,8 +29,24 @@ built, how to run it, and what is deliberately not built yet.
 
 ## UI work
 
-**Every dashboard change runs the `ux-review` skill before it is committed**
-(**D-224**). The standard is
+**Run the `ux-review` skill BEFORE writing dashboard UI code, and again before
+committing it** (**D-224**, tightened — see D-445).
+
+"Before it is committed" was the original wording and it was read as "at the end".
+That produced three consecutive broken attempts at one members table, each one a
+reaction to the last screenshot rather than to the standard — which, read first,
+already answered the question (§4: "tables for comparison, cards for identity",
+and "where both are defensible, offer both and remember the choice"). The gate is
+cheap and the standard is short. Read it first.
+
+Two corollaries, both learned the hard way:
+
+- **Measure a reported visual defect in the browser before changing anything.**
+  Three guesses at a squeezed table cost more than one `getBoundingClientRect`.
+- **If the user states a UI preference twice, implement it.** Arguing the standard
+  at someone who has already told you what they want is not a review.
+
+The standard is
 [docs/09-dashboard/05-ux-standards.md](docs/09-dashboard/05-ux-standards.md); its
 §8 is a 20-question gate, and a "no" is either fixed or recorded in STATUS.md as a
 gap with its reason.

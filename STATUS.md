@@ -4321,6 +4321,140 @@ hand would diverge the export from its source (D-418).
 seven rows read back from the DOM as real 16×16 SVGs at stroke 2 with no fallback
 square — five in the project sidebar, two at org level.
 
+### P7g — organization settings · done · D-446
+
+`/org/[slug]/settings`: **General** (editable name, permanent slug, created, member
+and project counts) and a **Danger zone** for owners only. Reachable five ways —
+sidebar, `g s`, the palette, the shortcut sheet, the URL. `g s` is now contextual,
+the way `g p` and `g m` already were: the project's settings inside a project, the
+org's outside one.
+
+The slug is shown as a permanent fact because it is one — the API renames the name
+and has no route for the slug, and the slug is in every URL anyone has bookmarked.
+
+**Deleting an org is the only delete with no recovery window**, and the page says
+so where a user will otherwise assume the opposite: a project gets seven days
+(D-038), an organization is `DELETE FROM organizations`. The audit trail is the only
+survivor, which was verified by deleting one and reading `org.deleted` back
+afterwards. The name must be typed.
+
+**The 409 is prevented rather than relayed.** The API refuses while the org holds
+projects, with the predicate `status <> 'deleted'` — so a project inside its own
+recovery window still counts while the projects list hides it (D-430). Left
+unstated, the sequence is: delete everything, see an empty list, be told the org
+"still has 1 project(s)". The count shown is `project_count`, computed with that
+same predicate, and the blocked button links to the projects list rather than being
+a dead end.
+
+Renaming offers **Undo**, and toasts carrying an action now dwell 10s instead of 4 —
+the first version's Undo expired before it could be clicked, which is not an undo.
+
+**Verification.** Driven live against two orgs, one empty and one holding a project:
+Save disabled until dirty, Cancel appearing when dirty, the rename updating the
+breadcrumb *and* the nav label (which is why it invalidates `orgs` and `me`), Undo
+reverting both, the typed confirmation gating partial and wrong-case input, and the
+delete landing on the *other* org because it routes to `/` rather than guessing.
+Dashboard 131/131, typecheck 14/14.
+
+### P7h — both lists default to cards · done · D-447, D-448
+
+Reported by the user: the tables squeeze their content. I then made **three** failed
+attempts at the members table before reading §4 — the name span squeezed to 43px
+because it had `flex-shrink: 1` beside an unbreakable email; the joined date folding
+under the status dot; and then `white-space: nowrap` on every cell, which made the
+table wider than a `.tablewrap` that D-432 forbids clipping. The user asked for
+cards twice, and then asked whether the review skill was being used at all. It was
+not. That is now a standing role (D-445, and CLAUDE.md's UI section).
+
+§4 had already answered it: "tables for comparison, cards for identity", then
+"where both are defensible, offer both and remember the choice". The projects page
+**already had that toggle** and defaulted to the table. So the default changed, not
+the option — a person on a narrow window cannot fix a squeezed table by picking a
+view.
+
+`PersonActions` was extracted from `PersonRow` so both views share the capability
+flags, the `⋯` menu, the invitation's single button and both confirm dialogs. The
+project card gained Resume and the row menu, which it had never had — a card default
+without them would have left pausing and deleting reachable only by switching views.
+
+The gate then caught two things on the result: the card footer had an accent `Open`
+link *and* an accent Resume button (two primary actions in one card — the title is
+now the link), and each view drew the same skeleton.
+
+**And then the members table went entirely** (D-449). The user reported it still
+squeezing, asked for a shrinking header or inner horizontal scroll, and said to
+remove it if neither was possible. Neither was: `.tablewrap` may not clip (D-432 —
+the row menu is absolutely positioned, and a clipping ancestor erases it), so inner
+scroll is unavailable. `PersonRow` and the toggle are gone; `PersonActions` stays,
+which is what extracting it was for — the rules did not move when the presentation
+did. The projects list keeps its toggle, because five genuinely comparable columns
+are what §4 wants a table for.
+
+The card's breakpoint is a **container** query, not a viewport one — the third bug
+in the same place. The card sits in a column that is the window minus a 232px
+sidebar minus padding, so at an 800px window that column is ~485px and a
+`@media (max-width: 720px)` rule never fires while the card is visibly out of room.
+
+The whole project card is now the target, via a stretched link: the title stays a
+real `<a>` and its `::after` covers the card. An `onClick` on the div would have been
+shorter and would have given up ⌘-click, middle-click and keyboard activation, all
+of which the table row keeps because its name is an anchor too.
+
+#### A comment that shipped as a project's name (D-448)
+
+Also fixed here, and it is worth its own paragraph. Two `//` lines inside a `<td>`
+had been legal comments inside `{deleted ? p.name : ( … )}`; a P7b edit removed the
+conditional, and losing the `(` and `)` turned them into a JSX **text node**. The
+table rendered the comment as the project's name.
+
+Nothing caught it: it typechecked, because a text node is valid JSX; 126 tests
+passed; `next build` was clean. It survived two steps because every screenshot of
+that table was of its **empty** state — no row rendered until a real project
+existed. `src/jsx-comments.test.ts` now flags a `//` whose preceding line is an
+opening tag, proven against the code that shipped, and its first, wider version
+caught a legitimate comment in `layout.tsx`, which narrowed it rather than earning
+an exclusion.
+
+### P7i — the sidebar collapses to a rail · done · D-450, D-451
+
+232px out of a ~1000px window is a quarter of the screen spent on seven words, and
+the content column pays for it — which is where the members list ran out of room in
+the first place. Tablet widths (≤1024px) now start collapsed at 56px, icons only,
+and any width can be toggled.
+
+The stored value is **tri-state** — `expanded`, `collapsed`, absent — because a
+boolean cannot say "no opinion yet": with one, either the tablet default overrides
+someone who explicitly expanded it, or a first visit gets a default nobody chose.
+Only absent defers to the viewport, and it keeps deferring on resize.
+
+Reachable three ways as §2 demands: a full-width nav row in the sidebar's own
+footer, the `[` key, and the palette. Labels stay in the DOM and are clipped rather
+than swapped for `title` attributes — a `title` is pointer-only and §2 forbids
+pointer-only affordances, so a screen reader still reads "Projects" at 56px.
+
+**Four bugs, each now a rule** (D-450). The nav label was a bare text node, which
+CSS cannot select, so the first rail rendered "Project", "Member", "Setting" clipped
+against the edge. The toggle carried `sh-btn` alone — the *primary* style — putting a
+filled accent square in the chrome next to a page whose accent belongs to "New
+project". `margin-top: auto` on both the footer and the toggle row made the two
+**split** the free space, leaving "Shortcuts" floating mid-panel. And the toggle
+wrote to `localStorage` inside a state updater, which React's StrictMode
+double-invokes on purpose; it stored the wrong value and the sidebar refused to
+expand.
+
+**`pnpm build` now refuses while a dev server is listening** (D-451). `next build`
+and `next dev` share `.next`, and building while the other runs corrupts it — the
+symptom being the *running app* failing afterwards with a missing chunk module,
+which reads as an application bug. It happened three times in this project, twice
+after being written down, and the third time in the same session as the second.
+A 700ms connect attempt on `PORT` is cheaper than remembering.
+
+**Verification.** Measured rather than eyeballed at each step: 925px viewport
+defaulting to a 56px rail with the accessible name of each row still "Projects";
+the toggle 39px in the rail and 215px expanded, matching the nav rows exactly;
+"Shortcuts" directly above it at the bottom in both states. Dashboard 131/131,
+typecheck 14/14.
+
 ### The rest of Phase 7 — not started, and what blocks it
 
 The scope is ~30 routes. What is missing is mostly **API, not UI**:
@@ -4331,7 +4465,8 @@ The scope is ~30 routes. What is missing is mostly **API, not UI**:
 | Auth users, storage browser | Data-plane only (`/auth/v1/admin/*`, `/storage/v1/*`), which needs a `service_role` key — and a session-cookie dashboard (D-062) must never hold one in the browser. Needs a control-plane proxy, which is an architectural decision, not a screen |
 | Logs, metrics, backups list, audit | No endpoints |
 | ~~Usage per project~~ | **Built — P7e**, endpoint and page. Object-storage bytes remain out: `storage-sweep` computes the authoritative figure and does not record it centrally, which is the worker change that would let the route serve it. CPU, connections and request rate have no source at all. |
-| Org settings, account | **API exists** (`PATCH`/`DELETE /v1/orgs/:id`, and `/v1/auth/tokens` for personal access tokens, which have no UI at all) — the genuinely UI-only steps left |
+| ~~Org settings~~ | **Built — P7g.** Rename and the danger zone; the slug is permanent because no route changes it |
+| Account, and personal access tokens | **API exists** — `/v1/auth/tokens` is complete and has no UI at all, which makes it the CLI's credential surface with no way to manage it. `/account`'s other three sections are blocked: no route updates a display name, changes a password, or lists sessions |
 | ~~Project settings~~ | **Built — P7d.** Pause/resume and the danger zone; renaming still blocked on a missing route |
 
 ~~`D-130` specifies Tailwind + shadcn/ui and the divergence is unrecorded.~~ **This
@@ -4521,6 +4656,41 @@ span — and the `usage` entry had been inserted inside that span. Nothing faile
 the file stayed valid, it typechecked, the tests passed, and the app rendered a
 square. When an edit is defined as "everything between here and there", what is
 between here and there has to be *read*, not assumed. (D-444.)
+
+**A breakpoint on the viewport is not a breakpoint on the space a thing has.** The
+members card sits in a column that is the window minus a 232px sidebar minus
+padding — at an 800px window, ~485px. A `@media (max-width: 720px)` rule therefore
+never fired while the card was visibly out of room, and that was the *third*
+consecutive failure in the same place. A component that has to react to its own
+width needs a container query, and the way to tell the difference is to measure the
+container rather than read the window. (D-449.)
+
+**A side effect inside a state updater is a bug React will find for you.** The
+sidebar toggle wrote to `localStorage` inside `setCollapsed(was => …)`. StrictMode
+double-invokes updaters precisely to surface impurity, so the write happened twice
+and stored the wrong value — the panel refused to expand while the click was
+plainly registering. The updater computes; the caller writes. (D-450.)
+
+**Two elements with `margin-top: auto` split the space between them.** They do not
+both go to the bottom. The sidebar footer and the collapse row each claimed it, and
+"Shortcuts" ended up floating in the middle of the panel. Exactly one element may
+own the free space, and which one depends on what is rendered — so the rule moves
+with the condition, not onto both. (D-450.)
+
+**Read the standard before writing the UI, not before committing it.** D-224 said
+"before it is committed" and it was read as "at the end", so a reported visual
+defect got three fixes written straight off screenshots — each cheap, each wrong,
+each a reaction to the previous screenshot rather than to the rule. §4 answered the
+question in two sentences, and the toggle it prescribes was already in the code,
+defaulted to the wrong side. Two corollaries, at the same cost: measure a reported
+visual defect in the browser before touching anything, and if the user says what
+they want twice, build it — arguing a standard at them is not a review. (D-445.)
+
+**An empty state is not a test of a row.** The comment leak that rendered as a
+project's name survived two steps and a commit because every screenshot taken of
+that table was of the *empty* state: no row existed to render it wrong. A list has
+two shapes and only one of them exercises the row template, so a list verified with
+nothing in it is a list not verified at all. (D-448.)
 
 **A `NOT NULL DEFAULT` is not an observation.** `disk_state` defaults to `'ok'`, so
 the usage page reported a brand-new project's disk state as *ok* while the line
@@ -4865,6 +5035,24 @@ PostgREST. Neither licenses raising the planned density (D-091's 150 projects/no
 
 ## 8. What is not built yet
 
+
+### Known defects, not yet fixed
+
+- **A killed pgbackrest leaves a lock that permanently wedges provisioning.** A
+  `provision_project` observed dead-lettering five times on
+  `unable to acquire lock on file '/tmp/pgbackrest/main-archive-1.lock': Resource
+  temporarily unavailable`. The cause was a worker killed mid-`stanza-create`
+  (repeatedly, during this session's testing), which leaves the lock file behind;
+  every retry then fails identically, so the saga can never succeed. It is a real
+  robustness gap and not only a test artefact: any worker crash during a pgbackrest
+  step wedges that project's provisioning for good. The fix is for the pgbackrest
+  steps to clear a stale lock when no pgbackrest process is alive, which is a
+  worker change with its own crash-injected test — D-452 makes the *state* honest
+  (the project now says `failed`) without making it recoverable.
+- **A failed project cannot be retried from the UI.** Requested, and it needs a
+  control-plane route first: something that resets the dead-lettered job and
+  re-enqueues it. `POST /v1/projects/:ref/retry` is the shape; there is no such
+  route today, so the card can only report the failure.
 **Milestone 0 is complete** — ten tasks and the retro. The cost model, the risk
 register and the decision log now carry the measured numbers, and D-209 gates what
 may be done with them next.
