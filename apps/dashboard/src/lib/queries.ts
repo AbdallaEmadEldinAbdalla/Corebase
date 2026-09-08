@@ -169,6 +169,20 @@ export function usePauseProject(ref: string, orgId?: string) {
   });
 }
 
+export function useAcceptInvite() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (token: string) => api.acceptInvite(token),
+    onSuccess: () => {
+      // Both, and in this order matters only in that both are needed: `orgs`
+      // gains the organization, and `me` gains the membership that decides every
+      // affordance in the shell (D-428).
+      void qc.invalidateQueries({ queryKey: keys.orgs });
+      void qc.invalidateQueries({ queryKey: keys.me });
+    },
+  });
+}
+
 export function useMembers(orgId: string | undefined) {
   return useQuery({
     queryKey: keys.members(orgId ?? 'none'),

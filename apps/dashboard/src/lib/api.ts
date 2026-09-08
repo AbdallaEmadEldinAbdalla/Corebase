@@ -343,6 +343,19 @@ export const api = {
     }
   },
 
+  /**
+   * Accept an invitation.
+   *
+   * The platform answers a single 404 for expired, revoked, already-used and
+   * addressed-to-someone-else, on purpose: distinguishing them would turn an
+   * invite token into an oracle about an organization's membership. So the caller
+   * must not try to explain which — it can only relay the message and say which
+   * account is signed in, which is a fact about the user's own session.
+   */
+  acceptInvite: (token: string) =>
+    request<{ org_id: string; role: Role }>('/v1/invites/accept',
+      { method: 'POST', body: { token } }),
+
   // ── organization members and invites ─────────────────────────────────────
   members: (orgId: string) =>
     request<{ members: Member[] }>(`/v1/orgs/${encodeURIComponent(orgId)}/members`),
