@@ -4038,6 +4038,51 @@ hallway-tested on ≥3 people, timed <5 min" — cannot be self-certified and wi
 recorded unmet** no matter how well the flow works. The checklist can be built and
 instrumented; three people cannot.
 
+## 4k. Real hardware, by the hour
+
+The corpus commits to Hetzner (D-023), eu-central (D-024) and CCX43 as the locked
+launch SKU (D-140). What it does not say is how to *test* on it during
+implementation — and the answer is not to rent a node by the month.
+
+**Hetzner Cloud bills hourly, capped at the monthly rate.** So the gaps that need
+real hardware cost about a euro a session rather than €100+ a month, and they run on
+the exact launch SKU, which means the numbers are the real ones instead of proxies
+that have to be retaken.
+
+That is only true if create-and-destroy is one command, because by hand it is a
+dozen steps and the temptation is to leave the box running — which is how an hourly
+strategy quietly becomes a monthly bill. Hence:
+
+- **[`infra/hcloud/cloud-init.yaml`](infra/hcloud/cloud-init.yaml)** — the node
+  baseline in the form D-022 asks for. Docker, `xfsprogs`, and a script that formats
+  the attached volume as **XFS mounted `prjquota`**, which is what D-070's hard
+  per-project cap needs in order to exist at all. It *asserts* the mount option
+  afterwards: a filesystem mounted without `prjquota` accepts every quota command
+  and enforces nothing, which is a success-shaped failure. It refuses to reformat a
+  disk that already holds data rather than guessing.
+- **[`scripts/node.sh`](scripts/node.sh)** — `up | down | status | ssh`. `down`
+  deletes the **volume as well as the server**, because the stranded volume is what
+  people forget and it costs more per month than the hours the server ran. `status`
+  reports uptime and warns past 48 h, when hourly billing has hit the monthly cap
+  and the strategy has stopped saving anything.
+- **It refuses to create a `cax*` server.** Hetzner's ARM line is cheaper and is
+  exactly the wrong thing to rent by accident: D-209 forbids an ARM density number,
+  and the whole cost model rests on that figure. A cheap ARM box would produce
+  something that *looks* like data.
+
+**What this unblocks, and what it does not.** With one session on a CCX43: D-209's
+density triplet, D-070's XFS quotas, OQ-182's restore contention, provisioning
+timings on real hardware. It does **not** unblock the edge work (needs the domains
+and Cloudflare), the prod canaries (need a fleet that stays up), or real R2/Postmark
+behaviour.
+
+**Not yet run.** The script is written and syntax-checked, and the ARM guard is
+verified, but nothing has been provisioned — that needs an account, an API token and
+a payment method, none of which are mine to create. Hetzner's console currently
+warns of *limited availability of cloud instances*, and CCX (dedicated vCPU) is
+usually the constrained line, so the first `up` may need `fsn1` or `hel1` instead of
+`nbg1`; all three are eu-central, so D-024 holds either way.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real

@@ -1,0 +1,64 @@
+#cloud-config
+# Node baseline, as cloud-init — which is the form D-022 asks for.
+#
+# It exists as a file rather than as `ssh <a pile of commands>` because that is
+# the difference between a box someone set up once and a node the fleet can
+# recreate. Everything a data node needs at first boot belongs here; anything
+# that needs the control plane's state belongs to the node agent (D-081), which
+# does not exist yet and is called out where it would go.
+package_update: true
+packages:
+  - docker.io
+  - docker-compose-v2
+  - xfsprogs          # D-070's project quotas need the XFS tools present
+  - git
+  - jq
+
+write_files:
+  # A data node's project volumes must sit on XFS mounted `prjquota`, or D-070's
+  # hard per-project cap has nothing to attach to and D-073's ladder loses its
+  # backstop. On a cloud VM the extra volume is the place for it; the root disk
+  # is ext4 and is left alone.
+  - path: /usr/local/sbin/steadhold-prepare-data-disk
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      # Format and mount the data disk as XFS with project quotas.
+      #
+      # Idempotent on purpose: cloud-init runs once, but an operator re-running
+      # this after attaching a bigger volume must not reformat a disk that
+      # already holds customer data. It refuses rather than guesses.
+      set -euo pipefail
+      DEV="${1:?usage: steadhold-prepare-data-disk /dev/sdb}"
+      MNT=/var/lib/steadhold-data
+
+      if ! blkid "$DEV" >/dev/null 2>&1; then
+        mkfs.xfs -L steadhold-data "$DEV"
+      elif [ "$(blkid -o value -s TYPE "$DEV")" != "xfs" ]; then
+        echo "✗ $DEV is $(blkid -o value -s TYPE "$DEV"), not xfs — refusing to reformat" >&2
+        exit 1
+      fi
+
+      mkdir -p "$MNT"
+      grep -q "$MNT" /etc/fstab || \
+        printf 'LABEL=steadhold-data %s xfs defaults,prjquota 0 2\n' "$MNT" >> /etc/fstab
+      mount -a
+      # The check that matters: a filesystem mounted without `prjquota` accepts
+      # every quota command and enforces nothing, which is the failure mode that
+      # looks like success.
+      findmnt -no OPTIONS "$MNT" | grep -q prjquota \
+        || { echo "✗ $MNT is not mounted prjquota — D-070 cannot be enforced" >&2; exit 1; }
+      echo "✓ $MNT is XFS with prjquota"
+
+runcmd:
+  # The data disk is whatever second block device the provider attached. Named by
+  # size rather than by letter: /dev/sdb is not stable across providers or reboots.
+  - |
+    DEV="$(lsblk -dnbo NAME,SIZE,TYPE | awk '$3=="disk" && $2>10000000000 {print "/dev/"$1}' \
+      | grep -v "$(findmnt -no SOURCE / | sed 's/[0-9]*$//' | xargs -r basename)" | head -1)"
+    if [ -n "${DEV:-}" ]; then /usr/local/sbin/steadhold-prepare-data-disk "$DEV"; fi
+  - systemctl enable --now docker
+  # D-081 wants egress default-deny applied at join, by the node agent. The agent
+  # does not exist, so `scripts/staging.sh harden-egress` is still the thing that
+  # applies it and this is the line that will call the agent instead.
+  - echo "TODO(D-081): node agent applies egress default-deny at join" >> /var/log/steadhold-baseline.log
