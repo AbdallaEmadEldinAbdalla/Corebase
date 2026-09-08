@@ -41,8 +41,21 @@ const Ctx = createContext<{
   apiError: (title: string, err: unknown) => void;
 } | null>(null);
 
-/** Long enough to read a sentence, short enough not to sit in the way. */
+/**
+ * Long enough to read a sentence, short enough not to sit in the way.
+ *
+ * A toast carrying an **action** gets longer, because it is a different kind of
+ * object: one you are meant to read, versus one you are meant to *use*. Four
+ * seconds is ample to take in "Renamed to Acme Holdings" and not nearly enough to
+ * notice it, read it, decide the rename was wrong and reach Undo — the first
+ * version of the org rename had exactly that, and the Undo expired mid-test.
+ *
+ * A toast is still not a permanent home for an action: anything that must not be
+ * missed belongs on the surface itself, which is why the errors that matter are
+ * banners (D-032) and not these.
+ */
 const DWELL_MS = 4000;
+const DWELL_WITH_ACTION_MS = 10_000;
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<Toast[]>([]);
@@ -51,7 +64,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const show = useCallback((t: Omit<Toast, 'id'>) => {
     const id = next.current++;
     setItems((prev) => [...prev, { ...t, id }]);
-    window.setTimeout(() => setItems((prev) => prev.filter((x) => x.id !== id)), DWELL_MS);
+    window.setTimeout(() => setItems((prev) => prev.filter((x) => x.id !== id)),
+      t.action ? DWELL_WITH_ACTION_MS : DWELL_MS);
   }, []);
 
   const value = useMemo(() => ({

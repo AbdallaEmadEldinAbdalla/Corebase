@@ -9,8 +9,8 @@ import { rememberOrg } from '../../../lib/last-org.ts';
  * Org chrome. A layout and not a per-page wrapper so the sidebar and breadcrumb
  * survive navigation between org pages (UX standard §1).
  *
- * The sidebar lists **only pages that exist** — Projects and Members. Billing,
- * settings and the audit viewer are planned and unbuilt, and a greyed-out nav item
+ * The sidebar lists **only pages that exist** — Projects, Members and Settings.
+ * Billing and the audit viewer are planned and unbuilt, and a greyed-out nav item
  * for an unbuilt feature is a promise the product has not made (§7, and the IA's
  * own no-teaser rule), so they are absent rather than disabled. The nav grows as
  * pages land; gate question 20 is the reason it is written this way round.
@@ -35,6 +35,7 @@ export default function OrgLayout({ children, params }: {
         <div className="nav__label">{org?.name ?? 'Organization'}</div>
         <NavItem href={`/org/${slug}`} current={path === `/org/${slug}`} icon="projects">Projects</NavItem>
         <NavItem href={`/org/${slug}/members`} current={path.endsWith('/members')} icon="members">Members</NavItem>
+        <NavItem href={`/org/${slug}/settings`} current={path.endsWith('/settings')} icon="settings">Settings</NavItem>
         <div className="nav__foot">
           <div className="nav__hint">
             <span>Shortcuts</span><span className="kbd">?</span>

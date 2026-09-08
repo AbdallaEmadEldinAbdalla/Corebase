@@ -301,6 +301,27 @@ export const api = {
   createOrg: (name: string, slug: string) =>
     request<{ org: Org }>('/v1/orgs', { method: 'POST', body: { name, slug } }),
 
+  /**
+   * Rename an organization. **Name only** — the slug is permanent, because it is
+   * in every URL anyone has bookmarked or pasted, and the platform API has no
+   * route to change it.
+   */
+  renameOrg: (orgId: string, name: string) =>
+    request<{ org: Org }>(`/v1/orgs/${encodeURIComponent(orgId)}`,
+      { method: 'PATCH', body: { name } }),
+
+  /**
+   * Delete an organization. **Permanently** — unlike a project, there is no
+   * recovery window: the row is deleted outright, and only the audit trail
+   * survives (it has no foreign key, for exactly this reason).
+   *
+   * A 409 means the org still holds projects. The check is `status <> 'deleted'`,
+   * so a project inside its own seven-day recovery window still counts, which is
+   * the case a caller is most likely to be surprised by.
+   */
+  deleteOrg: (orgId: string) =>
+    request<void>(`/v1/orgs/${encodeURIComponent(orgId)}`, { method: 'DELETE' }),
+
   projects: (orgId: string, cursor?: string) =>
     request<{ projects: Project[]; pagination: Pagination }>(
       `/v1/projects?org_id=${encodeURIComponent(orgId)}`

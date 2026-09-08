@@ -210,6 +210,40 @@ export function useDeleteProject(ref: string, orgId?: string) {
   });
 }
 
+/**
+ * Rename an organization.
+ *
+ * Invalidates `orgs` and `me`: the shell's switcher and the breadcrumb both read
+ * the name from `orgs`, and `me.memberships` carries it too — without both, the
+ * page title changes and the chrome around it keeps the old name.
+ */
+export function useRenameOrg(orgId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => api.renameOrg(orgId, name),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: keys.orgs });
+      void qc.invalidateQueries({ queryKey: keys.me });
+    },
+  });
+}
+
+/**
+ * Delete an organization. A 409 is a real refusal — projects remain — and is left
+ * for the caller to relay, because the count in the message is the authority.
+ */
+export function useDeleteOrg(orgId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.deleteOrg(orgId),
+    onSuccess: () => {
+      // `clear`, not invalidate: the org this page belonged to is gone, and every
+      // cached query keyed by it is now describing something that does not exist.
+      qc.clear();
+    },
+  });
+}
+
 export function useAcceptInvite() {
   const qc = useQueryClient();
   return useMutation({
