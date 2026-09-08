@@ -22,13 +22,31 @@ import { join } from 'node:path';
  */
 
 const STYLES = new URL('.', import.meta.url).pathname;
+const SRC = join(STYLES, '..');
 const read = (f: string) => readFileSync(join(STYLES, f), 'utf8');
 
 const TOKENS = read('tokens.css');
+
+/**
+ * A token collapses from an inline `style={{}}` exactly as easily as from a rule,
+ * and the first version of this guard read only the stylesheets — so the very bug
+ * the docblock above describes came straight back in five `.tsx` files and sat
+ * there through the whole dashboard shell. A consumer is anything that can write
+ * `var(--sh-…)`, which also puts D-178's ramp-step rule where it was always aimed.
+ */
+const walk = (dir: string): string[] =>
+  readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)]);
+
 /** Every stylesheet except the token layer itself, which is where ramps belong. */
-const CONSUMERS = readdirSync(STYLES)
-  .filter((f) => f.endsWith('.css') && f !== 'tokens.css')
-  .map((f) => ({ file: f, css: read(f) }));
+const CONSUMERS = [
+  ...readdirSync(STYLES)
+    .filter((f) => f.endsWith('.css') && f !== 'tokens.css')
+    .map((f) => ({ file: f, css: read(f) })),
+  ...walk(SRC)
+    .filter((f) => f.endsWith('.tsx') && !f.includes('.test.'))
+    .map((f) => ({ file: f.slice(SRC.length + 1), css: readFileSync(f, 'utf8') })),
+];
 
 /** The role tokens the design system doc's "semantic role tokens" table names. */
 const ROLE_TOKENS = [

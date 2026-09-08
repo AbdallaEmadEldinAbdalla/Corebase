@@ -49,7 +49,7 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
 
       {/* In progress renders as progress, never as an error (§6). */}
       {settling ? (
-        <div className="sh-banner sh-banner--info" role="status" style={{ marginBottom: 'var(--sh-space-5)' }}>
+        <div className="sh-banner sh-banner--info" role="status" style={{ marginBottom: 'var(--sh-space-5, 20px)' }}>
           <span className="sh-banner__icon" aria-hidden="true">
             <svg viewBox="0 0 12 12"><path d="M6 2v4l3 2" /></svg>
           </span>
@@ -81,7 +81,7 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
       ) : null}
 
       {p?.status === 'failed' ? (
-        <div className="sh-banner sh-banner--error" role="alert" style={{ marginBottom: 'var(--sh-space-5)' }}>
+        <div className="sh-banner sh-banner--error" role="alert" style={{ marginBottom: 'var(--sh-space-5, 20px)' }}>
           <span className="sh-banner__icon" aria-hidden="true">
             <svg viewBox="0 0 12 12"><path d="M2 2 10 10M10 2 2 10" /></svg>
           </span>
@@ -101,7 +101,7 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
           the original is still serving — two live databases and nothing that can
           reconcile them afterwards. */}
       {p?.status === 'restored' ? (
-        <div className="sh-banner sh-banner--warning" role="status" style={{ marginBottom: 'var(--sh-space-5)' }}>
+        <div className="sh-banner sh-banner--warning" role="status" style={{ marginBottom: 'var(--sh-space-5, 20px)' }}>
           <span className="sh-banner__icon" aria-hidden="true">
             <svg viewBox="0 0 12 12"><path d="M6 2v5M6 9v1" /></svg>
           </span>
@@ -136,7 +136,7 @@ export default function OverviewPage({ params }: { params: Promise<{ ref: string
       ) : null}
 
       {p?.deleted_at || p?.status === 'soft_deleted' ? (
-        <div className="sh-banner sh-banner--warning" role="status" style={{ marginBottom: 'var(--sh-space-5)' }}>
+        <div className="sh-banner sh-banner--warning" role="status" style={{ marginBottom: 'var(--sh-space-5, 20px)' }}>
           <span className="sh-banner__icon" aria-hidden="true">
             <svg viewBox="0 0 12 12"><path d="M6 2v5M6 9v1" /></svg>
           </span>

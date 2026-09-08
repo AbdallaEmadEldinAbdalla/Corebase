@@ -3974,6 +3974,14 @@ role distinction exists, the tests present each role.
 
 
 
+**A guard covers every surface that can break the rule, not the surface where it
+was first broken.** The token guard was written after five `var(--sh-space-5)`
+references with no fallback collapsed five paddings to zero. It scanned the
+stylesheets. The same bug then reappeared in five `.tsx` inline styles and survived
+the entire dashboard shell, because `style={{}}` can write a custom property just
+as easily as a rule can and nothing was looking there. Ask what *else* can express
+the mistake, and put the guard around that instead (D-414).
+
 **A rename is applied to references, never to the record of the rename.** A
 find-and-replace cannot tell a mention of the old name apart from a statement
 *about* the old name, so it rewrites "Corebase → Steadhold" into
