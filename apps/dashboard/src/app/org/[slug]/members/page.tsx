@@ -73,7 +73,22 @@ function InviteForm({ orgId, myRole }: { orgId: string; myRole: Role }) {
   const invite = useInvite(orgId);
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<Role>('member');
-  const assignable = ROLES.filter((r) => canAssignRole(myRole, r));
+  /**
+   * You cannot *invite* an owner.
+   *
+   * An organization has one owner and any number of admins, so `owner` is not a
+   * role you hand out at the door — it is a transfer, which is a different act with
+   * a different question attached ("and who stops being the owner?"). Offering it
+   * in an invite made a one-of-a-kind role look like a tier.
+   *
+   * `canAssignRole` still filters what is left, because an admin may not invite
+   * peers above themselves; this narrows the *menu*, not the permission model. The
+   * API is unchanged and still accepts `owner` — promoting someone is done from
+   * their row, where the org's current owner is visible in the same list.
+   */
+  const assignable = ROLES
+    .filter((r) => r !== 'owner')
+    .filter((r) => canAssignRole(myRole, r));
 
   return (
     <section className="section">
@@ -153,15 +168,24 @@ function InviteToken({ data }: {
  * the page a second empty state that should not exist, and made "who is in my org"
  * a question you answered by reading two places and adding up.
  *
- * The other change is that **role is text, not a control**. A live `<select>` in
- * every row made the table read as a form: §4 wants a table to be scannable, and a
- * grid of dropdowns is the opposite of scannable. Role is a badge you read, and
- * changing it is an action in the row menu — the same `⋯` idiom the projects table
- * already uses, so the two lists behave the same way.
+ * **Role is text, not a control.** A live `<select>` per person made the list read
+ * as a form, and role is a badge you read; changing it is an action in the `⋯`
+ * menu, the same idiom the projects list uses.
  *
- * "Joined" lost its column and became muted text beside the status. For a list of
- * five people the date is not what anyone scans for, and a column costs more than
- * the fact is worth.
+ * **There is no table here, and that is deliberate.** This was a table, and it
+ * could not hold its own content: a display name sits beside an email address, an
+ * email is one unbreakable token, and three attempts to make four columns
+ * negotiate that space produced three different defects — the name squeezed to
+ * 43px and wrapping, the joined date folding under the status dot, and then a
+ * table wider than a `.tablewrap` that D-432 forbids clipping. Inner horizontal
+ * scroll was the remaining option and D-432 rules it out for the same reason: the
+ * row menu is absolutely positioned and a clipping ancestor erases it.
+ *
+ * So the table is gone rather than toggled. A card has no columns to negotiate:
+ * the name owns a line and never yields, the email sits beneath it where its
+ * length costs nothing, role and status are facts on one line, actions go last.
+ * §4 prefers a table for comparison and this list is not one people compare —
+ * it answers "who has access", one person at a time. (D-447, D-449.)
  */
 type Row =
   | { kind: 'member'; id: string; email: string; name: string | null; role: Role; joined: string }
@@ -202,24 +226,12 @@ function People({ orgId, myRole, myUserId, members, invites }: {
         People ({members.data?.members.length ?? 0})
         {pending ? <span className="sh-help"> · {pending} invited</span> : null}
       </h2>
-      <div className="tablewrap">
-        <table className="sh-table">
-          <thead>
-            <tr>
-              <th scope="col">Person</th>
-              <th scope="col">Role</th>
-              <th scope="col">Status</th>
-              <th scope="col"><span className="sh-sr">Actions</span></th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <PersonRow key={`${r.kind}:${r.id}`} row={r} orgId={orgId!}
-                         myRole={myRole} isMe={r.kind === 'member' && r.id === myUserId}
-                         ownerCount={owners} />
-            ))}
-          </tbody>
-        </table>
+      <div className="personcards">
+        {rows.map((r) => (
+          <PersonCard key={`${r.kind}:${r.id}`} row={r} orgId={orgId!} myRole={myRole}
+                      isMe={r.kind === 'member' && r.id === myUserId}
+                      ownerCount={owners} />
+        ))}
       </div>
     </section>
   );
@@ -229,28 +241,41 @@ function PeopleSkeleton() {
   return (
     <section className="section">
       <h2 className="sectiontitle">People</h2>
-      <div className="tablewrap" aria-hidden="true">
-        <table className="sh-table">
-          <tbody>
-            {[0, 1, 2].map((i) => (
-              <tr key={i}>
-                {/* The skeleton is the table, so it does not reflow when the rows
-                    arrive — a placeholder of a different shape is a second layout. */}
-                <td><div className="sh-skeleton" style={{ width: '60%' }} /></td>
-                <td><div className="sh-skeleton" style={{ width: '48px' }} /></td>
-                <td><div className="sh-skeleton" style={{ width: '40%' }} /></td>
-                <td />
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="personcards" aria-busy="true">
+        {[0, 1, 2].map((i) => (
+          <div className="personcard" key={i}>
+            <div className="personcard__id">
+              <div className="sh-skeleton" style={{ width: 140, height: 18 }} />
+              <div className="sh-skeleton" style={{ width: 200, height: 13, marginTop: 6 }} />
+            </div>
+            <div className="personcard__facts">
+              <div className="sh-skeleton" style={{ width: 52, height: 20 }} />
+              <div className="sh-skeleton" style={{ width: 150, height: 16 }} />
+            </div>
+          </div>
+        ))}
       </div>
     </section>
   );
 }
 
-function PersonRow({ row, orgId, myRole, isMe, ownerCount }: {
-  row: Row; orgId: string; myRole: Role | undefined; isMe: boolean; ownerCount: number;
+/** An invitation past its expiry. Presentation, so each view computes it. */
+const isExpired = (row: Row) =>
+  row.kind === 'invite' && new Date(row.expires).getTime() < Date.now();
+
+/**
+ * Everything a person's row or card can *do*, in one place.
+ *
+ * Extracted when the card view arrived. The capability flags, the `⋯` menu, the
+ * single button an invitation gets and both confirmation dialogs are the parts
+ * with rules attached — D-430's "a menu earns its keep at two actions or more",
+ * D-431's "every destructive action confirms", `canActOn`, and the last-owner
+ * invariant. Duplicating those per view is how one view quietly loses a rule the
+ * other keeps. The views differ in how they present *identity*, which is
+ * presentation; they share this, which is behaviour.
+ */
+function PersonActions({ row, orgId, myRole, ownerCount }: {
+  row: Row; orgId: string; myRole: Role | undefined; ownerCount: number;
 }) {
   const setRole = useSetMemberRole(orgId);
   const remove = useRemoveMember(orgId);
@@ -262,7 +287,6 @@ function PersonRow({ row, orgId, myRole, isMe, ownerCount }: {
   const { capture } = useReturnFocus();
   const ask = (what: 'remove' | 'revoke') => { capture(); setConfirm(what); };
 
-  const expired = row.kind === 'invite' && new Date(row.expires).getTime() < Date.now();
   /** The store's first invariant: an org always has at least one owner. */
   const lastOwner = row.kind === 'member' && row.role === 'owner' && ownerCount === 1;
   const mayManage = Boolean(myRole && canActOn(myRole, row.role));
@@ -273,51 +297,8 @@ function PersonRow({ row, orgId, myRole, isMe, ownerCount }: {
   const busy = setRole.isPending || remove.isPending || revoke.isPending;
 
   return (
-    <tr>
-      <td className="sh-table__name">
-        {/**
-          * One line, always.
-          *
-          * The email used to be a block under the name, so a person with a display
-          * name made that row two lines tall while every invitation row stayed at
-          * one — and the Role and Status cells, being vertically centred, then
-          * lined up with nothing. A table whose row height depends on whether a
-          * field happens to be populated cannot have a baseline.
-          *
-          * So the name and the email share a line, the email muted, and the row is
-          * the same height whoever is in it. It is also denser, which §4 asks for.
-          */}
-        <div className="sh-row sh-row--tight" style={{ flexWrap: 'nowrap' }}>
-          <span>{row.kind === 'member' ? (row.name ?? row.email) : row.email}</span>
-          {isMe ? <span className="sh-badge sh-badge--accent">You</span> : null}
-          {row.kind === 'member' && row.name
-            ? <span className="sh-card__meta">{row.email}</span>
-            : null}
-        </div>
-      </td>
-
-      <td><span className="sh-badge">{row.role}</span></td>
-
-      <td>
-        {row.kind === 'member' ? (
-          <span className="sh-status">
-            <span className="sh-status__dot sh-status__dot--success" />
-            Active
-            <span className="sh-help"> · joined {new Date(row.joined).toLocaleDateString()}</span>
-          </span>
-        ) : expired ? (
-          <span className="sh-badge sh-badge--warning">Invitation expired</span>
-        ) : (
-          <span className="sh-status">
-            <span className="sh-status__dot sh-status__dot--muted" />
-            Invited
-            <span className="sh-help"> · expires {new Date(row.expires).toLocaleDateString()}</span>
-          </span>
-        )}
-      </td>
-
-      <td className="td-actions">
-        {/**
+    <>
+      {/**
           * An invitation has exactly one action, so it is a button and not a menu:
           * a menu earns its extra click when it holds two or more things, and for
           * one it is just a lid. Members keep the `⋯` because they have several —
@@ -415,7 +396,66 @@ function PersonRow({ row, orgId, myRole, isMe, ownerCount }: {
           project in it. Their projects and data are not deleted. Inviting them
           again restores access.
         </ConfirmDialog>
-      </td>
-    </tr>
+    </>
   );
 }
+
+/**
+ * A person as a **card**, which is the default view.
+ *
+ * The table was the default and it could not hold this content in the width it
+ * gets. Three attempts to make four columns negotiate a display name beside an
+ * unbreakable email address produced three different defects: the name squeezed
+ * to 43px and wrapping onto two lines, "· joined 08/09/2026" folding under the
+ * status dot, and then — once the cells were told not to wrap — a table wider
+ * than the container it may not clip (D-432).
+ *
+ * A card has no columns to negotiate, so the class of problem is gone rather than
+ * moved. The name gets its own line and never yields; the email sits beneath it
+ * where its length is nobody's problem; role and status are facts on one line;
+ * actions sit at the bottom. The table remains available behind the view toggle,
+ * for the case §4 actually wants a table for — comparing many rows.
+ */
+function PersonCard({ row, orgId, myRole, isMe, ownerCount }: {
+  row: Row; orgId: string; myRole: Role | undefined; isMe: boolean; ownerCount: number;
+}) {
+  const expired = isExpired(row);
+  const name = row.kind === 'member' ? (row.name ?? row.email) : row.email;
+  const secondary = row.kind === 'member' && row.name ? row.email : null;
+
+  return (
+    <div className="personcard">
+      <div className="personcard__id">
+        <div className="sh-row sh-row--tight">
+          <span className="personcard__name">{name}</span>
+          {isMe ? <span className="sh-badge sh-badge--accent">You</span> : null}
+        </div>
+        {secondary ? <div className="personcard__email">{secondary}</div> : null}
+      </div>
+
+      <div className="personcard__facts">
+        <span className="sh-badge">{row.role}</span>
+        {row.kind === 'member' ? (
+          <span className="sh-status">
+            <span className="sh-status__dot sh-status__dot--success" />
+            Active
+            <span className="sh-help"> · joined {new Date(row.joined).toLocaleDateString()}</span>
+          </span>
+        ) : expired ? (
+          <span className="sh-badge sh-badge--warning">Invitation expired</span>
+        ) : (
+          <span className="sh-status">
+            <span className="sh-status__dot sh-status__dot--muted" />
+            Invited
+            <span className="sh-help"> · expires {new Date(row.expires).toLocaleDateString()}</span>
+          </span>
+        )}
+      </div>
+
+      <div className="personcard__actions">
+        <PersonActions row={row} orgId={orgId} myRole={myRole} ownerCount={ownerCount} />
+      </div>
+    </div>
+  );
+}
+

@@ -15,6 +15,7 @@ const groups = (meta: string): { title: string; keys: [string, string][] }[] => 
   { title: 'Anywhere', keys: [
     [meta, 'Command palette'],
     ['?', 'This list'],
+    ['[', 'Collapse or expand the sidebar'],
     ['Esc', 'Close the topmost layer'],
   ] },
   { title: 'Go to', keys: [
@@ -24,7 +25,7 @@ const groups = (meta: string): { title: string; keys: [string, string][] }[] => 
     ['g c', 'Connect'],
     ['g k', 'API keys'],
     ['g u', 'Usage'],
-    ['g s', 'Project settings'],
+    ['g s', 'Settings — the project’s, or the org’s outside one'],
   ] },
   { title: 'Lists and menus', keys: [
     ['↑ ↓', 'Move'],

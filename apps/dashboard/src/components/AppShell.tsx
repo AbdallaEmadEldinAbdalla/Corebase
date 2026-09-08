@@ -12,6 +12,8 @@ import { CommandPalette } from './CommandPalette.tsx';
 import { Shortcuts } from './Shortcuts.tsx';
 import { ProjectStateBadge } from './ProjectState.tsx';
 import { Logo, OrgAvatar, SectionIcon, type SectionName } from './Logo.tsx';
+import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { useSidebar } from '../lib/sidebar.ts';
 
 /**
  * The shell: top bar, breadcrumb switchers, sidebar, palette, shortcut sheet.
@@ -38,6 +40,7 @@ export function AppShell({ children, orgSlug, projectRef, nav }: {
   // Captured here, at the opening event, rather than inside the layer — see
   // lib/return-focus.ts for why an effect inside the layer is too late.
   const metaLabel = useMetaLabel();
+  const sidebar = useSidebar();
   const paletteFocus = useReturnFocus();
   const shortcutFocus = useReturnFocus();
 
@@ -48,7 +51,12 @@ export function AppShell({ children, orgSlug, projectRef, nav }: {
 
   useHotkeys({
     meta: { k: () => (palette ? closePalette() : openPalette()) },
-    keys: { '?': openShortcuts },
+    keys: {
+      '?': openShortcuts,
+      // `[` collapses and expands the sidebar. A bare key rather than
+      // `g`-something, because `g` means "go to" and this goes nowhere.
+      '[': sidebar.toggle,
+    },
     go: {
       p: () => { if (orgSlug) router.push(`/org/${orgSlug}`); },
       m: () => { if (orgSlug) router.push(`/org/${orgSlug}/members`); },
@@ -56,7 +64,16 @@ export function AppShell({ children, orgSlug, projectRef, nav }: {
       c: () => { if (projectRef) router.push(`/project/${projectRef}/connect`); },
       k: () => { if (projectRef) router.push(`/project/${projectRef}/keys`); },
       u: () => { if (projectRef) router.push(`/project/${projectRef}/usage`); },
-      s: () => { if (projectRef) router.push(`/project/${projectRef}/settings`); },
+      /**
+       * `g s` is contextual, the way `g p` and `g m` already are: inside a project
+       * it means that project's settings, and outside one it means the org's.
+       * Both are "settings" to the person pressing it, and giving the org a second
+       * letter would make the shortcut sheet longer to say the same thing.
+       */
+      s: () => {
+        if (projectRef) router.push(`/project/${projectRef}/settings`);
+        else if (orgSlug) router.push(`/org/${orgSlug}/settings`);
+      },
     },
   });
 
@@ -68,13 +85,25 @@ export function AppShell({ children, orgSlug, projectRef, nav }: {
     return () => window.removeEventListener('sh:shortcuts', openShortcuts);
   });
 
+  // Same coupling as the shortcuts sheet above: the palette cannot call into this
+  // component, and an event is smaller than pushing sidebar state up into a
+  // provider that only two things would read.
+  useEffect(() => {
+    window.addEventListener('sh:sidebar', sidebar.toggle);
+    return () => window.removeEventListener('sh:sidebar', sidebar.toggle);
+  }, [sidebar.toggle]);
+
   return (
-    <div className={`shell${nav ? '' : ' shell--noNav'}`}>
+    <div className={`shell${nav ? '' : ' shell--noNav'}${
+      nav && sidebar.collapsed ? ' shell--railed' : ''}`}>
       <header className="bar">
         <Link href="/" aria-label="Steadhold home"
               style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none' }}>
           <Logo size={22} />
         </Link>
+        {/* In the bar rather than in the sidebar, so it stays in the same place
+            whether the sidebar is 232px or 56px wide — a control that moves when
+            you use it is a control you have to find twice. */}
         <Crumbs {...(orgSlug ? { orgSlug } : {})} {...(projectRef ? { projectRef } : {})} />
         <span className="bar__spacer" />
         <button type="button" className="sh-btn sh-btn--secondary sh-btn--sm"
@@ -85,7 +114,32 @@ export function AppShell({ children, orgSlug, projectRef, nav }: {
         <AccountMenu />
       </header>
 
-      {nav ? <nav className="nav" aria-label="Sections">{nav}</nav> : null}
+      {nav ? (
+        <nav id="shell-nav" className="nav" aria-label="Sections">
+          {nav}
+          {/* In the sidebar's footer, under the section list: the control that
+              changes this panel belongs to this panel. It is the last child so it
+              sits below the layout's own `.nav__foot`, and it survives the rail —
+              a collapse with no way back would be a trap. */}
+          <div className="nav__rail">
+            {/* A nav row, not a button in a box: it is the same width, height and
+                hover as the sections above it, and the rail collapses it to an
+                icon by the same rule — `.sh-nav-item__label` is what gets hidden,
+                so this needs no rail-specific styling of its own. */}
+            <button type="button" className="sh-nav-item navtoggle"
+                    onClick={sidebar.toggle}
+                    aria-expanded={!sidebar.collapsed} aria-controls="shell-nav"
+                    title={`${sidebar.collapsed ? 'Expand' : 'Collapse'} sidebar  [`}>
+              {sidebar.collapsed
+                ? <PanelLeftOpen size={16} strokeWidth={2} aria-hidden="true" />
+                : <PanelLeftClose size={16} strokeWidth={2} aria-hidden="true" />}
+              <span className="sh-nav-item__label">
+                {sidebar.collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              </span>
+            </button>
+          </div>
+        </nav>
+      ) : null}
 
       <main className="main">{children}</main>
 
@@ -279,7 +333,10 @@ export function NavItem({ href, children, current, icon }: {
   return (
     <Link className="sh-nav-item" href={href} {...(current ? { 'aria-current': 'page' as const } : {})}>
       <SectionIcon name={icon} />
-      {children}
+      {/* An element, not a bare text node. The rail hides the label with CSS, and
+          CSS cannot select a text node — the first version left "Project",
+          "Member" and "Setting" clipped against a 56px rail. */}
+      <span className="sh-nav-item__label">{children}</span>
     </Link>
   );
 }

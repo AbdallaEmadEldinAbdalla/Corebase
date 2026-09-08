@@ -19,6 +19,39 @@
   grid-template-areas: "bar" "main";
 }
 
+/* ── the sidebar, collapsed to a rail ─────────────────────────────────────────
+   232px of a 1000px window is a quarter of the screen spent on seven words, and
+   the content column pays for it — which is where the members list ran out of
+   room. Collapsed, the nav keeps its icons and drops its text; the width comes
+   from the icon plus the row's own padding.
+
+   The labels are still in the DOM, not replaced by `title` attributes: a `title`
+   is pointer-only, and §2 forbids pointer-only affordances. They are hidden the
+   way `.sh-sr` hides things — clipped, not `display: none` — so a screen reader
+   still reads "Projects" and the accessible name of each row is unchanged whether
+   the rail is open or shut. */
+.shell--railed { grid-template-columns: 56px 1fr; }
+
+.shell--railed .nav { padding: var(--sh-space-12) var(--sh-space-8); }
+.shell--railed .nav__label { display: none; }
+.shell--railed .sh-nav-item { justify-content: center; gap: 0; }
+.shell--railed .sh-nav-item__label {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+/* The shortcuts hint goes — it is two words and a key cap, and neither fits.
+   The toggle stays, because a collapse with no way back is a trap. */
+.shell--railed .nav__foot { display: none; }
+/* Railed, the footer is hidden — so this row inherits the job of reaching the
+   bottom, and needs the auto margin the footer was providing. */
+.shell--railed .nav__rail { justify-content: center; margin-top: auto; }
+
+/* The rail's rows are square, so the hover and current-page fills read as tiles
+   rather than as stretched pills. */
+.shell--railed .sh-nav-item { width: 40px; height: 40px; margin: 0 auto; padding: 0; }
+
+
 .bar {
   grid-area: bar;
   display: flex; align-items: center; gap: var(--sh-space-12);
@@ -68,6 +101,22 @@
 }
 .nav .sh-nav-item { height: 34px; transition: background 140ms ease; }
 .nav__foot { margin-top: auto; padding: var(--sh-space-8); }
+/* The collapse control's own row, below everything else in the panel.
+   `margin-top: auto` belongs *here*, not only on `.nav__foot`: the rail hides the
+   footer, and with the only auto-margin gone the toggle sprang back up under the
+   section list. When the footer is visible its own auto margin claims the free
+   space first and this row sits just beneath it — bottom either way. */
+/* No auto margin while the footer has one. Two elements with `margin-top: auto`
+   split the free space *between* them, which left "Shortcuts" floating in the
+   middle of the panel and the toggle alone at the bottom. The footer's auto pushes
+   the pair down; this row simply follows it. */
+.nav__rail { display: flex; padding-top: var(--sh-space-4); }
+/* A `<button>` wearing `.sh-nav-item`: the class supplies the row geometry, and
+   these four lines undo what a button brings with it and a link does not. */
+.navtoggle {
+  width: 100%; background: none; border: 0; cursor: pointer;
+  font: var(--sh-body-s); text-align: start;
+}
 .nav__hint {
   display: flex; align-items: center; justify-content: space-between;
   font: var(--sh-caption); color: var(--sh-text-muted);
@@ -155,6 +204,82 @@
   font: var(--sh-body-s); color: var(--sh-text-secondary);
 }
 .td-actions { width: 44px; text-align: right; }
+
+/* ── the whole project card is the link ───────────────────────────────────────
+   A "stretched link": the title stays a real `<a>` and its `::after` covers the
+   card, so a click anywhere activates it. The alternative — `onClick` on the card
+   div — would give up ⌘-click, middle-click, the status bar preview and keyboard
+   activation, all of which a table row keeps because its name is an anchor too.
+
+   The footer controls then need lifting above that overlay, or the `⋯` menu and
+   Resume become unreachable: they would be under a link covering the whole card.
+   `z-index` on a positioned element is the whole mechanism. */
+.cards .sh-card { position: relative; }
+.cards .sh-card__title::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit;
+}
+.cards .sh-card__footer { position: relative; z-index: 1; }
+/* Only the controls, not the whole footer strip — the date is not a target and
+   should not steal the card's click. */
+.cards .sh-card__footer > :first-child { position: relative; z-index: -1; }
+.cards .sh-card:hover { border-color: var(--sh-border-strong); }
+/* The ring belongs to the card, not to the text-sized anchor inside it — the
+   whole card is the target, so the whole card is what gets the focus treatment.
+   Ring plus halo, the same two tokens every other focusable thing uses (§7);
+   `--sh-focus` does not exist and the first version of this rule invented it,
+   which renders no ring at all and is invisible to a mouse. */
+.cards .sh-card:has(.sh-card__title:focus-visible) {
+  border-color: var(--sh-focus-ring);
+  box-shadow: 0 0 0 4px var(--sh-focus-halo);
+}
+.cards .sh-card__title:focus-visible { outline: none; }
+
+/* ── a person as a card ───────────────────────────────────────────────────────
+   The default view for People, because the table could not hold this content in
+   the width it gets. A display name sits beside an email address, an email is one
+   unbreakable token, and three attempts to make four columns negotiate that
+   produced three different defects: the name squeezed to 43px and wrapping, the
+   joined date folding under the status dot, and — once the cells were told not to
+   wrap — a table wider than the container it is not allowed to clip (D-432).
+
+   A card has no columns to negotiate. The name owns a line and never yields; the
+   email sits under it where its length costs nothing; role and status are facts on
+   one line; actions go last. The table stays behind the toggle for what §4 wants a
+   table for, which is comparing many rows at once. */
+/* A container query, not a viewport one. The card lives in a column that is the
+   window minus a 240px sidebar minus padding, so at an 800px window this column is
+   ~535px — and a `@media (max-width: 720px)` rule never fires while the card is
+   demonstrably out of room. The card has to react to the space *it* has. */
+.personcards { display: grid; gap: var(--sh-space-12); container-type: inline-size; }
+.personcard {
+  display: grid; gap: var(--sh-space-12);
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  padding: var(--sh-space-16);
+  background: var(--sh-surface);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-lg);
+}
+.personcard__id { min-width: 0; }
+.personcard__name { font: var(--sh-body-m); font-weight: 600; color: var(--sh-text); }
+/* The email may be long; here that is a wrap, not a squeezed neighbour. */
+.personcard__email {
+  font: var(--sh-body-s); color: var(--sh-text-muted);
+  margin-top: 2px; overflow-wrap: anywhere;
+}
+.personcard__facts { display: flex; align-items: center; gap: var(--sh-space-16); }
+.personcard__actions { display: flex; justify-content: flex-end; min-width: 32px; }
+
+/* One column as soon as three do not fit. The threshold is generous on purpose:
+   the facts column is `auto`, so it takes its content width — "owner · Active ·
+   joined 08/09/2026 · Last owner" — and whatever is left goes to the name. Below
+   this, that leftover is not enough for a name and an email address, which is
+   exactly the squeeze the table had. */
+@container (max-width: 620px) {
+  .personcard { grid-template-columns: minmax(0, 1fr); }
+  .personcard__facts { flex-wrap: wrap; }
+  .personcard__actions { justify-content: flex-start; }
+}
 
 /* Row menu trigger: visible on hover *and* on focus, and in the DOM either way,
    so it is never a pointer-only affordance (§2). */

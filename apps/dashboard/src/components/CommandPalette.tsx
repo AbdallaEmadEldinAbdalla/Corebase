@@ -125,7 +125,21 @@ export function CommandPalette({ open, onClose, orgSlug, projectRef }: {
       list.push({ id: 'go-members', group: 'Go to', label: 'Members',
                   keywords: 'people team invite roles',
                   hint: 'g m', run: go(`/org/${currentOrg.slug}/members`) });
+      list.push({ id: 'go-org-settings', group: 'Go to', label: 'Organization settings',
+                  keywords: 'rename slug delete danger zone org',
+                  hint: 'g s', run: go(`/org/${currentOrg.slug}/settings`) });
     }
+    /**
+     * The sidebar toggle. It has a button and a key already; §2 asks for all
+     * three, and the palette is where someone looks when they know the name of a
+     * thing and not its shortcut.
+     */
+    list.push({
+      id: 'toggle-sidebar', group: 'Actions', label: 'Collapse or expand the sidebar',
+      keywords: 'sidebar nav rail collapse expand icons narrow',
+      hint: '[', run: () => { window.dispatchEvent(new Event('sh:sidebar')); onClose(); },
+    });
+
     if (projectRef) {
       list.push(
         { id: 'go-overview', group: 'Go to', label: 'Project overview',

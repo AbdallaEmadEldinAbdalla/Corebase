@@ -36,7 +36,19 @@ export default function ProjectsPage({ params }: { params: Promise<{ slug: strin
   const { slug } = use(params);
   const { org, isLoading: orgLoading, error: orgError } = useOrgBySlug(slug);
   const projects = useProjects(org?.id);
-  const [view, setView] = useState<View>('table');
+  /**
+   * **Cards by default.** The table was the default and it does not survive a
+   * narrow content column: the identity cell holds a name and a ref, the ref is
+   * one unbreakable token, and every attempt to make five columns negotiate that
+   * space produced a different defect — a name squeezed to two lines, then a
+   * table wider than its own container. Cards have no column negotiation, so the
+   * class of bug goes away rather than moving.
+   *
+   * The table stays one click away and the choice persists, which is what §4 asks
+   * for when both are defensible — it is the *default* that changed, not the
+   * option.
+   */
+  const [view, setView] = useState<View>('cards');
 
   useEffect(() => {
     try {
@@ -171,10 +183,12 @@ function ProjectTable({ projects, hasMore, loadingMore, onLoadMore }: {
             <tr key={p.id}
                 onClick={() => router.push(`/project/${p.ref}`)}>
               <td className="sh-table__name">
-                                  // A real link, so the row is keyboard-reachable and
-                  // middle-click/⌘-click open a new tab like anywhere else.
-                  <Link href={`/project/${p.ref}`}
-                        style={{ textDecoration: 'none', color: 'inherit' }}>{p.name}</Link>
+                {/* A real link, so the row is keyboard-reachable and
+                    middle-click/⌘-click open a new tab like anywhere else.
+                    These were bare `//` comments, which in JSX child position are
+                    *text* — they rendered as the project's name. */}
+                <Link href={`/project/${p.ref}`}
+                      style={{ textDecoration: 'none', color: 'inherit' }}>{p.name}</Link>
               </td>
               <td className="sh-mono">{p.ref}</td>
               <td><ProjectStateBadge status={p.status} /></td>
@@ -313,7 +327,23 @@ function ProjectCard({ project }: { project: Project }) {
   const failed = project.status === 'failed';
   return (
     <div className={`sh-card${failed ? ' sh-card--error' : ''}`}>
-      <div className="sh-card__title">{project.name}</div>
+      {/**
+        * The title is the link, which is two fixes in one.
+        *
+        * Q11 — the footer had an accent "Open" link *and* an accent Resume button
+        * on a paused project, which is two primary actions in one card; §4 keeps
+        * the accent rare, and Resume is the one that earns it. And the target: a
+        * table row is clickable across its whole width, while the card's only way
+        * in was the word "Open". The title is the biggest thing on the card and
+        * the obvious thing to click, exactly as the row's name is a link.
+        *
+        * `color: inherit` because a title that is also accent-coloured would put
+        * the loudest colour back on the least urgent control.
+        */}
+      <Link href={`/project/${project.ref}`} className="sh-card__title"
+            style={{ display: 'block', color: 'inherit', textDecoration: 'none' }}>
+        {project.name}
+      </Link>
       <div className="sh-card__ref">{project.ref}</div>
       <ProjectStateBadge status={project.status} />
       <div className="sh-card__meta">{project.region} · {project.plan}</div>
@@ -321,7 +351,15 @@ function ProjectCard({ project }: { project: Project }) {
         <span style={{ color: 'var(--sh-text-muted)' }}>
           {new Date(project.created_at).toLocaleDateString()}
         </span>
-        <Link className="sh-card__link" href={`/project/${project.ref}`}>Open</Link>
+        {/* The same two controls the table row carries. They were missing here,
+            which was survivable while the table was the default and is not now:
+            a card view without Resume or the row menu would leave pausing and
+            deleting reachable only by switching views.
+            There is no "Open" link beside them any more — see the title. */}
+        <div className="sh-row sh-row--tight" style={{ marginLeft: 'auto' }}>
+          <ResumeRowButton project={project} />
+          <RowActions project={project} />
+        </div>
       </div>
     </div>
   );
