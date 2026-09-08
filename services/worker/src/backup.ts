@@ -214,11 +214,43 @@ test -s /etc/pgbackrest/pgbackrest.conf`;
   }
 }
 
+/**
+ * How long each pgBackRest command may take, because they differ by orders of
+ * magnitude and one ceiling for all of them is wrong in both directions.
+ *
+ * D-421 gave `/exec/<id>/start` a ten-minute ceiling because a full base backup
+ * genuinely needs minutes and a 30-second transport timeout was killing every
+ * real one. But applying that ceiling to *every* pgBackRest command removed a
+ * fast-fail that mattered: `verify_archiving` runs `check`, which forces a WAL
+ * switch and waits for the segment to reach the repo — normally one to three
+ * seconds — and the nightly provisioning bench allows 60 s for an entire
+ * provision. One run had `check` hang, and instead of erroring at 30 s and
+ * letting the saga retry, it sat there until the bench's own deadline fired and
+ * reported the provision as failed.
+ *
+ * So the ceiling belongs to the operation, not to the client. A backup gets
+ * minutes; a check, a stanza-create and an info do not.
+ */
+const PGB_TIMEOUT_MS: Record<string, number> = {
+  backup: 600_000,          // a full base backup of a real database
+  restore: 600_000,
+  'stanza-create': 60_000,
+  'stanza-upgrade': 60_000,
+  check: 60_000,            // forces a WAL switch; seconds in practice
+  info: 30_000,
+  expire: 120_000,
+};
+
 /** Run a pgBackRest command inside a project's container, as the postgres user. */
 export async function pgbackrest(
   docker: Docker, container: string, args: string[],
 ): Promise<PgbackrestResult> {
-  return docker.execCapture(container, ['pgbackrest', `--stanza=${STANZA}`, ...args]);
+  // The command is the first non-flag argument, because the flag can come first:
+  // a base backup is invoked as `['--type=full', 'backup']`.
+  const verb = args.find((a) => !a.startsWith('-'));
+  const timeoutMs = verb === undefined ? 120_000 : PGB_TIMEOUT_MS[verb] ?? 120_000;
+  return docker.execCapture(
+    container, ['pgbackrest', `--stanza=${STANZA}`, ...args], { timeoutMs });
 }
 
 /**
