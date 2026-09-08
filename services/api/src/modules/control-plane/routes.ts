@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { CreateProjectRequest, ERROR_CODES, decodeId, encodeId, InvalidIdError } from '@steadhold/types';
 import { parsePageRequest, toPage } from '../../kernel/pagination.ts';
-import { serializeProject } from './serialize.ts';
+import { serializeProject, serializeProjectUsage } from './serialize.ts';
 import { DELIVERY_ID_PATTERN } from '@steadhold/queue';
 import { ApiError } from '../../kernel/errors.ts';
 import { generateProjectRef } from '../../kernel/ref.ts';
@@ -445,6 +445,48 @@ export function registerControlPlane(app: FastifyInstance, deps: ControlPlaneDep
    * naming who looked. Both are byte-identical on every read (D-214), because an
    * anon key that changes on each view is not usable as configuration.
    */
+  /**
+   * What a project is using (P7e).
+   *
+   * A route of its own rather than fields on `GET /v1/projects/:ref`, for one
+   * decisive reason: the dashboard polls the project detail **every second**
+   * while a project is settling (D-425), and usage would then join
+   * `project_databases` and scan `backup_runs` once a second for figures that a
+   * sweep refreshes every few minutes. Separate route, separate cache, separate
+   * staleness — and the detail response stays the cheap thing it has to be.
+   *
+   * `project.read`, because this is reading, and a member can already see the
+   * project it belongs to. Nothing here is a credential.
+   */
+  app.get('/v1/projects/:ref/usage', async (req) => {
+    await requireAuth(req);
+    const { ref } = req.params as { ref: string };
+    const project = await deps.store.getProject(ref);
+    if (!project) throw ApiError.notFound('Project');
+
+    if (deps.orgs && deps.principals) {
+      const scoped = await scope(req, encodeId('organization', project.organization_id));
+      if (scoped) require_(scoped.role, 'project.read');
+    }
+
+    if (!deps.store.projectUsage) {
+      // Same reasoning as pause/resume: saying the deployment cannot answer beats
+      // a 500 that reads as "this project is broken".
+      throw new ApiError(501, ERROR_CODES.INTERNAL,
+        'This deployment cannot report project usage.');
+    }
+    const row = await deps.store.projectUsage(project.id);
+    if (!row) {
+      // The project exists but has no database row yet — it is still being
+      // created, or it is soft-deleted and the row is gone. Not a 404 on the
+      // project, and not zeroes either: an explicit 409 with the status, so the
+      // dashboard can say "there is nothing to measure yet" and mean it.
+      throw new ApiError(409, ERROR_CODES.VALIDATION_FAILED,
+        `This project has no database to measure yet — it is ${project.status}.`);
+    }
+    return { usage: serializeProjectUsage(row) };
+  });
+
   app.get('/v1/projects/:ref/keys', async (req, reply) => {
     await requireAuth(req);
     const { ref } = req.params as { ref: string };

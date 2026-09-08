@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from 'pg';
 import type { Project, ProjectStatus } from '@steadhold/types';
 import type { ControlPlaneStore, JobRow, DatabaseInfo } from './store.ts';
+import type { ProjectUsage } from './serialize.ts';
 import type { SecretStore } from '@steadhold/secrets';
 import { SECRET_NAMES } from '@steadhold/secrets';
 import { writeAudit, SYSTEM, type Actor } from '@steadhold/audit';
@@ -157,6 +158,47 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
         [ref],
       );
       return rows[0] ? toProject(rows[0]) : undefined;
+    },
+
+    /**
+     * Usage for one project.
+     *
+     * The backup figures come from a correlated subquery rather than a join,
+     * because a project accumulates one `backup_runs` row per run: joining would
+     * multiply the single `project_databases` row by the backup history and then
+     * need a `DISTINCT` or a `GROUP BY` over every column to undo it. Two scalar
+     * subqueries against an indexed `project_id` are cheaper and say what they
+     * mean.
+     *
+     * `size_bytes` is only trustworthy on a run that finished, so both the
+     * timestamp and the size are taken from the same latest *succeeded* row —
+     * reading them from separate subqueries could pair a size with a different
+     * run's time.
+     */
+    async projectUsage(projectId) {
+      const { rows } = await pool.query<ProjectUsage>(
+        `SELECT d.disk_limit_mb, d.disk_used_bytes::text AS disk_used_bytes,
+                d.disk_checked_at, d.disk_state::text AS disk_state,
+                d.ram_limit_mb, d.ram_booked_mb,
+                d.archive_state::text AS archive_state,
+                d.wal_archive_lag_seconds, d.wal_archive_pending,
+                d.wal_last_archived_at,
+                d.wal_archive_failed_count::text AS wal_archive_failed_count,
+                d.backup_checked_at, d.backup_check_ok, d.last_active_at,
+                b.finished_at AS last_backup_at,
+                b.size_bytes::text AS last_backup_bytes,
+                (SELECT count(*)::text FROM backup_runs
+                  WHERE project_id = d.project_id AND status = 'succeeded')
+                  AS successful_backup_runs
+           FROM project_databases d
+           LEFT JOIN LATERAL (
+                SELECT finished_at, size_bytes FROM backup_runs
+                 WHERE project_id = d.project_id AND status = 'succeeded'
+                 ORDER BY finished_at DESC NULLS LAST
+                 LIMIT 1
+           ) b ON true
+          WHERE d.project_id = $1`, [projectId]);
+      return rows[0];
     },
 
     async getProjectDetail(ref) {

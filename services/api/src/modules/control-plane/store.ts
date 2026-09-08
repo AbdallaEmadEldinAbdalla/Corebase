@@ -1,5 +1,6 @@
 import type { Project, ProjectStatus, JobPayload } from '@steadhold/types';
 import type { Actor } from '@steadhold/audit';
+import type { ProjectUsage } from './serialize.ts';
 
 /**
  * What a ready project exposes to its owner (platform-api contract). Assembled
@@ -111,6 +112,13 @@ export interface ControlPlaneStore {
    * soft-deleted projects: they keep a volume, a port and a disk reservation for
    * the recovery window, so they are as real to the node as running ones.
    */
+  /**
+   * What a project is using. Optional for the same reason `requestLifecycle` is:
+   * the memory store has no data plane, so there is no `project_databases` row to
+   * read and nothing honest to return. The route answers 501 rather than a shape
+   * full of zeroes, which would be indistinguishable from a project using nothing.
+   */
+  projectUsage?(projectId: string): Promise<ProjectUsage | undefined>;
   countProjectsInOrg?(organizationId: string): Promise<number>;
   /**
    * Pause or resume (P2c, D-008).
