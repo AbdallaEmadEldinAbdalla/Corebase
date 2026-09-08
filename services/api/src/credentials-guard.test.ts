@@ -25,6 +25,12 @@ const walk = (dir: string): string[] =>
 
 describe('no default credentials anywhere in the API', () => {
   it('an unconfigured app authenticates nothing', async () => {
+    // "Unconfigured" has to mean it, and `buildApp` falls back to
+    // `process.env.SH_STATIC_TOKEN` (app.ts) — so with the variable exported, as
+    // STATUS §2's recipe does, the app under test is configured and accepts
+    // exactly the token this asserts it must reject. The assertion was right and
+    // the fixture was not.
+    delete process.env['SH_STATIC_TOKEN'];
     const app = buildApp({});
     for (const authorization of ['Bearer dev-token', 'Bearer test-token', 'Bearer changeme']) {
       const res = await app.inject({ method: 'GET', url: '/v1/projects', headers: { authorization } });

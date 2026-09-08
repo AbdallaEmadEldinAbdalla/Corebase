@@ -3974,6 +3974,16 @@ role distinction exists, the tests present each role.
 
 
 
+**A test's fixture includes the environment it did not set.** §5 already said a
+test declares its fixture in every dimension; two files were still reading ambient
+configuration. `project-auth.e2e.test.ts` and `credentials-guard.test.ts` now delete
+the variables they depend on (**D-415**), because exporting STATUS §2's run-by-hand
+recipe — which is a recipe for running the *services* — turned 78 passing tests into
+78 failures that read exactly like a rename regression: every request expecting
+success returned 401, and the only tests that stayed green were the ones asserting
+that things are refused. The lesson is the failure *shape*: when a suite fails and
+its negative tests all pass, suspect the fixture before the product.
+
 **A guard covers every surface that can break the rule, not the surface where it
 was first broken.** The token guard was written after five `var(--sh-space-5)`
 references with no fallback collapsed five paddings to zero. It scanned the

@@ -56,6 +56,17 @@ let secrets: ReturnType<typeof createSecretStore>;
 let up = false; let reason = '';
 
 beforeAll(async () => {
+  // The fixture has to own the project domain, because the two halves of this
+  // suite read it from different places: the API resolves an apikey's issuer via
+  // `SH_PROJECT_DOMAIN` (project-auth/context.ts), while the provisioning saga
+  // mints that key from `deps.projectDomain`, which this file does not set. With
+  // the variable exported — as STATUS §2's run-by-hand recipe and `scripts/dev.sh`
+  // both do — keys get minted for `<ref>.steadhold.app` and verified against
+  // `<ref>.localhost`, so all 77 tests that expect a success return 401. The real
+  // services are fine: both composition roots pass the value into deps. It is only
+  // this fixture that was half-declared, so it declares itself now.
+  delete process.env['SH_PROJECT_DOMAIN'];
+  delete process.env['SH_JWT_ISSUER'];
   pool = new Pool({ connectionString: DB, max: 6, connectionTimeoutMillis: 1500 });
   kekDir = mkdtempSync(join(tmpdir(), 'sh-kek-p4b-'));
   writeFileSync(join(kekDir, 'kek_2026_09.key'), randomBytes(32));
