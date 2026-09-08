@@ -6,12 +6,12 @@ describe('PAT format', () => {
     // Not a KDF, on purpose: a PAT is 30 bytes of CSPRNG, so there is no
     // dictionary to attack — a memory-hard hash here would only add 100ms to
     // every authenticated request.
-    expect(hashToken('cbp_abc')).toMatch(/^[0-9a-f]{64}$/);
-    expect(hashToken('cbp_abc')).toBe(hashToken('cbp_abc'));
-    expect(hashToken('cbp_abc')).not.toBe(hashToken('cbp_abd'));
+    expect(hashToken('shp_abc')).toMatch(/^[0-9a-f]{64}$/);
+    expect(hashToken('shp_abc')).toBe(hashToken('shp_abc'));
+    expect(hashToken('shp_abc')).not.toBe(hashToken('shp_abd'));
   });
 
   it('uses the documented prefix', () => {
-    expect(TOKEN_PREFIX).toBe('cbp_');
+    expect(TOKEN_PREFIX).toBe('shp_');
   });
 });

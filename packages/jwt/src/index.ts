@@ -34,7 +34,7 @@ export interface Keypair {
   privateKeyPem: string;
   /** SPKI PEM. Safe to publish; the JWKS endpoint serves its JWK form. */
   publicKeyPem: string;
-  /** `cbk_YYYY_MM_<4hex>` per the credentials doc. */
+  /** `shk_YYYY_MM_<4hex>` per the credentials doc. */
   kid: string;
 }
 
@@ -42,7 +42,7 @@ export interface Keypair {
 export function newKid(now = new Date()): string {
   const yyyy = now.getUTCFullYear();
   const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
-  return `cbk_${yyyy}_${mm}_${randomBytes(2).toString('hex')}`;
+  return `shk_${yyyy}_${mm}_${randomBytes(2).toString('hex')}`;
 }
 
 export function generateKeypair(kid = newKid()): Keypair {
@@ -187,4 +187,20 @@ export function projectKeyClaims(args: {
     iat,
     exp: iat + PROJECT_KEY_TTL_SECONDS,
   };
+}
+
+/**
+ * The display label for a project API key (D-218).
+ *
+ * A *label*, not a literal prefix: the key is a JWT, and a JWT's leading
+ * characters are the base64 of its header — byte-identical for every key of every
+ * project, which is why the first live run showed both of a project's keys as
+ * `eyJhbGciOiJF`.
+ *
+ * Here because it was written out twice, in the provisioning saga and in key
+ * rotation, from the same template — so a rotated key could have been labelled
+ * differently from the one it replaced.
+ */
+export function keyLabel(role: 'anon' | 'service_role', ref: string): string {
+  return `shk_${role === 'anon' ? 'anon' : 'srv'}_${ref.slice(0, 4)}`;
 }

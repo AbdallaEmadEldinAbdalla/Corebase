@@ -263,7 +263,7 @@ export function createOrgStore(pool: Pool) {
     async invite(args: {
       orgId: string; email: string; role: Role; invitedBy: string; actor: Actor;
     }): Promise<{ invite: InviteRecord; token: string }> {
-      const token = 'cbi_' + randomBytes(24).toString('base64url');
+      const token = 'shi_' + randomBytes(24).toString('base64url');
       const client: PoolClient = await pool.connect();
       try {
         await client.query('BEGIN');

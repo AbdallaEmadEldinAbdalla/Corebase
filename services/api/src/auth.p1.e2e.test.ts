@@ -246,7 +246,7 @@ describe('P1c — personal access tokens', () => {
       headers: { cookie: `${SESSION_COOKIE}=${cookie}`, [CSRF_HEADER]: csrf },
       payload: { name: 'laptop' } });
     const token = created.json().token as string;
-    expect(token).toMatch(/^cbp_[A-Za-z0-9_-]{40}$/);
+    expect(token).toMatch(/^shp_[A-Za-z0-9_-]{40}$/);
 
     const list = await a.inject({
       method: 'GET', url: '/v1/auth/tokens', headers: { cookie: `${SESSION_COOKIE}=${cookie}` } });
@@ -316,10 +316,10 @@ describe('P1c — personal access tokens', () => {
     expect(res.statusCode).toBe(404);
   });
 
-  t('a forged or unknown cbp_ token is refused', async () => {
+  t('a forged or unknown shp_ token is refused', async () => {
     const res = await app().inject({
       method: 'GET', url: '/v1/auth/me',
-      headers: { authorization: 'Bearer cbp_' + 'x'.repeat(40) } });
+      headers: { authorization: 'Bearer shp_' + 'x'.repeat(40) } });
     expect(res.statusCode).toBe(401);
   });
 

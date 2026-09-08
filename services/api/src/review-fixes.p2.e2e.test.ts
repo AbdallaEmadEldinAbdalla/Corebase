@@ -129,7 +129,7 @@ describe('P2 review — a user can be deleted without a foreign-key violation', 
       [orgId, `invitee-${Date.now()}@steadhold.test`, `hash-${Date.now()}`, userId]);
     await pool.query(
       `insert into project_api_keys (project_id, kind, key_prefix, key_hash, created_by)
-       values ($1, 'anon', 'cbk_anon_rv', $2, $3)`, [p.id, `kh-${Date.now()}`, userId]);
+       values ($1, 'anon', 'shk_anon_rv', $2, $3)`, [p.id, `kh-${Date.now()}`, userId]);
 
     await expect(pool.query(`delete from users where id = $1`, [userId])).resolves.toBeTruthy();
 

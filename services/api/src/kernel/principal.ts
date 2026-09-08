@@ -6,10 +6,10 @@ import {
   SESSION_COOKIE, CSRF_HEADER, csrfOk, readCookie,
   type Session, type SessionStore,
 } from './sessions.ts';
-import type { TokenStore } from './tokens.ts';
+import { TOKEN_PREFIX, type TokenStore } from './tokens.ts';
 
 /**
- * Dual-mode authentication (D-062): a dashboard session cookie, or a `cbp_`
+ * Dual-mode authentication (D-062): a dashboard session cookie, or a `shp_`
  * personal access token.
  *
  * One function resolves both, so every route asks the same question and no route
@@ -73,7 +73,7 @@ export async function resolvePrincipal(
   const bearer = typeof authorization === 'string' && authorization.startsWith('Bearer ')
     ? authorization.slice(7).trim() : undefined;
 
-  if (bearer && deps.tokens && bearer.startsWith('cbp_')) {
+  if (bearer && deps.tokens && bearer.startsWith(TOKEN_PREFIX)) {
     const resolved = await deps.tokens.resolve(bearer);
     if (resolved) {
       return {
@@ -81,7 +81,7 @@ export async function resolvePrincipal(
         tokenId: resolved.tokenId, scopes: resolved.scopes,
       };
     }
-    // A `cbp_` that does not resolve is revoked, expired or forged. Saying which
+    // A `shp_` that does not resolve is revoked, expired or forged. Saying which
     // would help someone testing stolen tokens.
     throw ApiError.unauthorized();
   }

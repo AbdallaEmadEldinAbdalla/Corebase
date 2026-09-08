@@ -13,7 +13,7 @@ Per D-014: each project gets an ES256 (ECDSA P-256 + SHA-256) keypair generated 
 **Header**
 
 ```json
-{ "alg": "ES256", "typ": "JWT", "kid": "cbk_2026_08_7f3a" }
+{ "alg": "ES256", "typ": "JWT", "kid": "shk_2026_08_7f3a" }
 ```
 
 **Claims**
@@ -46,7 +46,7 @@ still unemitted.*
 
 ```json
 { "keys": [ { "kty": "EC", "crv": "P-256", "x": "…", "y": "…",
-              "kid": "cbk_2026_08_7f3a", "alg": "ES256", "use": "sig" } ] }
+              "kid": "shk_2026_08_7f3a", "alg": "ES256", "use": "sig" } ] }
 ```
 
 - Served by the auth module from the routing-table's cached public key(s); no control-plane query on the hot path (D-051).

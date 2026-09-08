@@ -19,7 +19,7 @@ import {
 import type { SecretStore } from '@steadhold/secrets';
 import { SECRET_NAMES } from '@steadhold/secrets';
 import { createHash } from 'node:crypto';
-import { generateKeypair, sign as signJwt, projectKeyClaims, toJwk } from '@steadhold/jwt';
+import { generateKeypair, sign as signJwt, projectKeyClaims, toJwk, keyLabel } from '@steadhold/jwt';
 import {
   auditImageRoles, connectAsSuperuser, ensureDeveloperRole, ensureStorageOwnership,
   setRolePassword,
@@ -1930,12 +1930,12 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
           projectKeyClaims({ ref: project.ref, role, issuer }),
           { privateKeyPem, kid });
         const name = role === 'anon' ? SECRET_NAMES.anonKey : SECRET_NAMES.serviceRoleKey;
-        // `cbk_anon_kxqw` / `cbk_srv_kxqw`, per the platform-API example — a
+        // `shk_anon_kxqw` / `shk_srv_kxqw`, per the platform-API example — a
         // *label*, not a slice of the token. A literal prefix of a JWT is the
         // base64 of its header, which is byte-identical for every key of every
         // project and so identifies nothing: the first live run showed both keys
         // displaying as "eyJhbGciOiJF".
-        const prefix = `cbk_${role === 'anon' ? 'anon' : 'srv'}_${project.ref.slice(0, 4)}`;
+        const prefix = keyLabel(role, project.ref);
         // Envelope-encrypted (D-214) so a reveal is byte-identical, and hashed in
         // project_api_keys so revocation is a lookup that never needs the key.
         await secrets.put(projectId, name, token);

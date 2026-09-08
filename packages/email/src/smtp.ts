@@ -227,7 +227,7 @@ function buildMime(m: OutgoingMessage, messageId: string): string {
     // is what tells a provider this is not a campaign.
     'Auto-Submitted: auto-generated',
     'X-Auto-Response-Suppress: All',
-    ...(m.tag ? [`X-CB-Tag: ${headerSafe(m.tag)}`] : []),
+    ...(m.tag ? [`X-SH-Tag: ${headerSafe(m.tag)}`] : []),
     `Content-Type: multipart/alternative; boundary="${boundary}"`,
   ];
   // Text first, HTML second, and the order is meaningful in multipart/alternative:

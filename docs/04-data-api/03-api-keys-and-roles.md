@@ -13,7 +13,7 @@ Full specification of the two-key model (D-029): what the `anon` and `service_ro
 Both keys are ES256 JWTs signed with the project's private key (D-014) — the same keypair that signs user access tokens, so the data plane verifies everything with one cached JWKS.
 
 ```text
-header   {"alg": "ES256", "typ": "JWT", "kid": "cbk_2026_08_7f3a"}
+header   {"alg": "ES256", "typ": "JWT", "kid": "shk_2026_08_7f3a"}
 payload  {
   "iss":  "steadhold",
   "ref":  "abck3xw7qpl2vnd8",     // the project — gateway cross-checks vs Host
@@ -119,7 +119,7 @@ The keys are *derivable*: signing the fixed claims above with the project privat
 **Display rule (D-107):** these two keys are **not** show-once. The dashboard re-derives them on demand by signing with the project private key (decrypted via KMS per D-035, in worker/API memory only):
 
 - `anon` — displayed freely on the project's API settings page. It ships in client bundles; treating it as a secret would be theater.
-- `service_role` — masked by default (`cbk_7f3a…•••`), revealed via an explicit click that emits an `api_key.revealed` audit event (actor, IP, request_id → `audit_logs`, [audit & admin access](../02-control-plane/05-audit-and-admin-access.md)).
+- `service_role` — masked by default (`shk_7f3a…•••`), revealed via an explicit click that emits an `api_key.revealed` audit event (actor, IP, request_id → `audit_logs`, [audit & admin access](../02-control-plane/05-audit-and-admin-access.md)).
 
 For the derived JWT to be byte-identical across reveals (so `key_hash` revocation lookups stay valid), signing uses **deterministic ECDSA (RFC 6979)** and the stored `iat` from keypair issuance. D-060's shown-once rule continues to govern everything *not* derivable from a stored keypair (platform PATs, invite tokens, DB passwords).
 
@@ -128,7 +128,7 @@ For the derived JWT to be byte-identical across reveals (so `key_hash` revocatio
 Rotation rotates the **keypair**; the API keys and all user tokens follow from it. Normal (non-emergency) flow:
 
 ```text
-1. generate  — new ES256 keypair, kid cbk_2026_11_a91c; envelope-encrypt (D-035)
+1. generate  — new ES256 keypair, kid shk_2026_11_a91c; envelope-encrypt (D-035)
 2. dual-publish — JWKS now serves BOTH kids (old + new); pushed to gateway
               routing entries (Redis pub/sub, ≤30 s, D-104) and re-rendered into
               each PostgREST jwks.json + `NOTIFY pgrst, 'reload config'` (D-100)

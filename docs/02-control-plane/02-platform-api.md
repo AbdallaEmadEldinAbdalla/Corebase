@@ -13,7 +13,7 @@ Two principals, one permission model:
 | Client | Mechanism | Notes |
 |---|---|---|
 | Dashboard (browser) | **Session cookie** — httpOnly, Secure, SameSite=Lax, opaque session id backed by Redis; CSRF via double-submit token on mutating requests | Sessions expire after 7 days idle, 30 days absolute |
-| CLI / CI / scripts | **Personal Access Token (PAT)** — `Authorization: Bearer cbp_<40 chars>`; created in dashboard or via `steadhold login` device flow | Stored hash-only per D-060; optional expiry; scoped (see D-062) |
+| CLI / CI / scripts | **Personal Access Token (PAT)** — `Authorization: Bearer shp_<40 chars>`; created in dashboard or via `steadhold login` device flow | Stored hash-only per D-060; optional expiry; scoped (see D-062) |
 
 Both resolve to a `user_id`; every request is then authorized against `organization_members.role`. Rules the API enforces (not the schema — see [data model](01-data-model.md)):
 
@@ -84,7 +84,7 @@ Operator (staff) access is a separate surface — see [audit & admin access](05-
 |---|---|---|
 | `POST /v1/projects` | Create → returns `202` + project in `creating` | `Idempotency-Key` required |
 | `GET /v1/projects?org_id=` | List (cursor-paginated); excludes `deleted`, includes `soft_deleted` with `restorable_until`. Scoped to the caller's own organizations | |
-| `GET /v1/projects/:ref/keys` | `anon` returned in the clear (publishable by design); `service_role` needs `?reveal=true`, the `key.manage` capability, and writes a `key.revealed` audit row | Prefix is a label — `cbk_anon_<ref4>` (D-218) |
+| `GET /v1/projects/:ref/keys` | `anon` returned in the clear (publishable by design); `service_role` needs `?reveal=true`, the `key.manage` capability, and writes a `key.revealed` audit row | Prefix is a label — `shk_anon_<ref4>` (D-218) |
 | `GET /v1/projects/:ref/.well-known/jwks.json` | Per-project JWKS (D-014). Unauthenticated and cacheable: a public key is public, and a JWKS behind auth breaks every verifier when a credential rotates | |
 | `GET /v1/projects/:ref` | Detail incl. `database` block when `ready` | |
 | `PATCH /v1/projects/:ref` | Rename, change `project_group_id` | `ref`, `region`, `environment` immutable |
@@ -161,8 +161,8 @@ The client polls `GET /v1/projects/kxqwrtplmzensfba` (or subscribes to dashboard
     }
   },
   "api_keys": [
-    { "kind": "anon", "prefix": "cbk_anon_kxqw" },
-    { "kind": "service_role", "prefix": "cbk_srv_kxqw" }
+    { "kind": "anon", "prefix": "shk_anon_kxqw" },
+    { "kind": "service_role", "prefix": "shk_srv_kxqw" }
   ]
 }
 ```
@@ -209,7 +209,7 @@ Every 429 carries `Retry-After` plus `X-RateLimit-Limit/-Remaining/-Reset` heade
 
 ## Decisions
 
-- **D-062 — Platform API authentication is dual-mode: httpOnly session cookies (+CSRF token) for the dashboard, and prefixed bearer PATs (`cbp_...`, hash-stored, optionally expiring) for CLI/CI. PATs carry coarse scopes in V1: `read`, `write`, `admin`.** *(Rationale: cookies give the browser XSS-resistant sessions; bearer tokens are the only sane CLI/CI story; coarse scopes ship now, fine-grained scoping is deferred until someone needs it.)*
+- **D-062 — Platform API authentication is dual-mode: httpOnly session cookies (+CSRF token) for the dashboard, and prefixed bearer PATs (`shp_...`, hash-stored, optionally expiring) for CLI/CI. PATs carry coarse scopes in V1: `read`, `write`, `admin`.** *(Rationale: cookies give the browser XSS-resistant sessions; bearer tokens are the only sane CLI/CI story; coarse scopes ship now, fine-grained scoping is deferred until someone needs it.)*
 - **D-063 — `Idempotency-Key` is required on project-lifecycle mutations and honored on all mutations: 24h replay window, stored-response semantics, `409` on key reuse with a different body, and pass-through into `provisioning_jobs.idempotency_key`.** *(Rationale: makes client retries safe by construction and gives the two-phase enqueue its key for free — one idempotency system end-to-end instead of two.)*
 
 Design rule without its own D number: not-found and no-permission collapse to `404` (`*_NOT_FOUND` codes) for any resource outside the caller's orgs — a 403/404 distinction is a cross-tenant existence oracle, so it is denied by construction (already reflected in the error catalog above).

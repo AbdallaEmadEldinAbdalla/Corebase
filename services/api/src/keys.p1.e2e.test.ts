@@ -111,7 +111,7 @@ async function projectWithKeys(owner: Who): Promise<{ ref: string; projectId: st
       `insert into project_api_keys (project_id, kind, key_hash, key_prefix)
        values ($1, $2, $3, $4) on conflict do nothing`,
       [projectId, role, randomBytes(32).toString('hex'),
-       `cbk_${role === 'anon' ? 'anon' : 'srv'}_${ref.slice(0, 4)}`]);
+       `shk_${role === 'anon' ? 'anon' : 'srv'}_${ref.slice(0, 4)}`]);
   }
   return { ref, projectId, orgId, kid: pair.kid };
 }
@@ -140,8 +140,8 @@ describe('P1e — the keys endpoint', () => {
     const res = await app.inject({ method: 'GET', url: `/v1/projects/${ref}/keys`, headers: as(owner) });
     const prefixes = (res.json() as { api_keys: Array<{ prefix: string }> }).api_keys.map((k) => k.prefix);
     expect(new Set(prefixes).size).toBe(2);
-    expect(prefixes).toContain(`cbk_anon_${ref.slice(0, 4)}`);
-    expect(prefixes).toContain(`cbk_srv_${ref.slice(0, 4)}`);
+    expect(prefixes).toContain(`shk_anon_${ref.slice(0, 4)}`);
+    expect(prefixes).toContain(`shk_srv_${ref.slice(0, 4)}`);
   });
 
   t('reveals service_role to an owner and audits who looked', async () => {

@@ -182,14 +182,20 @@ cmd_harden_egress() {
     iptables -A DOCKER-USER -s $pool -o eth0 -j DROP
     iptables -A DOCKER-USER -j RETURN
 
+    # A node provisioned before D-433 carries the pre-rename chain, and an
+    # unreferenced chain cannot be deleted — so drop the INPUT jump first.
+    iptables -D INPUT -s $pool -j CB-TENANT-INPUT 2>/dev/null || true  # pre-rename
+    iptables -F CB-TENANT-INPUT 2>/dev/null || true  # pre-rename
+    iptables -X CB-TENANT-INPUT 2>/dev/null || true  # pre-rename
+
     # The node itself. Its own chain so this is idempotent: flush and refill
     # rather than appending a second copy on every run.
-    iptables -N CB-TENANT-INPUT 2>/dev/null || true
-    iptables -F CB-TENANT-INPUT
-    iptables -A CB-TENANT-INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
-    iptables -A CB-TENANT-INPUT -j DROP
-    iptables -D INPUT -s $pool -j CB-TENANT-INPUT 2>/dev/null || true
-    iptables -I INPUT 1 -s $pool -j CB-TENANT-INPUT
+    iptables -N SH-TENANT-INPUT 2>/dev/null || true
+    iptables -F SH-TENANT-INPUT
+    iptables -A SH-TENANT-INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+    iptables -A SH-TENANT-INPUT -j DROP
+    iptables -D INPUT -s $pool -j SH-TENANT-INPUT 2>/dev/null || true
+    iptables -I INPUT 1 -s $pool -j SH-TENANT-INPUT
   " >/dev/null || { echo "  ✗ could not apply the egress policy" >&2; return 1; }
 
   echo "  ✓ egress default-deny applied to $pool (allowed: DNS, $store_ip:${store_port:-9000})"

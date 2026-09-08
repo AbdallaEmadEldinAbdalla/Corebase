@@ -182,7 +182,7 @@ describe('P1a — api keys are hash-only (D-060)', () => {
     const hash = 'sha256:' + Date.now();
     const insert = () => pool.query(
       `insert into project_api_keys (project_id, kind, key_hash, key_prefix)
-       values ($1, 'anon', $2, 'cbk_anon_xx')`, [p[0]!.id, hash]);
+       values ($1, 'anon', $2, 'shk_anon_xx')`, [p[0]!.id, hash]);
     await insert();
     await expect(insert()).rejects.toThrow(/duplicate key|unique/i);
     await pool.query(`delete from project_api_keys where key_hash = $1`, [hash]);

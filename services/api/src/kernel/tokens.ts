@@ -2,7 +2,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import type { Pool } from 'pg';
 
 /**
- * Personal access tokens (D-062): `Authorization: Bearer cbp_<40 chars>` for the
+ * Personal access tokens (D-062): `Authorization: Bearer shp_<40 chars>` for the
  * CLI and CI.
  *
  * Hash-only, per D-060 — the same rule as project API keys. The token is returned
@@ -16,9 +16,16 @@ import type { Pool } from 'pg';
  * rate limit.
  */
 
-export const TOKEN_PREFIX = 'cbp_';
+/**
+ * A prefix exists so a leaked credential is greppable by a secret scanner
+ * (D-112's reasoning for the refresh-token prefix). It is exported because it is
+ * the *only* definition: `principal.ts` used to test `bearer.startsWith('shp_')`
+ * with its own literal, so changing this constant would have left the generator
+ * and the recogniser disagreeing — every new token minted and none accepted.
+ */
+export const TOKEN_PREFIX = 'shp_';
 const TOKEN_BYTES = 30;                       // → 40 base64url characters
-/** `cbp_` + 8 characters: enough to identify, useless to authenticate with. */
+/** `shp_` + 8 characters: enough to identify, useless to authenticate with. */
 const DISPLAY_CHARS = 8;
 
 export interface IssuedToken {

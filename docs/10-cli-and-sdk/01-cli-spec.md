@@ -12,7 +12,7 @@ Per **D-026**: TypeScript, lives in the monorepo (D-010), distributed via npm �
 
 - **Framework: commander** — boring, ubiquitous, zero-dependency-drama. Clipanion's class-per-command model buys type rigor the CLI's flat command tree doesn't need.
 - **Node ≥ 20** required (matches the monorepo toolchain); the CLI refuses to start on older runtimes with a clear message rather than failing mid-command.
-- All control-plane calls go to the [platform API](../02-control-plane/02-platform-api.md) (`api.steadhold.dev/v1`) authenticated with a PAT (`Authorization: Bearer cbp_...`, D-062); the CLI sends `Idempotency-Key` on every mutating call it generates.
+- All control-plane calls go to the [platform API](../02-control-plane/02-platform-api.md) (`api.steadhold.dev/v1`) authenticated with a PAT (`Authorization: Bearer shp_...`, D-062); the CLI sends `Idempotency-Key` on every mutating call it generates.
 
 ### Credential storage (D-135)
 

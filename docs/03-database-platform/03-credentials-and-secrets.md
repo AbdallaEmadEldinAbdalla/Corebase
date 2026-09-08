@@ -37,7 +37,7 @@ Non-role credentials:
 
 - All passwords/tokens: **32 bytes from the platform CSPRNG (`crypto.randomBytes`), base64url — 43 chars, ~256 bits**. No wordlists, no ambiguity trimming (these are never typed by hand).
 - Postgres stores only SCRAM-SHA-256 verifiers (`password_encryption = scram-sha-256`, [provisioning §3](01-postgres-provisioning.md)). The plaintext exists in the control plane solely to render connection strings for the customer — encrypted as §3, never logged, never in `project_databases` proper (proposal §58 honored).
-- JWT keypairs: P-256 generated in the control plane at provision; private key immediately envelope-encrypted; `kid` per the api-keys scheme `cbk_YYYY_MM_<4hex>` (e.g. `cbk_2026_08_7f3a`).
+- JWT keypairs: P-256 generated in the control plane at provision; private key immediately envelope-encrypted; `kid` per the api-keys scheme `shk_YYYY_MM_<4hex>` (e.g. `shk_2026_08_7f3a`).
 - API keys: JWTs signed with the project key — `{ iss, ref, role: "anon" | "service_role", iat, exp: iat+10y }` with the `kid` in the header ([api-keys-and-roles](../04-data-api/03-api-keys-and-roles.md), D-107). The `ref` claim binds the key to its project — the gateway cross-checks it against the resolved Host. Keys carry **no `jti`** and are never stored as JWTs: they are deterministically re-derived on demand (RFC 6979 signing over fixed claims with the stored `iat`), byte-identical across reveals. Revocation is by SHA-256 `key_hash` in the gateway's in-memory revocation set (≤30 s propagation, D-104) — never a control-plane registry check per request (D-051).
 
 ### 3. Storage: envelope encryption (D-035) and the master-key choice
@@ -93,7 +93,7 @@ All rotations are audited events (proposal §59) and run as idempotent jobs.
 
 Constraint: the keypair signs both auth-service tokens *and* the two API keys (D-014, D-029) — so keypair rotation **includes** API-key reissue, and the JWKS needs a dual-publish window so in-flight access tokens stay verifiable.
 
-1. Generate keypair B (new `kid`, e.g. `cbk_2026_11_a91c`); store encrypted.
+1. Generate keypair B (new `kid`, e.g. `shk_2026_11_a91c`); store encrypted.
 2. **Dual-publish JWKS**: endpoint serves public A + public B. Data-plane verifiers (gateway, PostgREST config, auth service) already select by `kid`.
 3. Auth service signs all *new* access/refresh-derived tokens with B.
 4. Reissue API keys under B — re-derived deterministically per D-107 ([api-keys-and-roles](../04-data-api/03-api-keys-and-roles.md)); customer swaps them at their pace within the window.

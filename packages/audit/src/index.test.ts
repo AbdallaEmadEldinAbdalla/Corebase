@@ -42,11 +42,11 @@ describe('redaction by key', () => {
     const out = redact({
       idempotency_key: 'demo-1788175004',
       kek_id: 'kek_2026_08',
-      key_prefix: 'cbk_anon_kxq',
+      key_prefix: 'shk_anon_kxq',
     });
     expect(out['idempotency_key']).toBe('demo-1788175004');
     expect(out['kek_id']).toBe('kek_2026_08');
-    expect(out['key_prefix']).toBe('cbk_anon_kxq');
+    expect(out['key_prefix']).toBe('shk_anon_kxq');
   });
 
   it('still checks the value of an allowlisted key', () => {

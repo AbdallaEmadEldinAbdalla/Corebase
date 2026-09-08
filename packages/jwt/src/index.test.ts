@@ -115,8 +115,8 @@ describe('claims', () => {
     const token = sign(claims, key);
     expect(() => verify(token, { publicKeyPem: key.publicKeyPem, issuer: 'https://evil.example' }))
       .toThrow(/issuer/);
-    expect(() => verify(token, { publicKeyPem: key.publicKeyPem, kid: 'cbk_2020_01_dead' }))
-      .toThrow(/expected "cbk_2020_01_dead"/);
+    expect(() => verify(token, { publicKeyPem: key.publicKeyPem, kid: 'shk_2020_01_dead' }))
+      .toThrow(/expected "shk_2020_01_dead"/);
   });
 
   it('binds a project key to its project and gives it ten years', () => {
@@ -133,7 +133,7 @@ describe('claims', () => {
 
 describe('key ids and JWKS', () => {
   it('a kid says when it was minted', () => {
-    expect(newKid(new Date('2026-08-15T00:00:00Z'))).toMatch(/^cbk_2026_08_[0-9a-f]{4}$/);
+    expect(newKid(new Date('2026-08-15T00:00:00Z'))).toMatch(/^shk_2026_08_[0-9a-f]{4}$/);
   });
 
   it('exports a JWK with an explicit purpose', () => {

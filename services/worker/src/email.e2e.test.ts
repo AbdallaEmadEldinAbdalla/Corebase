@@ -182,7 +182,7 @@ describe('P4d — a real SMTP send', () => {
     expect(raw).toContain('multipart/alternative');
     expect(raw.indexOf('text/plain')).toBeLessThan(raw.indexOf('text/html'));
     expect(raw).toContain('Auto-Submitted: auto-generated');
-    expect(raw).toContain('X-CB-Tag: confirmation');
+    expect(raw).toContain('X-SH-Tag: confirmation');
 
     // Both parts are base64 in the wire format, so decode before asserting.
     const decoded = Buffer.from(

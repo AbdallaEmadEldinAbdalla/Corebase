@@ -1,5 +1,5 @@
 import type { Pool } from 'pg';
-import { generateKeypair, sign as signJwt, projectKeyClaims, toJwk } from '@steadhold/jwt';
+import { generateKeypair, sign as signJwt, projectKeyClaims, toJwk, keyLabel } from '@steadhold/jwt';
 import { SECRET_NAMES, type SecretStore } from '@steadhold/secrets';
 import { createHash } from 'node:crypto';
 
@@ -240,7 +240,7 @@ async function remintApiKeys(
     const name = role === 'anon' ? SECRET_NAMES.anonKey : SECRET_NAMES.serviceRoleKey;
     // Same reason as above: these names already exist from provisioning.
     await deps.secrets.replace(projectId, name, token);
-    const prefix = `cbk_${role === 'anon' ? 'anon' : 'srv'}_${ref.slice(0, 4)}`;
+    const prefix = keyLabel(role, ref);
     await deps.pool.query(
       `INSERT INTO project_api_keys (project_id, kind, key_hash, key_prefix)
        VALUES ($1, $2, $3, $4) ON CONFLICT (key_hash) DO NOTHING`,

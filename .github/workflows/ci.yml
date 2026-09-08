@@ -293,19 +293,31 @@ jobs:
       # by pattern. That is a test nobody runs and nobody misses, so it fails here
       # instead.
       - name: nothing still carries the pre-rename prefix
-        # D-412 moved CB_/cb-/cb_ to SH_/sh-/sh_, and the sweep keyed on those
-        # three separators — so `cb:` and `cb.` were invisible to it and survived
-        # in the places that matter least to read and most at runtime: Redis key
-        # prefixes (`cb:session:`, `cb:rl:`, `cb:mail:`), browser storage keys
-        # (`cb.csrf`, `cb.lastOrg`) and a DOM event name. A rename is not finished
-        # when the identifiers match; it is finished when nothing matches the old
-        # thing at all, and that is a grep, not a judgement.
+        # This guard has now been widened twice, and each time for the same reason:
+        # it encoded the shapes somebody had thought of.
+        #
+        #  1. D-412 swept CB_/cb-/cb_ — so `cb:` and `cb.` survived, in Redis key
+        #     prefixes (`cb:session:`) and browser storage keys (`cb.csrf`).
+        #  2. D-422 added those — and `cbp_`, `cbi_`, `cbk_` still survived,
+        #     because the character after `cb` was a letter. Those were the
+        #     *credential* prefixes: personal access tokens, invite tokens, and
+        #     the JWT key id in every project's JWKS (D-433).
+        #
+        # So the pattern is now "cb, then up to six alphanumerics, then a
+        # separator", which is the shape of a prefix rather than a list of the
+        # ones already found. A false positive costs one exclusion; a false
+        # negative cost two rounds of this.
         run: |
-          hits="$(git grep -nIE '\bcb[-_.:]' \
+          # One legitimate reason to write the old name remains: code whose
+          # job is to *remove* the old thing from a host provisioned before
+          # the rename. Such a line carries a `pre-rename` marker, which has
+          # to be typed deliberately and says why it is there.
+          hits="$(git grep -nIE '\b[cC][bB][a-zA-Z0-9]{0,6}[-_.:]' \
             -- ':!STATUS.md' ':!docs/00-foundation/05-decision-log.md' \
-               ':!.github/workflows/ci.yml' || true)"
+               ':!.github/workflows/ci.yml' \
+            | grep -v 'pre-rename' || true)"
           if [ -n "$hits" ]; then
-            echo "These still carry the pre-rename prefix (D-412):"
+            echo "These still carry the pre-rename prefix (D-412, D-422, D-433):"
             echo "$hits"
             exit 1
           fi

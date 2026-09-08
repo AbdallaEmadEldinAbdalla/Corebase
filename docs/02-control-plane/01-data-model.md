@@ -200,8 +200,8 @@ CREATE TABLE user_access_tokens (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id      uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name         text NOT NULL,
-  token_hash   text NOT NULL UNIQUE,      -- SHA-256 of the full `cbp_…` token
-  token_prefix text NOT NULL,             -- `cbp_` + first 8, for display
+  token_hash   text NOT NULL UNIQUE,      -- SHA-256 of the full `shp_…` token
+  token_prefix text NOT NULL,             -- `shp_` + first 8, for display
   scopes       text[] NOT NULL DEFAULT '{}',   -- D-062's scoping, empty = full access
   expires_at   timestamptz,               -- NULL = no expiry (OQ-065 open)
   last_used_at timestamptz,               -- written by the resolve query itself
