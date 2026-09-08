@@ -1,3 +1,8 @@
+import {
+  BarChart3, Cable, Gauge, KeyRound, LayoutGrid, Settings, Users,
+  type LucideIcon,
+} from 'lucide-react';
+
 /**
  * The Steadhold mark — the chiselled S, cut at the waist.
  *
@@ -80,48 +85,44 @@ export function OrgAvatar({ name, size = 18 }: { name: string; size?: number }) 
 }
 
 /**
- * Section icons for the sidebar. Also drawn here, for the same reason as the logo,
- * and kept to one visual weight so the nav does not look assembled from clip art.
+ * Section icons for the sidebar — **Lucide** (ISC), not hand-drawn.
  *
- * They replace the board's generic filled square, which was identical for every
- * item — seven rows of the same shape is a decoration column, not a scanning aid.
+ * These were seven hand-written path strings, and the experiment failed twice
+ * over. It failed on *quality*: `keys` shipped filled, which left a key head with
+ * no counter and made it a lollipop, and `settings` took three attempts to stop
+ * reading as a sun and then as a ship's wheel. And it failed on *maintenance*: a
+ * later edit to the `settings` entry spliced away the `usage` entry beside it,
+ * `SectionIcon` fell back to a blank square, and that square shipped — it looks
+ * enough like a deliberate bullet that it survived several of my own screenshots.
+ *
+ * Lucide is drawn on the same 24-unit grid at the same 2px stroke this set was
+ * imitating, by people who do it properly, and it removes the whole class of
+ * problem. The logo above is *not* Lucide and never will be — it is generated from
+ * `build-identity.py` (D-409) — but nothing about a sidebar glyph is brand.
+ *
+ * The map is also the type. `SectionName` is `keyof typeof ICONS`, `NavItem` takes
+ * that rather than `string`, and so an icon that is deleted or misspelled becomes a
+ * compile error instead of a silent square. That is the actual fix for what went
+ * wrong; swapping the artwork alone would have left the failure mode in place.
  */
-const PATHS: Record<string, string> = {
-  projects: 'M3 4.5h7v6H3zM12 4.5h7v6h-7zM3 12.5h7v6H3zM12 12.5h7v6h-7z',
-  overview: 'M4 12a8 8 0 0 1 16 0M12 12l4-3',
-  connect: 'M8 4v6a4 4 0 0 0 8 0V4M12 14v6',
-  // Stroked, and the head is a real ring. The previous path was *filled*, and a
-  // filled key head has no counter — so the one feature that makes a key read as
-  // a key was solid, and the glyph came out a lollipop.
-  keys: 'M12 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0M12 12h8M16.5 12v3.5M19.5 12v2.5',
-  // Two figures, not one: the section is about a group, and a single silhouette
-  // reads as "account" — which is a different page.
-  members: 'M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7ZM2.5 20a6.5 6.5 0 0 1 13 0'
-    + 'M16.5 11.5a3 3 0 1 0 0-6M18 20h3.5a5.5 5.5 0 0 0-4-5.3',
-  // A real gear: the teeth are part of the **outline**, six trapezoids on the
-  // perimeter, with the hub wound the other way so it stays a hole. Two earlier
-  // attempts failed for the same reason — teeth drawn as separate radial strokes
-  // around a circle are not teeth, they are spokes, and the glyph came out first
-  // as a sun and then as a ship's wheel.
-  settings: 'M18.8 9.2L21.9 9.6L21.9 14.4L18.8 14.8L17.9 16.5L19.1 19.4L14.8 21.8L13.0 19.3L11.0 19.3L9.2 21.8L4.9 19.4L6.1 16.5L5.2 14.8L2.1 14.4L2.1 9.6'
-    + 'L5.2 9.2L6.1 7.5L4.9 4.6L9.2 2.2L11.0 4.7L13.0 4.7L14.8 2.2L19.1 4.6L17.9 7.5ZM15.0 12a3.0 3.0 0 1 0 -6.0 0a3.0 3.0 0 1 0 6.0 0',
-};
+const ICONS = {
+  projects: LayoutGrid,
+  overview: Gauge,
+  /** A cable, not a plug: the page is about connection strings, not power. */
+  connect: Cable,
+  keys: KeyRound,
+  /** Two figures — one silhouette reads as "account", a different page. */
+  members: Users,
+  usage: BarChart3,
+  settings: Settings,
+} satisfies Record<string, LucideIcon>;
 
-export function SectionIcon({ name }: { name: keyof typeof PATHS | string }) {
-  const d = PATHS[name];
-  if (!d) return <span className="sh-nav-item__icon" aria-hidden="true" />;
-  // Only `projects` is filled. `keys` was, and that is what removed its counter.
-  const filled = name === 'projects';
+export type SectionName = keyof typeof ICONS;
+
+export function SectionIcon({ name }: { name: SectionName }) {
+  const Icon = ICONS[name];
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"
-      style={{ flex: 'none', color: 'currentColor' }}>
-      <path d={d}
-        {...(filled
-          ? { fill: 'currentColor' }
-          : {
-            fill: 'none', stroke: 'currentColor', strokeWidth: 2,
-            strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const
-          })} />
-    </svg>
+    <Icon size={16} strokeWidth={2} aria-hidden="true"
+      style={{ flex: 'none', color: 'currentColor' }} />
   );
 }

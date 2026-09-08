@@ -11,7 +11,7 @@ import { Menu, MenuItem } from './Menu.tsx';
 import { CommandPalette } from './CommandPalette.tsx';
 import { Shortcuts } from './Shortcuts.tsx';
 import { ProjectStateBadge } from './ProjectState.tsx';
-import { Logo, OrgAvatar, SectionIcon } from './Logo.tsx';
+import { Logo, OrgAvatar, SectionIcon, type SectionName } from './Logo.tsx';
 
 /**
  * The shell: top bar, breadcrumb switchers, sidebar, palette, shortcut sheet.
@@ -268,13 +268,17 @@ function ThemeItems() {
 /** A sidebar entry. `aria-current` is what components.css styles, not a class. */
 export function NavItem({ href, children, current, icon }: {
   href: string; children: ReactNode; current: boolean;
-  /** A drawn glyph rather than the board's generic square: seven identical shapes
-   *  in a column is a decoration strip, not a scanning aid. */
-  icon?: string;
+  /**
+   * Required, and a union rather than a `string`. Every nav row gets a glyph —
+   * seven identical shapes in a column is a decoration strip, not a scanning aid —
+   * and typing it as `string` is what let `icon="usage"` keep compiling after the
+   * `usage` icon had been deleted, so the row rendered a blank square instead.
+   */
+  icon: SectionName;
 }) {
   return (
     <Link className="sh-nav-item" href={href} {...(current ? { 'aria-current': 'page' as const } : {})}>
-      <SectionIcon name={icon ?? ''} />
+      <SectionIcon name={icon} />
       {children}
     </Link>
   );
