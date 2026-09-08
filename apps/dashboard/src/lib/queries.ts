@@ -53,6 +53,20 @@ export function useProjects(orgId: string | undefined) {
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.pagination?.next_cursor ?? undefined,
     enabled: Boolean(orgId),
+    /**
+     * Poll while anything in the list is still settling.
+     *
+     * `useProject` has done this since D-425 and the *grid* never did, which only
+     * became visible with Retry: pressing it puts the project back to `creating`,
+     * and without this the badge would sit on CREATING until the user navigated
+     * away and back — the same stall ProjectState.tsx already documents for the
+     * detail view. Two seconds rather than that view's one: this is a list of many
+     * projects and nobody watches a row the way they watch a page.
+     */
+    refetchInterval: (q) => {
+      const rows = q.state.data?.pages.flatMap((page) => page.projects) ?? [];
+      return rows.some((r) => SETTLING.has(r.status)) ? 2000 : false;
+    },
   });
   const projects = query.data?.pages.flatMap((p) => p.projects) ?? [];
   return { ...query, projects };
@@ -240,6 +254,25 @@ export function useDeleteOrg(orgId: string) {
       // `clear`, not invalidate: the org this page belonged to is gone, and every
       // cached query keyed by it is now describing something that does not exist.
       qc.clear();
+    },
+  });
+}
+
+/**
+ * Try a failed project again.
+ *
+ * Invalidates both the project and its org's list: a retry moves the status to
+ * `creating`, and the grid is where the person who pressed it is usually looking.
+ * A 409 is a real refusal — not failed, or failed with no build behind it — and is
+ * left for the caller to relay.
+ */
+export function useRetryProject(ref: string, orgId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.retryProject(ref),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: keys.project(ref) });
+      if (orgId) void qc.invalidateQueries({ queryKey: keys.projects(orgId) });
     },
   });
 }

@@ -8,18 +8,18 @@ import { ProjectStateBadge } from '../../../components/ProjectState.tsx';
 import { Menu, MenuItem } from '../../../components/Menu.tsx';
 import { useOrgBySlug, useProjects } from '../../../lib/queries.ts';
 import { copyText } from '../../../lib/copy.ts';
-import { useResumeProject } from '../../../lib/queries.ts';
+import { useResumeProject, useRetryProject } from '../../../lib/queries.ts';
 import { useToast } from '../../../components/Toasts.tsx';
 import { api, type Project } from '../../../lib/api.ts';
 
 /**
  * The projects list.
  *
- * **A table by default** (§4, and the design system's own "dense by default: 52px
- * rows"). The first version of this page used large cards, which is how three
- * projects filled a screen that should hold twenty — and cards make the one thing
- * people actually do here, comparing state across projects, into a scan of separate
- * boxes. Cards remain available because identity matters too, and the choice is
+ * **Cards by default, table one click away** (D-447). It was a table, on §4's
+ * "dense by default" and because comparing state across projects is the thing
+ * people come here to do — and the table could not hold a name beside an
+ * unbreakable ref in the width this column gets. So the *default* changed and the
+ * option stayed, which is what §4 asks for when both are defensible. The choice is
  * remembered per browser rather than reset on every visit.
  *
  * Row actions live in a menu that opens on click and on keyboard, not on hover
@@ -239,6 +239,46 @@ function ProjectTable({ projects, hasMore, loadingMore, onLoadMore }: {
  * other actions do not move around depending on state — a control that changes
  * position by row is harder to hit than one that is simply sometimes absent.
  */
+/**
+ * Try a failed project again.
+ *
+ * Mirrors `ResumeRowButton` deliberately, down to reading the org off the project
+ * rather than taking a prop: the two are the same shape of affordance — a single
+ * button, present only in one status, that asks the platform to make the project
+ * run. `failed` and `paused` are mutually exclusive, so the two can never both
+ * render and a card still shows at most one accent control (§4, Q11).
+ *
+ * **Not confirmed**, on the same reasoning as pause (D-437): a dialog's whole
+ * value is that it means "this is destructive", and a retry destroys nothing. It
+ * resumes the saga from its checkpoint, so completed steps are skipped.
+ *
+ * There is no inverse to offer on completion (Q14) — a retry cannot be un-asked.
+ * What "completion" means here is the badge moving to CREATING, which it does
+ * because the grid now polls while anything in it is settling.
+ */
+function RetryRowButton({ project }: { project: Project }) {
+  const retry = useRetryProject(project.ref, project.org_id);
+  const toast = useToast();
+  if (project.status !== 'failed') return null;
+  return (
+    <button type="button" className="sh-btn sh-btn--sm"
+      disabled={retry.isPending}
+      aria-label={`Retry ${project.name}`}
+      onClick={() => retry.mutate(undefined, {
+        onSuccess: () => toast.show({
+          tone: 'success', title: `Retrying ${project.name}`,
+          detail: 'It picks up from the step that failed.',
+        }),
+        // The 409s this can return are both meaningful — not failed, or failed
+        // with no build behind it — so the platform's sentence is relayed rather
+        // than replaced with "could not retry".
+        onError: (err) => toast.apiError('Could not retry', err),
+      })}>
+      {retry.isPending ? 'Retrying…' : 'Retry'}
+    </button>
+  );
+}
+
 function ResumeRowButton({ project }: { project: Project }) {
   // The org comes off the project rather than through a prop: this table is also
   // rendered for the deleted-projects list, and threading an id through two
@@ -358,6 +398,7 @@ function ProjectCard({ project }: { project: Project }) {
             There is no "Open" link beside them any more — see the title. */}
         <div className="sh-row sh-row--tight" style={{ marginLeft: 'auto' }}>
           <ResumeRowButton project={project} />
+          <RetryRowButton project={project} />
           <RowActions project={project} />
         </div>
       </div>

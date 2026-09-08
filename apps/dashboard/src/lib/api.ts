@@ -405,6 +405,18 @@ export const api = {
     request<{ usage: ProjectUsage }>(`/v1/projects/${encodeURIComponent(ref)}/usage`),
 
   /**
+   * Try a failed project again (P7j).
+   *
+   * The saga resumes from its checkpoint rather than starting over, so completed
+   * steps are skipped — which is what makes this cheap enough to be a plain
+   * button. A 409 means the project is not failed, or is failed with no build
+   * behind it; the message names which, and the caller relays it.
+   */
+  retryProject: (ref: string) =>
+    request<{ project: Project; job: { id: string; type: string; state: string }; retry: number }>(
+      `/v1/projects/${encodeURIComponent(ref)}/retry`, { method: 'POST' }),
+
+  /**
    * Delete a project — which is a **soft** delete (D-038).
    *
    * The saga sets `deleted_at` and `purge_after = now() + 7 days` and stops the
