@@ -90,17 +90,28 @@ const PATHS: Record<string, string> = {
   projects: 'M3 4.5h7v6H3zM12 4.5h7v6h-7zM3 12.5h7v6H3zM12 12.5h7v6h-7z',
   overview: 'M4 12a8 8 0 0 1 16 0M12 12l4-3',
   connect: 'M8 4v6a4 4 0 0 0 8 0V4M12 14v6',
-  keys: 'M14.5 5a4.5 4.5 0 1 0-3.2 7.7L4 20v0h3v-2h2v-2h2l1.3-1.3A4.5 4.5 0 0 0 14.5 5Z',
+  // Stroked, and the head is a real ring. The previous path was *filled*, and a
+  // filled key head has no counter — so the one feature that makes a key read as
+  // a key was solid, and the glyph came out a lollipop.
+  keys: 'M12 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0M12 12h8M16.5 12v3.5M19.5 12v2.5',
   // Two figures, not one: the section is about a group, and a single silhouette
   // reads as "account" — which is a different page.
   members: 'M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7ZM2.5 20a6.5 6.5 0 0 1 13 0'
     + 'M16.5 11.5a3 3 0 1 0 0-6M18 20h3.5a5.5 5.5 0 0 0-4-5.3',
+  // A real gear: the teeth are part of the **outline**, six trapezoids on the
+  // perimeter, with the hub wound the other way so it stays a hole. Two earlier
+  // attempts failed for the same reason — teeth drawn as separate radial strokes
+  // around a circle are not teeth, they are spokes, and the glyph came out first
+  // as a sun and then as a ship's wheel.
+  settings: 'M18.8 9.2L21.9 9.6L21.9 14.4L18.8 14.8L17.9 16.5L19.1 19.4L14.8 21.8L13.0 19.3L11.0 19.3L9.2 21.8L4.9 19.4L6.1 16.5L5.2 14.8L2.1 14.4L2.1 9.6'
+    + 'L5.2 9.2L6.1 7.5L4.9 4.6L9.2 2.2L11.0 4.7L13.0 4.7L14.8 2.2L19.1 4.6L17.9 7.5ZM15.0 12a3.0 3.0 0 1 0 -6.0 0a3.0 3.0 0 1 0 6.0 0',
 };
 
 export function SectionIcon({ name }: { name: keyof typeof PATHS | string }) {
   const d = PATHS[name];
   if (!d) return <span className="sh-nav-item__icon" aria-hidden="true" />;
-  const filled = name === 'projects' || name === 'keys';
+  // Only `projects` is filled. `keys` was, and that is what removed its counter.
+  const filled = name === 'projects';
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"
       style={{ flex: 'none', color: 'currentColor' }}>
