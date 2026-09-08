@@ -426,7 +426,7 @@ Staging is Docker Compose plus Docker-in-Docker standing in for a control node a
 | `infra/docker/pgbouncer` | The per-project pooler image: transaction mode, `auth_query` against a lookup that allowlists one role, every rule baked in |
 | `infra/docker/staging` | The local stand-in for staging, including Prometheus, Loki, Alloy and Grafana with the dashboard provisioned as code |
 | `packages/metrics` | A Prometheus registry — counters, gauges, histograms, with label sets declared up front so the cardinality budget is hard to break |
-| `apps/dashboard` | The dashboard: login, signup, org switcher, projects grid, create-project flow, project overview, project usage, project settings with pause and a danger zone, the paused/resuming experience, org members and invitations, organization settings, and accepting an invitation — Next.js App Router, TanStack Query, session cookies, no BFF |
+| `apps/dashboard` | The dashboard: login, signup, org switcher, projects grid, create-project flow, project overview, project usage, project settings with pause and a danger zone, retrying a failed project, the paused/resuming experience, org members and invitations, organization settings, and accepting an invitation — Next.js App Router, TanStack Query, session cookies, no BFF |
 | `demo/auth` | The Phase 4 demo: a plain HTML page that signs up, verifies from a real email, logs in and explains the JWT claims — the auth API's first browser client |
 | `.github/workflows` | CI in two lanes — a one-minute unit lane run against dead database ports, and an integration lane that stands up the whole Docker stack — plus the nightly crash, lifecycle and reboot drills |
 

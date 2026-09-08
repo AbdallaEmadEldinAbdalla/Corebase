@@ -4455,6 +4455,39 @@ the toggle 39px in the rail and 215px expanded, matching the nav rows exactly;
 "Shortcuts" directly above it at the bottom in both states. Dashboard 131/131,
 typecheck 14/14.
 
+### P7j — retrying a failed project · done · D-453
+
+D-452 made a wedged project *say* `failed`; this makes it recoverable.
+
+`POST /v1/projects/:ref/retry` resets the dead-lettered job and **keeps its
+checkpoint** — every saga step is check-then-act, so the run resumes and retries
+only the step that wedged rather than rebuilding what already worked. A fresh job
+would have been correct too and would have redone minutes of container work.
+
+**The delivery rule inverts here.** `enqueueProvisioning` refuses a key it has
+already seen, which is right for create and exactly wrong for retry: Redis still
+holds the delivery the dead worker was handed. `enqueueRecovery` falls back to
+`key#recover-N`, so the attempt number has to *increase* — a repeated N is dropped
+as a duplicate and the second retry would do nothing. The count comes from the
+audit trail rather than a new column, and the test asserts it rises, because
+nothing else would have caught it.
+
+`project.lifecycle`, beside pause and resume. Not confirmed, on D-437's reasoning —
+a dialog must keep meaning "this is destructive", and a retry destroys nothing.
+
+**The gate caught the thing that would have made it feel broken.** `useProjects`
+never polled, so a retry would have moved the badge to CREATING and left it there
+until the user navigated away and back. `useProject` has polled since D-425; the
+grid had simply never needed to.
+
+**Verification.** 8 new e2e tests (224 → 232 in the api lane), including the two
+that matter: the checkpoint survives a retry, and the delivery attempt number rises
+between retries. Two of the refusal tests were initially passing *vacuously* —
+`enqueueRecovery` was not threaded through `buildApp`, so nothing was ever recorded
+— which the delivery test caught. Driven live: FAILED → Retry → CREATING, the error
+border and the button gone, the grid updating by poll with no reload, and
+`project.retry_requested` in the audit log.
+
 ### The rest of Phase 7 — not started, and what blocks it
 
 The scope is ~30 routes. What is missing is mostly **API, not UI**:
@@ -5049,10 +5082,13 @@ PostgREST. Neither licenses raising the planned density (D-091's 150 projects/no
   steps to clear a stale lock when no pgbackrest process is alive, which is a
   worker change with its own crash-injected test — D-452 makes the *state* honest
   (the project now says `failed`) without making it recoverable.
-- **A failed project cannot be retried from the UI.** Requested, and it needs a
-  control-plane route first: something that resets the dead-lettered job and
-  re-enqueues it. `POST /v1/projects/:ref/retry` is the shape; there is no such
-  route today, so the card can only report the failure.
+- ~~**A failed project cannot be retried from the UI.**~~ **Built — P7j** below.
+- **A failed project does not say *why*.** The status is honest and the reason is
+  not exposed: `provisioning_jobs.last_error` holds it and no route publishes it.
+  Showing it needs a decision about redaction first — the text carries container
+  ids and filesystem paths — and inventing a friendlier reason would be worse than
+  saying nothing. So the card reports `failed` and offers Retry, and the operator
+  reads the error from the job row.
 **Milestone 0 is complete** — ten tasks and the retro. The cost model, the risk
 register and the decision log now carry the measured numbers, and D-209 gates what
 may be done with them next.
