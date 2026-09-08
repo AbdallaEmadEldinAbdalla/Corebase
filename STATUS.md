@@ -4710,6 +4710,22 @@ both go to the bottom. The sidebar footer and the collapse row each claimed it, 
 own the free space, and which one depends on what is rendered — so the rule moves
 with the condition, not onto both. (D-450.)
 
+**A `globalSetup` probe owns the whole run's liveness.** It executes before any
+test and outside every test's timeout, so a wait it does not bound and a handle it
+does not release hang the entire suite rather than failing one file. D-440's queue
+guard pinged Redis; CI's unit lane points that URL at a dead port on purpose, and
+`ping()` there does not reject — ioredis queues the command and retries on its own
+timers. Vitest never exited, the job died on its ten-minute ceiling, and GitHub
+reported the run as *cancelled*, which is not a word that suggests "your test
+setup is stuck". Bound every wait, release every handle on every path, and note
+that the first fix — always disconnecting — changed nothing, because the `catch`
+had never run. (D-454.)
+
+**"Cancelled" on the default branch means no verdict, not a superseded one.**
+`cancel-in-progress` is correct on a branch and wrong on `main`: at nineteen
+minutes a lane, two pushes inside that window leave the first commit unverified
+while the checks list looks busy. (D-454.)
+
 **Read the standard before writing the UI, not before committing it.** D-224 said
 "before it is committed" and it was read as "at the end", so a reported visual
 defect got three fixes written straight off screenshots — each cheap, each wrong,
