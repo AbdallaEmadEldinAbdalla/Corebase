@@ -5106,12 +5106,15 @@ sends it — same endpoint, same `confirm_destructive` / `confirm_names`:
 
 | | result |
 |---|---|
-| all fifteen operations | execute against a real Postgres; commands `CREATE+ALTER`, `ALTER`, `GRANT`, `REVOKE`, `DROP` as expected |
+| all nineteen operations | execute against a real Postgres; commands `CREATE+ALTER`, `ALTER`, `CREATE`, `ALTER+CREATE`, `GRANT`, `REVOKE`, `DROP` as expected |
 | the ladder | unconfirmed column drop → **409** naming the column; the flag alone → **409** asking for the name; the name → applied |
 | the anon chain | policy alone → `permission denied`; + grant → **120 rows**; revoke → denied again, policy untouched |
 | the unconfirmed grant | **409**, naming the *table* rather than the privilege |
 | the owner's first insert | **succeeds** on a table created by the editor — which is the whole of why `FORCE` was dropped (D-191) |
 | `add primary key` | `pg_attribute.attnotnull` really becomes true, so the notice's claim about NOT NULL is the truth |
+| `create index` | `idx_articles_status` and `idx_articles_title` exist, named the conventional way |
+| `add check` / `add unique` | `articles_check` and `articles_notes_key` exist, `contype` `c` and `u` |
+| `add foreign key` | `no_key_a_fkey` with `confdeltype = 'n'` — SET NULL, as the form asked — and the appended `idx_no_key_a` |
 | the refusals | NOT NULL-with-rows is a *refusal*; an empty name is a *todo*; neither reaches the database |
 
 A version skew between the two halves showed up during this and is worth
@@ -5120,6 +5123,11 @@ the API was still running the previous classifier every confirmed drop came back
 **409 with a name the user had just typed**. That is the argument for the
 normalisation living in the shared package rather than in the dialog, and it
 arrived as evidence rather than as reasoning.
+
+The staging project `aayl5qptjvp5bfqb4uec` (org `p7n-verify`, user
+`p7n@example.test`) is left **ready** on purpose, with `articles` (120 rows, RLS
+on, one anon policy), `no_key`, `open_table` and `fk_target` in it. The next step
+needs exactly that shape, and re-provisioning is slower than keeping it.
 
 **What was not verified: the pixels.** Both browser surfaces were unavailable in
 this session — the in-app pane's policy check never cleared for `localhost:3000`,
