@@ -24,6 +24,17 @@ export const SECRET_NAMES = {
    * function it is allowed to call returns `developer` and nothing else.
    */
   poolerAuth: 'PGBOUNCER_AUTH_PASSWORD',
+  /**
+   * The dashboard console's identity in this project's database (P7l, D-132).
+   *
+   * Its own credential rather than reusing `developer`'s, and the reason is
+   * rotation: `developer`'s password is customer-facing — it is the one in the
+   * connection string they copy — and rotating it must not take the table editor
+   * and the SQL editor down with it. A separate login also makes every console
+   * statement attributable to the console rather than indistinguishable from the
+   * customer's own psql session in `pg_stat_activity`.
+   */
+  adminRole: 'STEADHOLD_ADMIN_PASSWORD',
   /** The project's ES256 signing key (D-014). Never leaves the control plane. */
   jwtPrivateKey: 'JWT_PRIVATE_KEY',
   /** Public half. Stored beside its pair so JWKS is one lookup, not two. */

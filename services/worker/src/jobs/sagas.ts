@@ -23,7 +23,7 @@ import { generateKeypair, sign as signJwt, projectKeyClaims, toJwk, keyLabel } f
 import {
   auditImageRoles, connectAsSuperuser, ensureDeveloperRole, ensureStorageOwnership,
   setRolePassword,
-  DEVELOPER_ROLE, POOLER_AUTH_ROLE, AUTH_ROLE,
+  DEVELOPER_ROLE, POOLER_AUTH_ROLE, AUTH_ROLE, ADMIN_ROLE, ensureAdminRole,
 } from '../project-admin.ts';
 
 export interface SagaDeps {
@@ -452,8 +452,12 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
         // this step rather than at initdb for the plain reason that the role does
         // not exist until the line above.
         await ensureStorageOwnership(client);
+        // P7l: the console's role, after `developer` exists — it is granted
+        // membership of it, so the order is not incidental.
+        await ensureAdminRole(client);
         ctx.log(created ? 'created the developer role' : 'developer role already present',
-          { roles_verified: audit.present.length, storage_owned_by: 'developer' });
+          { roles_verified: audit.present.length, storage_owned_by: 'developer',
+            console_role: ADMIN_ROLE });
       } finally {
         await client.end().catch(() => {});
       }
@@ -493,6 +497,12 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
         // log in is a half-built thing that is easy to forget. Its own credential
         // and not `authenticator`'s, because this one owns the password hashes.
         { name: SECRET_NAMES.authRole, role: AUTH_ROLE },
+        // P7l: the dashboard console's own login. Provisioned here rather than
+        // lazily on first use, for the same reason as the auth role above — a
+        // role that exists and cannot log in is a half-built thing, and the
+        // failure surfaces much later as "the SQL editor is broken on old
+        // projects" rather than as a provisioning error.
+        { name: SECRET_NAMES.adminRole, role: ADMIN_ROLE },
       ];
       const stored: Array<{ role: string; value: string; created: boolean }> = [];
       for (const w of wanted) {
@@ -1435,6 +1445,10 @@ export function buildSagas(deps: SagaDeps): Record<string, SagaStep<SagaContext>
         // cluster carries the *source's*, and leaving it would mean one credential
         // opening two projects' user tables.
         { name: SECRET_NAMES.authRole, role: AUTH_ROLE },
+        // Same argument as the auth role: the restored cluster carries the
+        // source's console password, and leaving it would let one credential
+        // open a console on two projects.
+        { name: SECRET_NAMES.adminRole, role: ADMIN_ROLE },
       ];
       const stored: Array<{ role: string; value: string }> = [];
       for (const w of wanted) {

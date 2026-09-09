@@ -5050,6 +5050,17 @@ alternatives, not companions.
 flex column, so a help line makes that field taller and `align-items: flex-end`
 then aligns field boxes rather than the controls in them.
 
+**Docker rolls back the network attach when a port bind fails.** So a host-port
+collision is indistinguishable from a networking fault from the container's side
+— empty `Networks`, an empty routing table, everything unreachable — and the
+only place it says "port is already allocated" is the daemon's own log. Three
+guesses went into the symptom before one look went into the log.
+
+**An allocator that reads only its own table is not an allocator.** The control
+plane's port rows record what it intended to bind; the node records what is
+bound. Twenty-one containers the control plane had forgotten held the ports it
+went on to hand out.
+
 **A modifier class is still the base class.** `.shell--noNav` is also `.shell`, so
 a media query written against `.shell` reached a layout it had no business
 touching — it put a two-column grid on a template whose areas are single-column,
@@ -5328,15 +5339,26 @@ with the reason. An unrecorded "no" is how the standard decays.
   cheap existence facts (container, volume, network) rather than take the
   checkpoint's word for them, or the checkpoint should record what it observed
   rather than what it did.
-- **Local staging cannot currently provision a project, and P7l's provisioning
-  half is therefore unverified.** Project containers are coming up with no
-  network attached at all — `NetworkSettings.Networks` empty,
-  `/proc/net/route` holding nothing but its header — although the saga does pass
-  `networkName` and the network exists on the node. Three consecutive projects
-  failed this way while ten older ones on the same node are attached correctly,
-  so it is a state the node has got into rather than a code path in the saga.
-  Named here because it is what blocks the live verification P7l's console-role
-  work still needs, not because the cause is understood.
+- **A host-port collision presents as a networking failure three steps later,
+  and the port allocator cannot see the node.** Diagnosed, fixed locally, and
+  kept here because the mechanism is a real product gap rather than only a dirty
+  machine. Symptom: project containers came up with `NetworkSettings.Networks`
+  empty and `/proc/net/route` holding nothing but its header, so `archive-push`
+  could reach nothing, so `stanza-create` never got its lock, so provisioning
+  dead-lettered on a backup error. Cause, from the node's daemon log:
+  `Bind for 0.0.0.0:5434 failed: port is already allocated` →
+  `failed to set up container networking: driver failed programming external
+  connectivity`. Docker attaches the network, *then* programs port bindings, and
+  when the bind fails it rolls the attachment back and leaves the container
+  created — so a port clash is indistinguishable from a network fault unless you
+  read the daemon's log. The clash itself: the node carried 21 project
+  containers from earlier sessions that the control plane has no row for,
+  holding 5435–5446, while the allocator hands out from 5433 knowing only its
+  own table. **The control plane's port table is a record of what it intended;
+  the node is the authority on what is bound.** Removing the 47 orphaned
+  containers freed the range and a project provisioned in 20s. The product-level
+  fix is for the allocator to reconcile against the node — or for
+  `start_container` to name a port collision as one — and neither exists.
 - **A killed pgbackrest leaves a lock that permanently wedges provisioning.** A
   `provision_project` observed dead-lettering five times on
   `unable to acquire lock on file '/tmp/pgbackrest/main-archive-1.lock': Resource

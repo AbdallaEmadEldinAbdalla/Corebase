@@ -36,6 +36,9 @@ export const POOLER_AUTH_ROLE = 'pgbouncer_auth';
 /** The auth module's own login role (P4a, D-110). */
 export const AUTH_ROLE = 'steadhold_auth';
 
+/** The dashboard console's login role (P7l, D-132). */
+export const ADMIN_ROLE = 'steadhold_admin';
+
 export interface AdminTarget {
   host: string;
   port: number;
@@ -222,6 +225,71 @@ export async function ensureDeveloperRole(client: Client): Promise<{ created: bo
  * `storage.usage` stays with `postgres` — a customer who owned it could edit
  * their way to unlimited quota.
  */
+/**
+ * Make `steadhold_admin` able to act as the customer, and nothing more.
+ *
+ * D-132 specified this role with `BYPASSRLS`, and it does not need it — see
+ * D-462. The reasoning is `30-force-rls.sql`: every customer table gets RLS
+ * `ENABLE`d and deliberately **not** `FORCE`d, because the owner is the
+ * customer's own `developer` role and forcing it would break their first insert.
+ * `ENABLE` alone constrains non-owners only. So a session that acts *as*
+ * `developer` already sees every row — which is exactly what D-134 asks the
+ * default console role for, worded as "sees everything, exactly like the owner
+ * connection string". It is the owner. No attribute required.
+ *
+ * That resolves a second problem in the same move, and it is the one that would
+ * have hurt later: **ownership of what the console creates.** A table created by
+ * a session running as `steadhold_admin` is owned by `steadhold_admin`, so the
+ * customer could not drop their own table from their own connection string, and
+ * `steadhold export` (D-004) would emit objects owned by a platform role that
+ * does not exist in a vanilla Postgres. Running as `developer` means the table
+ * editor's output is indistinguishable from a table they made themselves, which
+ * is the promise the product is built on.
+ *
+ * The role stays `NOINHERIT`, like `authenticator` (D-029): it can do **nothing**
+ * by itself, and every run must say which role it is acting as. That is not
+ * caution for its own sake — it makes rail 1's four options (`developer`, `anon`,
+ * `authenticated`, `authenticated` as a user) one mechanism instead of one
+ * attribute and three `SET ROLE`s, and a single mechanism is the one that gets
+ * tested.
+ */
+export async function ensureAdminRole(client: Client): Promise<void> {
+  const admin = identifier(ADMIN_ROLE);
+  const dev = identifier(DEVELOPER_ROLE);
+
+  // Explicitly stripped rather than assumed absent. The image grants this role
+  // CREATEROLE, which it has no use for on this path, and an attribute nobody
+  // asked for is the kind of thing that is discovered by an incident.
+  await client.query(
+    `ALTER ROLE ${admin} NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION ` +
+    `NOBYPASSRLS NOINHERIT LOGIN`);
+
+  // Membership is what `SET ROLE` needs, and it grants nothing on its own while
+  // the role is NOINHERIT — which is the point.
+  //
+  // All three of rail 1's roles, not just `developer`. D-134's role switcher
+  // offers `developer` (the default), `anon`, `authenticated`, and
+  // `authenticated` as a specific user, and the last two are the RLS debugging
+  // story: what makes policy testing trustworthy is that the console runs the
+  // statement as the role production would. Without these grants the switcher
+  // has one working option and three that fail with `permission denied to set
+  // role "anon"` — which is how it was found, by trying it rather than by
+  // reading the list back.
+  //
+  // This is the same shape as `authenticator`, which is granted all three for
+  // the same reason (D-029): a NOINHERIT role that may become any of them and
+  // is none of them until it says so.
+  for (const role of [DEVELOPER_ROLE, 'anon', 'authenticated']) {
+    await client.query(`GRANT ${identifier(role)} TO ${admin}`);
+  }
+
+  // Reaching the schemas it will introspect. `information_schema` filters itself
+  // to objects the caller has rights on, so this is visibility of the
+  // customer's own database and nothing wider — the same grant and the same
+  // reasoning as D-189 gave `developer`.
+  await client.query(`GRANT USAGE ON SCHEMA information_schema TO ${admin}`);
+}
+
 export async function ensureStorageOwnership(client: Client): Promise<void> {
   const dev = identifier(DEVELOPER_ROLE);
   // USAGE on the schema first, and this is P5d's lesson repeating itself within
