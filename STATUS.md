@@ -4561,7 +4561,8 @@ The scope is ~30 routes. What is missing is mostly **API, not UI**:
 
 | Surface | Blocker |
 |---|---|
-| Table editor, SQL editor | ~~No query/DDL execution endpoint exists~~ — **built, P7l**: `POST /v1/projects/:ref/db/query` with all six D-134 rails, and `GET …/db/introspect` for the completion source and the table list. Two things still stand between them and the editors: saved queries and history (blocked on OQ-134, since history stores verbatim SQL), and rail 3's per-project timeout, which has no column — the default and cap are enforced, the persistence is not |
+| ~~Table editor~~ (read path) | **Built — P7m.** Table list, grid with sort and paging, structure in the header, and the per-table RLS panel. What remains is the write half: the ~14 DDL operations with their SQL preview and three-rung warning ladder, inline row edit / insert / delete, and save-as-migration — that last one genuinely API-blocked, since D-076 wants a server-side `schema_migrations` row plus a written migration file and there is no endpoint |
+| SQL editor | **Endpoint built — P7l**: `POST /v1/projects/:ref/db/query` with all six D-134 rails, and `GET …/db/introspect` for the completion source. Two things still stand in the way: saved queries and history (blocked on OQ-134, since history stores verbatim SQL and therefore any literal typed into a `WHERE`), and rail 3's per-project timeout, which has no column — the default and cap are enforced, the persistence is not |
 | Auth users, storage browser | Data-plane only (`/auth/v1/admin/*`, `/storage/v1/*`), which needs a `service_role` key — and a session-cookie dashboard (D-062) must never hold one in the browser. Needs a control-plane proxy, which is an architectural decision, not a screen |
 | Logs, metrics, backups list, audit | No endpoints |
 | ~~Usage per project~~ | **Built — P7e**, endpoint and page. Object-storage bytes remain out: `storage-sweep` computes the authoritative figure and does not record it centrally, which is the worker change that would let the route serve it. CPU, connections and request rate have no source at all. |
@@ -4793,6 +4794,69 @@ retention — OQ-134 has to be settled first, because history stores verbatim SQ
 including any literal typed into a `WHERE`), and rail 3's *per-project* timeout,
 which has no column and no settings UI — the 60s default and 10-minute cap are
 enforced, the persistence is not.
+
+## 4n. P7m — the table editor, read path
+
+`/project/[ref]/table-editor/[schema]/[table]`, the route the IA specifies,
+carrying the three things it says belong there: the grid, the structure, and the
+per-table RLS panel. **Read-only** — the DDL loop with its SQL preview and
+warning ladder is the next step, and the controls that would need it say so
+rather than being drawn disabled without a reason.
+
+A layout, so the table list does not re-mount when the table changes. The list is
+neither cards nor a table: §4's dichotomy governs *content* lists and this is a
+selector, so it is a grouped sidebar list with `public` first whatever it
+collates as — a flat alphabetical list puts `auth.users` above `public.posts` and
+makes the platform's tables look like the customer's.
+
+**Where the work went was honesty about numbers.** `~250 rows` keeps the tilde
+because `reltuples` is the planner's estimate. `count exactly` is offered with
+its cost named ("scans the table") and drops the tilde once asked. And `-1` — a
+table never analysed — reads **"not counted yet"**, never `0`: a developer who
+just inserted a thousand rows and reads "0 rows" concludes their insert failed.
+`null` renders distinctly from an empty string, which in a grid over someone's
+data is the difference between "no answer" and "a blank answer".
+
+**The trap the spec does not name.** The grid runs as `developer`, and RLS is
+`ENABLE`d but deliberately not `FORCE`d, so the owner sees every row. A developer
+looking at a full grid and an empty API cannot connect the two, so every RLS state
+carries *"the rows below are the owner's view and ignore these policies, the same
+as your connection string does"*. "No policies" stays informational per D-083's
+safe default rather than red — a badge people learn to dismiss is worse than none.
+
+**Two truncations became one by construction.** The grid always sends an explicit
+`LIMIT/OFFSET`, and the classifier skips a statement that already has one, so the
+server's `LIMIT 501` can never fire here. That leaves §4's sentence. Offset paging
+rather than keyset, with the reason written where it is decided: a keyset cursor
+must include every `ORDER BY` column and the grid sorts by any column, nullable
+ones included. Deep paging is the recorded cost.
+
+`grid-sql.ts` is a separate, tested module because its output is *shown to the
+user* and run against their production database. Identifiers are quoted (values
+are always bound) **and** allowlisted against what introspection reported —
+quoting stops injection, the allowlist stops nonsense. Both halves were proved by
+planting the bug and watching the right tests fail.
+
+**Three defects of my own, found while building.** `run.mutate` was called during
+render behind a state flag — a side effect in the render path, the same class as
+a `localStorage.setItem` inside a state updater. `.tablepane` had `container-type`
+and queried **itself**, so the query never fired (232px + 15px at 375px, page
+scrolling sideways) — the same mistake `.facts` made earlier in this session, and
+here the children-spanning escape cannot work because what must change is the
+parent's own tracks; a viewport query is the honest trade, since a container on a
+new ancestor would plant D-460's `contain: layout` trap on a page that will grow
+dialogs. And the earlier `@media (max-width: 560px) { .crumb { max-width: 140px } }`
+was **dead**: it sat before the base `.crumb` rule, same specificity, so the base
+won — measured as 220px at a 375px viewport.
+
+**Verification.** Live on a project with `posts` (250 rows, 7 columns, 2 policies)
+and `no_key` (no key, never analysed): the footer reads "1–100 of ~250 rows" and
+then "250 rows" once counted; sort emits `order by "title" asc` and the SQL peek
+shows exactly that, quoted; `no_key` emits **no** `ORDER BY` because there is
+nothing stable to promise; the no-primary-key banner explains ctid; the RLS panel
+expands to the policy with its command, roles and `USING`; both themes; 375px
+single-column with no page scroll and the grid scrolling itself. 159 dashboard
+tests, 271/271 api, 15/15 typecheck, `next build` clean.
 
 ## 5. Rules the code follows
 
@@ -5157,6 +5221,28 @@ its placement stop.
 version deleted organizations before their projects — RESTRICT, so it always
 failed — and the swallowed error made a no-op look like a tidy-up.
 
+**A Postgres array is not a JS array unless node-pg has a parser for its element
+type.** `array_agg(pg_get_userbyid(...))` is `name[]` (OID 1003), which node-pg
+does not parse — it returns the literal `'{authenticated}'` as a string while the
+TypeScript type says `string[]`. Nothing complains on either side; the failure is
+an uncaught `.join is not a function` that unmounts the page. Cast to `text[]`.
+
+**A CSS media query does not raise specificity; only order does.** A
+`@media (max-width: 560px) { .crumb { max-width: 140px } }` placed *before* the
+base `.crumb` rule is dead, and it looks exactly like a rule that works.
+
+**An element cannot answer its own container query — and the escape does not
+always exist.** `.facts` could style its children and span the cells; a two-pane
+grid cannot, because what must change is the parent's own tracks. Declaring the
+container on a new ancestor is not a free alternative: `container-type` implies
+`contain: layout`, which breaks `position: fixed` for anything inside.
+
+**A comment that justifies a rule is a claim, and claims can be false.** Two
+justifications written this session were wrong on inspection — "the privilege
+filters never narrow" (the `auth` schema proves they do) and "the palette input is
+the only focusable element" (its options are tabbable buttons). Both read as
+authoritative. Check the premise before writing the reason.
+
 **A route registered behind an `if` is a route no guard can see.** The audit
 guard enumerates routes by building the app and listening to registration, and it
 passed the whole of P7l without ever seeing the new endpoint, because the test
@@ -5401,6 +5487,9 @@ This one had already diverged, silently, for three phases.
 | D-461 | Below 640px the rail is forced and the stored preference is left alone | 232px of a 375px screen leaves 143px of content; the preference applies again when there is room, so the layout refuses rather than decides |
 | D-462 | `steadhold_admin` is `NOINHERIT`, has **no `BYPASSRLS`**, and is a member of `developer`, `anon` and `authenticated`. Narrows D-132 | RLS is enabled but not forced, so acting *as* `developer` already sees every row — and it keeps console-created tables owned by the customer, which `steadhold export` depends on |
 | D-463 | `db.query` is a **member** capability | A member can already reveal the `developer` connection string (`project.read` allows it) and run the same SQL from psql; the console is the audited path to what they already hold |
+| D-465 | The table list is a grouped sidebar list (`public` first), the grid is a table, and picking a table navigates | §4's cards-vs-tables rule is about content lists; a persistent selector is navigation. §1 requires the selection to be a sendable URL, and a layout keeps the list from re-mounting |
+| D-466 | Row counts are `reltuples` with a tilde, `-1` reads "not counted yet", and an exact count names its cost | Rendering -1 as 0 tells someone who just inserted a thousand rows that their insert failed; `count(*)` scans a production table to fill in a sidebar number |
+| D-467 | Every RLS state says the grid is the owner's view; "no policies" is informational | The grid runs as `developer` and RLS is enabled but not forced, so the owner sees every row — a full grid beside an empty API is otherwise unexplainable. Red would train people to dismiss the badge (D-083) |
 | D-464 | A console run is `BEGIN`, timeout, read-only, role, statements, commit — and rail 2 refuses before any connection is opened | Read-only is refused once a statement has run, and `SET LOCAL ROLE anon` removes the right to set the timeout; separately, the guard sat behind the connection and opened a socket before refusing |
 
 ## 7. Measurements
@@ -5434,6 +5523,38 @@ PostgREST. Neither licenses raising the planned density (D-091's 150 projects/no
 
 ## 8. What is not built yet
 
+
+### Recorded review-gate gaps on the table editor (P7m)
+
+- **Q5/Q7 — keypress activation is unverified, and the tooling is why.** Every
+  control is a native `<button>`, `<summary>` or `<a href>`, there is not one
+  `onClick` on a `div`/`span`/`td` in the new components, accessible names are
+  present and the focus ring measures 2px. What could not be exercised is
+  *pressing* them: the browser pane's synthetic keys do not trigger the UA's
+  activation behaviour, proved by focusing a native `<summary>` — which needs no
+  JavaScript at all — and finding that Enter did not open it either. So this is
+  the harness, not the page, and it is recorded rather than claimed in either
+  direction. It needs a real browser session or a jsdom test with a click
+  simulation to close.
+- **The command palette removes the focus ring from its input with no
+  replacement** (`shell.css`, `.palette__input:focus`). Pre-existing. The caret is
+  an indicator and the input is auto-focused, so a keyboard user is rarely lost —
+  but the justification that would make it *correct* is false, see below.
+- **The palette's options are tabbable, which contradicts its own ARIA.**
+  `CommandPalette.tsx:353` renders each result as a `<button>` with no
+  `tabIndex={-1}`, inside a widget driven by `aria-activedescendant`. Tab walks
+  into the list, and DOM focus and `aria-activedescendant` can then point at
+  different rows. Found while checking the justification above and discovering it
+  claimed the input was the only focusable element. Both belong to the palette's
+  focus model and deserve one verification pass together, not a one-line change at
+  the tail of an unrelated step.
+- **Offset pagination, so deep paging is slow.** `OFFSET n` makes the database walk
+  n rows, so page 500 of a million-row table is a real cost. Keyset was rejected
+  for a stated reason — a keyset cursor must include every `ORDER BY` column and
+  the grid sorts by any column, including nullable ones where `>` does not order
+  the way a user expects. Filters, not paging, are how anyone finds a row in a
+  browser grid; the primary key is already threaded through `pageSql` so keyset can
+  land behind the same call when filters exist.
 
 ### Recorded review-gate gaps on `/account` (P7k)
 
