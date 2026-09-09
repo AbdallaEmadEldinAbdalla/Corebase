@@ -246,6 +246,25 @@ export default function TablePage(
                 <MenuItem onSelect={() => { close(); setOp({ kind: 'add_column' }); }}>
                   Add column…
                 </MenuItem>
+                <MenuItem onSelect={() => { close(); setOp(
+                  { kind: 'create_index', candidates: columns }); }}>
+                  New index…
+                </MenuItem>
+                <MenuItem onSelect={() => { close(); setOp(
+                  { kind: 'add_foreign_key', candidates: columns,
+                    // Every readable column in the database, so the picker can
+                    // offer any table — introspection already carries them.
+                    targets: intro.data?.columns ?? [] }); }}>
+                  New foreign key…
+                </MenuItem>
+                <MenuItem onSelect={() => { close(); setOp(
+                  { kind: 'add_unique', candidates: columns }); }}>
+                  Require unique values…
+                </MenuItem>
+                <MenuItem onSelect={() => { close(); setOp({ kind: 'add_check' }); }}>
+                  New check constraint…
+                </MenuItem>
+                <div className="sh-menu__sep" />
                 <MenuItem onSelect={() => { close(); setOp({ kind: 'rename_table' }); }}>
                   Rename table…
                 </MenuItem>

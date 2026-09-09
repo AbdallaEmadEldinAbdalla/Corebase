@@ -8,9 +8,10 @@ import { useToast } from './Toasts.tsx';
 import { keys, useRunSql } from '../lib/queries.ts';
 import type { IntrospectionColumn } from '../lib/api.ts';
 import {
-  addColumn, addPrimaryKey, changeType, createTable, dropColumn, dropDefault,
-  dropNotNull, dropTable, enableRls, grantAnonRead, renameColumn, renameTable,
-  revokeAnonAccess, setDefault, setNotNull,
+  addCheck, addColumn, addForeignKey, addPrimaryKey, addUnique, changeType,
+  createIndex, createTable, dropColumn, dropDefault, dropNotNull, dropTable,
+  enableRls, grantAnonRead, renameColumn, renameTable, revokeAnonAccess,
+  setDefault, setNotNull,
   type NewColumn, type Plan, type TableFacts,
 } from '../lib/ddl.ts';
 
@@ -42,6 +43,17 @@ export type Op =
   | { kind: 'add_primary_key'; candidates: IntrospectionColumn[] }
   | { kind: 'grant_anon' }
   | { kind: 'revoke_anon' }
+  | { kind: 'create_index'; candidates: IntrospectionColumn[] }
+  | { kind: 'add_unique'; candidates: IntrospectionColumn[] }
+  | { kind: 'add_check' }
+  /**
+   * The foreign key needs the *other* table, so it carries the whole schema —
+   * which introspection does provide. Only the fan-in warning's condition is
+   * missing, because indexes are not in the payload.
+   */
+  | { kind: 'add_foreign_key';
+      candidates: IntrospectionColumn[];
+      targets: IntrospectionColumn[] }
   | { kind: 'rename_column'; column: IntrospectionColumn }
   | { kind: 'change_type'; column: IntrospectionColumn }
   | { kind: 'set_not_null'; column: IntrospectionColumn }
@@ -138,6 +150,18 @@ export function TableOps(props: {
     const id = op.candidates.find((c) => c.name === 'id');
     return id ? [id.name] : [];
   });
+  const [unique, setUnique] = useState(false);
+  /** `schema.table` of the referenced table, as one value so the select is one control. */
+  const [target2, setTarget2] = useState('');
+  const [targetCol, setTargetCol] = useState('');
+  const [onDelete, setOnDelete] = useState('');
+  /**
+   * Off by default, and that is the honest default rather than the convenient
+   * one: an index already covering this column under a different name is
+   * invisible from here, so defaulting it on would quietly double some tables'
+   * write cost.
+   */
+  const [alsoIndex, setAlsoIndex] = useState(false);
 
   /** The plan, rebuilt on every keystroke so the preview is never stale. */
   const plan = (): Plan => {
@@ -155,6 +179,20 @@ export function TableOps(props: {
       case 'add_primary_key': return addPrimaryKey(facts!, keyColumns);
       case 'grant_anon': return grantAnonRead(facts!);
       case 'revoke_anon': return revokeAnonAccess(facts!);
+      case 'create_index': return createIndex(facts!, keyColumns, { unique });
+      case 'add_unique': return addUnique(facts!, keyColumns);
+      case 'add_check': return addCheck(facts!, expression);
+      case 'add_foreign_key': {
+        const [ts, tt] = target2.split('.');
+        return addForeignKey(facts!, {
+          column: name,
+          targetSchema: ts ?? 'public',
+          targetTable: tt ?? '',
+          targetColumn: targetCol,
+          ...(onDelete ? { onDelete } : {}),
+          alsoIndex,
+        });
+      }
       case 'rename_column': return renameColumn(facts!, target!.name, name);
       case 'change_type': return changeType(facts!, target!.name, type, using);
       case 'set_not_null': return setNotNull(facts!, target!.name);
@@ -174,6 +212,10 @@ export function TableOps(props: {
     add_primary_key: 'Add a primary key',
     grant_anon: 'Allow anonymous read',
     revoke_anon: 'Remove anonymous access',
+    create_index: 'New index',
+    add_unique: 'Require unique values',
+    add_check: 'New check constraint',
+    add_foreign_key: 'New foreign key',
     rename_column: `Rename ${target?.name ?? 'the column'}`,
     change_type: `Change the type of ${target?.name ?? 'the column'}`,
     set_not_null: `Require a value in ${target?.name ?? 'the column'}`,
@@ -192,6 +234,10 @@ export function TableOps(props: {
     add_primary_key: 'Add primary key',
     grant_anon: 'Allow anonymous read',
     revoke_anon: 'Remove access',
+    create_index: 'Create index',
+    add_unique: 'Add constraint',
+    add_check: 'Add constraint',
+    add_foreign_key: 'Add foreign key',
     rename_column: 'Rename column',
     change_type: 'Change type',
     set_not_null: 'Set NOT NULL',
@@ -479,6 +525,155 @@ export function TableOps(props: {
             </p>
           </div>
         );
+
+      case 'create_index':
+      case 'add_unique':
+        return (
+          <>
+            <div className="sh-field">
+              <span className="sh-label">Columns</span>
+              {op.candidates.map((c) => (
+                <label className="sh-switch" key={c.name}>
+                  <input type="checkbox" checked={keyColumns.includes(c.name)}
+                         onChange={(e) => setKeyColumns((ks) => e.target.checked
+                           ? [...ks, c.name] : ks.filter((k) => k !== c.name))} />
+                  <span className="sh-switch__track" aria-hidden="true" />
+                  <span>{c.name} <span className="structure__type">{c.type}</span></span>
+                </label>
+              ))}
+              <p className="sh-help">
+                {/* The single most consequential thing about a multi-column
+                    index, and the reason ticking order is preserved. */}
+                Order matters: an index on (a, b) helps a query filtering on
+                <code style={{ font: 'var(--sh-code)' }}> a </code>
+                or on both, and not one filtering only on
+                <code style={{ font: 'var(--sh-code)' }}> b</code>.
+              </p>
+            </div>
+            {op.kind === 'create_index' ? (
+              <label className="sh-switch">
+                <input type="checkbox" checked={unique}
+                       onChange={(e) => setUnique(e.target.checked)} />
+                <span className="sh-switch__track" aria-hidden="true" />
+                <span>Values must be unique</span>
+              </label>
+            ) : null}
+          </>
+        );
+
+      case 'add_check':
+        return (
+          <div className="sh-field">
+            <label className="sh-label" htmlFor="ddl-check">Condition</label>
+            <input id="ddl-check" className="sh-input" value={expression} autoFocus
+                   autoComplete="off" spellCheck={false} placeholder="price >= 0"
+                   onChange={(e) => setExpression(e.target.value)} />
+            <p className="sh-help">
+              An expression over this row&rsquo;s own columns. Every existing row
+              has to satisfy it, or the statement fails and names the constraint.
+            </p>
+          </div>
+        );
+
+      case 'add_foreign_key': {
+        // The distinct tables in the payload, as `schema.table`. Built from
+        // *columns* rather than tables because we need its columns anyway, and a
+        // table whose columns we cannot read is not one we can point at.
+        const tables = [...new Set(op.targets.map((c) => `${c.schema}.${c.table}`))].sort();
+        const cols = op.targets.filter((c) => `${c.schema}.${c.table}` === target2);
+        /**
+         * Text fields with suggestions, **not** the branded `Select`.
+         *
+         * Two reasons, and the first is a bug rather than a preference.
+         * `Select` opens a `.pop__menu`, which is `position: absolute` — and
+         * `.ddl__body` is `overflow-y: auto`, so an absolutely-positioned
+         * descendant inside it is clipped by the scroll container. The last
+         * picker in a four-field form would have opened a list with its bottom
+         * cut off. Read off the stylesheet rather than seen, since no browser
+         * was available; the mechanism is not in doubt.
+         *
+         * The second is that it is the better control here anyway. A project can
+         * have hundreds of tables, and this module already argues the case for
+         * the type field: a list you scroll is worse than a field you filter,
+         * and this editor's stance is that you are learning to read SQL rather
+         * than being kept away from it.
+         */
+        return (
+          <>
+            <div className="sh-field">
+              <label className="sh-label" htmlFor="ddl-fkcol">Column in this table</label>
+              <input id="ddl-fkcol" className="sh-input" list="ddl-fk-cols" value={name}
+                     autoComplete="off" spellCheck={false} autoFocus
+                     placeholder={op.candidates[0]?.name ?? 'author_id'}
+                     onChange={(e) => setName(e.target.value)} />
+              <datalist id="ddl-fk-cols">
+                {op.candidates.map((c) => <option key={c.name} value={c.name} />)}
+              </datalist>
+            </div>
+            <div className="sh-field">
+              <label className="sh-label" htmlFor="ddl-fktable">Points at</label>
+              <input id="ddl-fktable" className="sh-input" list="ddl-fk-tables"
+                     value={target2} autoComplete="off" spellCheck={false}
+                     placeholder="public.users"
+                     onChange={(e) => { setTarget2(e.target.value); setTargetCol(''); }} />
+              <datalist id="ddl-fk-tables">
+                {tables.map((t) => <option key={t} value={t} />)}
+              </datalist>
+              <p className="sh-help">
+                Schema and table, so <code style={{ font: 'var(--sh-code)' }}>public.users</code>.
+              </p>
+            </div>
+            {target2 ? (
+              <div className="sh-field">
+                <label className="sh-label" htmlFor="ddl-fktcol">…on which column</label>
+                <input id="ddl-fktcol" className="sh-input" list="ddl-fk-tcols"
+                       value={targetCol} autoComplete="off" spellCheck={false}
+                       placeholder={cols.find((c) => c.is_primary_key)?.name ?? 'id'}
+                       onChange={(e) => setTargetCol(e.target.value)} />
+                <datalist id="ddl-fk-tcols">
+                  {cols.map((c) => <option key={c.name} value={c.name} />)}
+                </datalist>
+                <p className="sh-help">
+                  {/* Postgres requires this and its error names the constraint
+                      rather than the requirement. */}
+                  It has to be a primary key or have a unique constraint —
+                  Postgres refuses otherwise.
+                </p>
+              </div>
+            ) : null}
+            <div className="sh-field">
+              <label className="sh-label" htmlFor="ddl-ondelete">
+                When the referenced row is deleted
+              </label>
+              <input id="ddl-ondelete" className="sh-input" list="ddl-ondelete-opts"
+                     value={onDelete} autoComplete="off" spellCheck={false}
+                     placeholder="leave empty to refuse the delete"
+                     onChange={(e) => setOnDelete(e.target.value)} />
+              <datalist id="ddl-ondelete-opts">
+                <option value="cascade" />
+                <option value="set null" />
+                <option value="set default" />
+                <option value="restrict" />
+              </datalist>
+              <p className="sh-help">
+                {/* Named in the words Postgres uses, because the preview shows
+                    them and the point is that the two match. */}
+                Empty refuses the delete, which is Postgres&rsquo;s default.
+                <code style={{ font: 'var(--sh-code)' }}> cascade </code> deletes
+                the rows that point at it;
+                <code style={{ font: 'var(--sh-code)' }}> set null </code> keeps
+                them and clears the reference.
+              </p>
+            </div>
+            <label className="sh-switch">
+              <input type="checkbox" checked={alsoIndex}
+                     onChange={(e) => setAlsoIndex(e.target.checked)} />
+              <span className="sh-switch__track" aria-hidden="true" />
+              <span>Also index this column</span>
+            </label>
+          </>
+        );
+      }
 
       case 'drop_table':
         return (

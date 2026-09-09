@@ -611,6 +611,193 @@ export function addPrimaryKey(f: TableFacts, columns: readonly string[]): Plan {
 }
 
 /**
+ * The conventional index name, so a generated index looks hand-written.
+ *
+ * `idx_<table>_<columns>` is what the doc's own example uses
+ * (`idx_posts_author_id`) and what most schemas already contain, which matters
+ * for a product whose promise is that its output is indistinguishable from SQL
+ * you wrote yourself (D-004).
+ */
+export function indexName(table: string, columns: readonly string[]): string {
+  return `idx_${table}_${columns.join('_')}`
+    .toLowerCase().replace(/[^a-z0-9_]+/g, '_').slice(0, 63);
+}
+
+/**
+ * `CREATE INDEX`, plain — and the "plain" is the interesting part.
+ *
+ * The doc leaves `CONCURRENTLY` to OQ-132, "leaning CONCURRENTLY above a
+ * row-count threshold". That is still undecided, but it is no longer the
+ * *blocker*: `CREATE INDEX CONCURRENTLY` cannot run inside a transaction block,
+ * and the console runs every script in one (D-464, rail 5). A concurrent build
+ * therefore needs a non-transactional lane in the execution path, which is a
+ * server change rather than a preference — so V1 emits the plain form and says
+ * what it costs, which is the honest version of an undecided question.
+ *
+ * `IF NOT EXISTS` is deliberately absent. It sounds free and it is not: it
+ * matches on the *name*, so an index that already covers these columns under a
+ * different name is invisible to it and a duplicate gets built anyway. Failing
+ * with "relation already exists" is more useful than silently doubling a table's
+ * write cost.
+ */
+export function createIndex(
+  f: TableFacts, columns: readonly string[], opts: { unique: boolean; name?: string },
+): Plan {
+  if (columns.length === 0) throw new Incomplete('Choose at least one column.');
+  const name = (opts.name && opts.name.trim()) || indexName(f.table, columns);
+  return {
+    sql: `create ${opts.unique ? 'unique ' : ''}index ${quote(name)}\n`
+      + `  on ${qualified(f.schema, f.table)} (${columns.map(quote).join(', ')});`,
+    done: `Index ${name} created`,
+    notices: [
+      {
+        kind: 'lock',
+        text: `Building the index blocks writes to ${named(f)} until it finishes — `
+          + `reads keep working. It reads ${rowsPhrase(f.rowsEstimate)}. Building `
+          + 'it without the write lock needs CREATE INDEX CONCURRENTLY, which '
+          + 'cannot run inside a transaction and so cannot run from this console '
+          + 'yet.',
+      },
+      ...(opts.unique ? [{
+        kind: 'scan' as const,
+        text: 'A unique index also fails if any two rows already share these '
+          + 'values, and names one of them — which is the useful outcome.',
+      }] : []),
+      {
+        kind: 'api',
+        text: 'Every index makes writes to this table a little slower and takes '
+          + 'disk. Worth having for a column you filter or join on; worth '
+          + 'removing if you stop.',
+      },
+    ],
+    filename: migrationName(`create_${name}`),
+  };
+}
+
+/**
+ * `ADD CONSTRAINT … FOREIGN KEY`.
+ *
+ * The doc asks for a **fan-in warning**: "if the referencing column has no
+ * index, the preview carries an inline notice — deletes/updates on `users` will
+ * seq-scan `posts` — with a one-click 'also create index'".
+ *
+ * The notice is here; the *condition* is not, and that is the honest shape given
+ * what the platform reports. Introspection returns tables, columns, functions
+ * and policies — no indexes — so this cannot tell whether `author_id` is already
+ * indexed. Rather than guess, it says both the consequence and the uncertainty,
+ * and the "also create the index" option is offered **off by default**: an index
+ * covering the column under a different name is invisible from here, so
+ * defaulting it on would quietly double some tables' write cost.
+ */
+export function addForeignKey(
+  f: TableFacts,
+  fk: {
+    column: string;
+    targetSchema: string;
+    targetTable: string;
+    targetColumn: string;
+    /** `CASCADE`, `SET NULL`, `RESTRICT`… as written. Empty means Postgres's default. */
+    onDelete?: string;
+    alsoIndex?: boolean;
+    name?: string;
+  },
+): Plan {
+  if (!fk.column) throw new Incomplete('Choose the column that points at the other table.');
+  if (!fk.targetTable) throw new Incomplete('Choose the table it points at.');
+  if (!fk.targetColumn) throw new Incomplete('Choose the column it points at.');
+
+  const name = (fk.name && fk.name.trim())
+    || `${f.table}_${fk.column}_fkey`.toLowerCase().replace(/[^a-z0-9_]+/g, '_');
+  const statements = [
+    `${alter(f)} add constraint ${quote(name)}\n`
+    + `  foreign key (${quote(fk.column)})\n`
+    + `  references ${qualified(fk.targetSchema, fk.targetTable)} (${quote(fk.targetColumn)})`
+    + `${fk.onDelete && fk.onDelete.trim() ? `\n  on delete ${fk.onDelete.trim()}` : ''};`,
+  ];
+  if (fk.alsoIndex) {
+    statements.push('', createIndex(f, [fk.column], { unique: false }).sql);
+  }
+
+  return {
+    sql: statements.join('\n'),
+    done: `Foreign key ${name} added`,
+    notices: [
+      scan('Adding a foreign key', f.rowsEstimate),
+      {
+        kind: 'data',
+        text: `Any row whose ${fk.column} does not match a row in `
+          + `${fk.targetSchema}.${fk.targetTable} stops the whole statement, and `
+          + 'Postgres names it. Nothing is applied unless every row matches.',
+      },
+      ...(fk.alsoIndex ? [] : [{
+        kind: 'api' as const,
+        // The doc's fan-in warning, with its condition stated as unknown rather
+        // than guessed — there is no index list in the schema payload.
+        text: `Unless ${fk.column} is indexed, every delete or update of a `
+          + `${fk.targetTable} row has to scan ${named(f)} to check this `
+          + 'constraint. This editor cannot see your indexes yet, so it cannot '
+          + 'tell you whether it is — tick the box to add one, or check first if '
+          + 'you would rather not risk a duplicate.',
+      }]),
+    ],
+    filename: migrationName(`add_${name}`),
+  };
+}
+
+/** `ADD CONSTRAINT … CHECK (…)`. */
+export function addCheck(f: TableFacts, expression: string, name?: string): Plan {
+  if (!expression.trim()) throw new Incomplete('Type the condition every row must satisfy.');
+  const constraint = (name && name.trim())
+    || `${f.table}_check`.toLowerCase().replace(/[^a-z0-9_]+/g, '_');
+  return {
+    sql: `${alter(f)} add constraint ${quote(constraint)}\n`
+      + `  check (${expression.trim()});`,
+    done: `Check ${constraint} added`,
+    notices: [
+      scan('Adding a CHECK constraint', f.rowsEstimate),
+      {
+        kind: 'data',
+        text: 'A row that already fails the condition stops the statement and '
+          + 'Postgres names the constraint — which is how you find out the data '
+          + 'does not match the rule you thought it followed.',
+      },
+    ],
+    filename: migrationName(`add_${constraint}`),
+  };
+}
+
+/** `ADD CONSTRAINT … UNIQUE (…)`. */
+export function addUnique(
+  f: TableFacts, columns: readonly string[], name?: string,
+): Plan {
+  if (columns.length === 0) throw new Incomplete('Choose at least one column.');
+  const constraint = (name && name.trim())
+    || `${f.table}_${columns.join('_')}_key`.toLowerCase().replace(/[^a-z0-9_]+/g, '_');
+  return {
+    sql: `${alter(f)} add constraint ${quote(constraint)}\n`
+      + `  unique (${columns.map(quote).join(', ')});`,
+    done: `Unique constraint ${constraint} added`,
+    notices: [
+      {
+        kind: 'lock',
+        text: `This builds a unique index, which blocks writes to ${named(f)} `
+          + `until it finishes and reads ${rowsPhrase(f.rowsEstimate)}.`,
+      },
+      {
+        kind: 'data',
+        text: columns.length > 1
+          ? 'Uniqueness is across the combination, not each column — two rows may '
+            + 'share one value as long as the whole set differs. If any two rows '
+            + 'already match, the statement fails and names one of them.'
+          : 'If any two rows already share a value the statement fails and names '
+            + 'one of them, which is the useful outcome.',
+      },
+    ],
+    filename: migrationName(`add_${constraint}`),
+  };
+}
+
+/**
  * `ENABLE ROW LEVEL SECURITY`, the one-click fix behind the red banner.
  *
  * `FORCE` is deliberately **not** appended here, and this is the one place the

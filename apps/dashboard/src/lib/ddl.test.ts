@@ -3,8 +3,9 @@ import { classify } from '@steadhold/sql-guard';
 import {
   Impossible, addColumn, addPrimaryKey, changeType, createTable, dropColumn, dropDefault,
   dropNotNull, dropTable, enableRls, migrationName, renameColumn, renameTable,
-  Incomplete, describeFailure, grantAnonRead, revokeAnonAccess, rowsPhrase,
-  setDefault, setNotNull, type TableFacts,
+  Incomplete, addCheck, addForeignKey, addUnique, createIndex, describeFailure,
+  grantAnonRead, indexName, revokeAnonAccess, rowsPhrase, setDefault, setNotNull,
+  type TableFacts,
 } from './ddl.ts';
 
 /**
@@ -499,5 +500,117 @@ describe('anonymous access, which is opt-in per table (D-108)', () => {
 
   it('says a grant sits above RLS, which is why revoking is the coarse switch', () => {
     expect(noticeText(revokeAnonAccess(posts))).toContain('above RLS');
+  });
+});
+
+describe('indexes and constraints — the half that needed no new API', () => {
+  it('names an index the way the doc does, so it looks hand-written', () => {
+    expect(indexName('posts', ['author_id'])).toBe('idx_posts_author_id');
+    expect(createIndex(posts, ['author_id'], { unique: false }).sql)
+      .toContain('create index "idx_posts_author_id"');
+  });
+
+  it('BYPASS: emits no IF NOT EXISTS, which sounds free and is not', () => {
+    // `IF NOT EXISTS` matches on the *name*, so an index already covering these
+    // columns under a different name is invisible to it and a duplicate gets
+    // built anyway — doubling the table's write cost silently. Failing with
+    // "relation already exists" is the more useful outcome.
+    expect(createIndex(posts, ['a'], { unique: false }).sql).not.toContain('if not exists');
+  });
+
+  it('says why CONCURRENTLY is unavailable, rather than leaving it unmentioned', () => {
+    // Not just OQ-132 being undecided: `CREATE INDEX CONCURRENTLY` cannot run
+    // inside a transaction and the console runs every script in one (D-464), so
+    // it needs a non-transactional lane in the execution path — a server change,
+    // not a preference.
+    const text = noticeText(createIndex(posts, ['a'], { unique: false }));
+    expect(text).toContain('blocks writes');
+    expect(text).toContain('cannot run inside a transaction');
+  });
+
+  it('a unique index warns about existing duplicates; a plain one does not', () => {
+    expect(noticeText(createIndex(posts, ['a'], { unique: true })))
+      .toContain('already share these values');
+    expect(noticeText(createIndex(posts, ['a'], { unique: false })))
+      .not.toContain('already share these values');
+    expect(createIndex(posts, ['a'], { unique: true }).sql).toContain('create unique index');
+  });
+
+  describe('the foreign key', () => {
+    const fk = {
+      column: 'author_id', targetSchema: 'public', targetTable: 'users',
+      targetColumn: 'id', onDelete: 'cascade',
+    };
+
+    it('builds the constraint with the conventional name', () => {
+      const { sql } = addForeignKey(posts, fk);
+      expect(sql).toContain('add constraint "posts_author_id_fkey"');
+      expect(sql).toContain('foreign key ("author_id")');
+      expect(sql).toContain('references "public"."users" ("id")');
+      expect(sql).toContain('on delete cascade');
+    });
+
+    it('omits ON DELETE when none was chosen, rather than inventing one', () => {
+      // Postgres's default is NO ACTION, and writing a different one out would
+      // be the editor choosing referential semantics on the user's behalf.
+      const { column, targetSchema, targetTable, targetColumn } = fk;
+      expect(addForeignKey(posts, { column, targetSchema, targetTable, targetColumn }).sql)
+        .not.toContain('on delete');
+    });
+
+    it("BYPASS: states the fan-in cost AND that it cannot check the condition", () => {
+      /**
+       * The doc asks for this notice *conditionally* — "if the referencing
+       * column has no index". Introspection returns no indexes, so the condition
+       * cannot be evaluated. Saying the consequence and admitting the
+       * uncertainty is honest; printing the warning as though the index were
+       * known to be missing would be inventing a fact.
+       */
+      const text = noticeText(addForeignKey(posts, fk));
+      expect(text).toContain('has to scan');
+      expect(text).toContain('cannot see your indexes yet');
+    });
+
+    it('appends the index when asked, and then drops the uncertainty notice', () => {
+      const withIndex = addForeignKey(posts, { ...fk, alsoIndex: true });
+      expect(withIndex.sql).toContain('create index "idx_posts_author_id"');
+      // No longer uncertain — the index is in the statement.
+      expect(noticeText(withIndex)).not.toContain('cannot see your indexes');
+    });
+
+    it('refuses until every end of the reference is chosen', () => {
+      expect(() => addForeignKey(posts, { ...fk, column: '' })).toThrow(Incomplete);
+      expect(() => addForeignKey(posts, { ...fk, targetTable: '' })).toThrow(Incomplete);
+      expect(() => addForeignKey(posts, { ...fk, targetColumn: '' })).toThrow(Incomplete);
+    });
+  });
+
+  it('CHECK carries the expression verbatim and warns about existing rows', () => {
+    const p = addCheck(posts, 'price >= 0');
+    expect(p.sql).toContain('check (price >= 0)');
+    expect(noticeText(p)).toContain('does not match the rule you thought it followed');
+  });
+
+  it('UNIQUE across several columns says uniqueness is of the combination', () => {
+    // The single most common wrong expectation about a composite unique
+    // constraint.
+    const p = addUnique(posts, ['tenant', 'slug']);
+    expect(p.sql).toContain('unique ("tenant", "slug")');
+    expect(noticeText(p)).toContain('across the combination');
+    expect(noticeText(addUnique(posts, ['slug']))).not.toContain('across the combination');
+  });
+
+  it('every new statement still ends in a semicolon and quotes its identifiers', () => {
+    for (const p of [
+      createIndex(posts, ['a'], { unique: false }),
+      addForeignKey(posts, {
+        column: 'a', targetSchema: 'public', targetTable: 'u', targetColumn: 'id' }),
+      addCheck(posts, 'a > 0'),
+      addUnique(posts, ['a']),
+    ]) {
+      expect(p.sql.trimEnd().endsWith(';'), p.sql).toBe(true);
+      expect(p.sql, p.sql).toContain('"public"."posts"');
+      expect(p.filename).toMatch(/^\d{14}_[a-z0-9_]+\.sql$/);
+    }
   });
 });
