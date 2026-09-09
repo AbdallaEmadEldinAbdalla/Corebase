@@ -56,11 +56,25 @@ export interface Classified {
    */
   reason: string;
   /**
-   * The object the statement acts on, where one can be read off cheaply — the
-   * thing `type_name` asks the user to type. Null when it cannot be determined,
-   * which downgrades `type_name` to `confirm` rather than inventing a name.
+   * The statement's subject, where one can be read off cheaply: the table an
+   * `ALTER` alters, the first table a `DROP` drops. Null when it cannot be
+   * determined. Used for the reason sentence, not for confirmation — see
+   * `names`.
    */
   object: string | null;
+  /**
+   * Every name that must be typed back for this statement, for `type_name`.
+   *
+   * A list rather than one name, and the reason is a hole this used to have:
+   * `DROP TABLE a, b` read its object as `a`, so typing `a` confirmed dropping
+   * `b` as well. `namesToType`'s own comment claimed the opposite — "confirming
+   * one of them is not confirming the other" — which was true across statements
+   * and false inside one, because a comma list is one statement. The same
+   * applies to `ALTER TABLE t DROP COLUMN a, DROP COLUMN b`.
+   *
+   * Empty for every rung below `type_name`.
+   */
+  names: string[];
   /** True when the statement is a bare top-level SELECT with no LIMIT. */
   limitable: boolean;
   /** True for BEGIN / COMMIT / ROLLBACK — rail 5's passthrough trigger. */
@@ -102,41 +116,139 @@ const SKIP = new Set([
   'IF', 'EXISTS', 'NOT', 'ONLY', 'FROM',
 ]);
 
+/** A token's text exactly as the user wrote it, case included. */
+function text(s: Statement, t: Token): string {
+  // `word` tokens are upper-cased by the lexer, so the original has to come back
+  // out of the source. `ident` tokens keep their quotes, which is deliberate: a
+  // confirmation should ask for what is on the user's screen.
+  return t.kind === 'ident' ? t.value : s.sql.slice(t.start - s.start, t.end - s.start);
+}
+
 /**
- * Read the object name a statement acts on, as written.
+ * Read a dotted identifier path starting at token `i` — `public.posts`, `posts`.
  *
  * As *written* is the point: if the user typed `public.posts` then that is what
  * the dialog asks them to type back, not `posts`. Asking for a normalised form
  * of something they can see on their own screen is how a confirmation becomes a
- * puzzle. Quoted identifiers keep their quotes for the same reason.
+ * puzzle.
  */
-function objectName(s: Statement): string | null {
+function dottedName(s: Statement, i: number): { name: string; next: number } | null {
   const toks = WORDS(s);
-  const parts: string[] = [];
-  for (let i = 1; i < toks.length; i++) {
-    const t = toks[i]!;
-    if (t.kind === 'word' && SKIP.has(t.value)) continue;
-    if (t.kind === 'word' || t.kind === 'ident') {
-      // Collect a dotted path: schema.table
-      parts.push(t.kind === 'ident' ? t.value : s.sql.slice(t.start - s.start, t.end - s.start));
-      let j = i + 1;
-      while (
-        j + 1 < toks.length &&
-        toks[j]!.kind === 'punct' && toks[j]!.value === '.' &&
-        (toks[j + 1]!.kind === 'word' || toks[j + 1]!.kind === 'ident')
-      ) {
-        const nxt = toks[j + 1]!;
-        parts.push(nxt.kind === 'ident'
-          ? nxt.value
-          : s.sql.slice(nxt.start - s.start, nxt.end - s.start));
-        j += 2;
-      }
-      return parts.join('.');
-    }
-    // Anything else (a paren, a string) means there is no plain name to read.
-    break;
+  const head = toks[i];
+  if (!head || (head.kind !== 'word' && head.kind !== 'ident')) return null;
+  const parts = [text(s, head)];
+  let j = i + 1;
+  while (
+    j + 1 < toks.length &&
+    toks[j]!.kind === 'punct' && toks[j]!.value === '.' &&
+    (toks[j + 1]!.kind === 'word' || toks[j + 1]!.kind === 'ident')
+  ) {
+    parts.push(text(s, toks[j + 1]!));
+    j += 2;
   }
-  return null;
+  return { name: parts.join('.'), next: j };
+}
+
+/** Where the statement's own name list starts, past `TABLE`, `IF EXISTS`, `ONLY`. */
+function nameListStart(s: Statement): number {
+  const toks = WORDS(s);
+  let i = 1;
+  while (i < toks.length && toks[i]!.kind === 'word' && SKIP.has(toks[i]!.value)) i++;
+  return i;
+}
+
+/**
+ * Every name a statement names at the top of its own clause.
+ *
+ * Plural because `DROP TABLE a, b` is one statement dropping two tables. Reading
+ * only the first is how typing `a` came to confirm dropping `b` too. Stops at
+ * the first thing that is not a name after a comma, so `CASCADE` and `RESTRICT`
+ * are never mistaken for objects.
+ */
+function objectNames(s: Statement): string[] {
+  const toks = WORDS(s);
+  const names: string[] = [];
+  let i = nameListStart(s);
+  for (;;) {
+    const got = dottedName(s, i);
+    if (!got) break;
+    names.push(got.name);
+    i = got.next;
+    if (toks[i]?.kind !== 'punct' || toks[i]!.value !== ',') break;
+    i++;
+  }
+  return names;
+}
+
+function objectName(s: Statement): string | null {
+  return objectNames(s)[0] ?? null;
+}
+
+/**
+ * The token index each action of an `ALTER TABLE` action list begins at.
+ *
+ * An action list, because `ALTER TABLE t DROP COLUMN a, ALTER COLUMN b DROP
+ * DEFAULT` is one statement holding two actions of very different weight, and
+ * the whole point of walking them separately is that the second one contains the
+ * word `DROP` while destroying nothing. A guard that searched the statement for
+ * `DROP` would flag dropping a *default* as dropping a column — which would then
+ * demand a typed name for a reversible one-line change, and that is how people
+ * learn to type through confirmations.
+ *
+ * Commas inside parentheses belong to a column list (`ADD CONSTRAINT … UNIQUE (a,
+ * b)`), so only depth-zero commas separate actions.
+ */
+function alterActions(s: Statement): number[] {
+  const toks = WORDS(s);
+  const named = dottedName(s, nameListStart(s));
+  if (!named) return [];
+  const starts = [named.next];
+  let depth = 0;
+  for (let j = named.next; j < toks.length; j++) {
+    const t = toks[j]!;
+    if (t.kind === 'punct' && t.value === '(') depth++;
+    else if (t.kind === 'punct' && t.value === ')') depth = Math.max(0, depth - 1);
+    else if (depth === 0 && t.kind === 'punct' && t.value === ',') starts.push(j + 1);
+  }
+  return starts;
+}
+
+/**
+ * Words that make an `ALTER … DROP <word>` something other than a column drop.
+ *
+ * `COLUMN` is optional in Postgres (`DROP legacy_flag` is legal), so a bare word
+ * after `DROP` is assumed to be a column name — which means the exceptions have
+ * to be listed rather than inferred. Every one of these is reversible or
+ * metadata-only, and none of them deletes a value.
+ *
+ * A column genuinely named `default` or `constraint` must be quoted to exist at
+ * all, so it lexes as an `ident` and never matches this set.
+ */
+const DROP_NOT_COLUMN = new Set([
+  'DEFAULT', 'NOT', 'IDENTITY', 'EXPRESSION', 'GENERATED',
+  'CLUSTER', 'OIDS', 'STATISTICS',
+]);
+
+type AlterDrop =
+  | { kind: 'column'; name: string | null }
+  | { kind: 'constraint'; name: string | null }
+  | { kind: 'other' };
+
+/** Read one `DROP …` action of an `ALTER TABLE`, starting at its `DROP`. */
+function alterDrop(s: Statement, at: number): AlterDrop {
+  const toks = WORDS(s);
+  let m = at + 1;
+  let kind: 'column' | 'constraint' = 'column';
+  const first = toks[m];
+  if (first?.kind === 'word') {
+    if (first.value === 'COLUMN') m++;
+    else if (first.value === 'CONSTRAINT') { kind = 'constraint'; m++; }
+    else if (DROP_NOT_COLUMN.has(first.value)) return { kind: 'other' };
+  }
+  if (toks[m]?.kind === 'word' && toks[m]!.value === 'IF') m++;
+  if (toks[m]?.kind === 'word' && toks[m]!.value === 'EXISTS') m++;
+  const got = dottedName(s, m);
+  return { kind, name: got?.name ?? null };
 }
 
 /**
@@ -173,8 +285,21 @@ function isLimitable(s: Statement): boolean {
   return true;
 }
 
-/** `DELETE`/`UPDATE`/`TRUNCATE`/`DROP` and friends, with their reasons. */
-function danger(s: Statement): Pick<Classified, 'danger' | 'reason' | 'object'> {
+/**
+ * Join names for a sentence: `a`, `a and b`, `a, b and c`.
+ *
+ * Null for an empty list so the caller has to handle "no name could be read"
+ * rather than printing an empty gap into a warning.
+ */
+function list(names: readonly string[]): string | null {
+  if (names.length === 0) return null;
+  const quoted = names.map((n) => `"${n}"`);
+  if (quoted.length === 1) return quoted[0]!;
+  return `${quoted.slice(0, -1).join(', ')} and ${quoted.at(-1)}`;
+}
+
+/** `DELETE`/`UPDATE`/`TRUNCATE`/`DROP`/`ALTER` and friends, with their reasons. */
+function danger(s: Statement): Pick<Classified, 'danger' | 'reason' | 'object' | 'names'> {
   const cmd = lead(s);
   const obj = objectName(s);
   const named = obj ?? 'the object';
@@ -187,20 +312,99 @@ function danger(s: Statement): Pick<Classified, 'danger' | 'reason' | 'object'> 
       // is recoverable from the schema, and dropping a table or a schema is
       // recoverable only from a backup.
       if (what === 'TABLE' || what === 'SCHEMA') {
+        // Every name in the list, not just the first: `DROP TABLE a, b` is one
+        // statement and typing `a` must not confirm `b`.
+        const all = objectNames(s);
         return {
           // A name that could not be read cannot be typed back, so the ladder
           // steps down rather than asking for something impossible.
-          danger: obj === null ? 'confirm' : 'type_name',
-          reason: `Dropping ${named} deletes it and everything in it. `
-            + 'Only a backup restore brings it back.',
+          danger: all.length === 0 ? 'confirm' : 'type_name',
+          reason: `Dropping ${list(all) ?? named} deletes `
+            + `${all.length > 1 ? 'them' : 'it'} and everything in `
+            + `${all.length > 1 ? 'them' : 'it'}. Only a backup restore brings `
+            + `${all.length > 1 ? 'them' : 'it'} back.`,
           object: obj,
+          names: all,
         };
       }
       return {
         danger: 'confirm',
         reason: `Dropping ${named} cannot be undone from here.`,
         object: obj,
+        names: [],
       };
+    }
+    /**
+     * `ALTER TABLE`, which the first version of this file classified as `safe`
+     * without qualification — so `ALTER TABLE users DROP COLUMN email` ran from
+     * the SQL console with no confirmation at all. It was found by running the
+     * classifier over the table editor's operation catalog rather than by
+     * reading it, which is the only reason it was found: `ALTER` reaching
+     * `default:` is invisible in the code and obvious in the output.
+     *
+     * Only the actions that destroy something are rungs. Adding a column,
+     * renaming, setting a default, enabling RLS are all `safe` and must stay
+     * that way — a guard that stops everything is a guard nobody reads.
+     */
+    case 'ALTER': {
+      const columns: string[] = [];
+      const constraints: string[] = [];
+      let unnamed = false;
+      for (const at of alterActions(s)) {
+        if (s.tokens[at]?.kind !== 'word' || s.tokens[at]!.value !== 'DROP') continue;
+        const action = alterDrop(s, at);
+        if (action.kind === 'other') continue;
+        if (action.name === null) { unnamed = true; continue; }
+        (action.kind === 'column' ? columns : constraints).push(action.name);
+      }
+
+      /**
+       * The constraint sentence, said whenever constraints are dropped —
+       * including alongside a column drop.
+       *
+       * The first version returned early on `columns.length > 0`, so `ALTER
+       * TABLE t DROP CONSTRAINT ck, DROP COLUMN a` warned about the column and
+       * never mentioned the constraint. The rung was right and the sentence was
+       * a half-truth, which is worse than a missing warning: the user reads it,
+       * believes it is the whole statement, and confirms.
+       */
+      const cons = list(constraints);
+      const consSentence = cons === null ? '' :
+        ` Dropping ${constraints.length > 1 ? 'the constraints' : 'the constraint'} `
+        + `${cons} stops ${named} enforcing `
+        + `${constraints.length > 1 ? 'them' : 'it'}, so rows that would have been `
+        + 'rejected can be written from now on.';
+
+      if (columns.length > 0) {
+        const many = columns.length > 1;
+        return {
+          danger: 'type_name',
+          reason: `Dropping ${many ? 'the columns' : 'the column'} ${list(columns)!} `
+            + `from ${named} deletes the data in ${many ? 'them' : 'it'}. Only a `
+            + `backup restore brings ${many ? 'them' : 'it'} back.${consSentence}`,
+          object: obj,
+          // The *columns*, not the table. Typing the table name would confirm a
+          // statement the user might have misread, since the table is the one
+          // thing they already know they are looking at.
+          names: columns,
+        };
+      }
+      if (constraints.length > 0) {
+        return { danger: 'confirm', reason: consSentence.trim(), object: obj, names: [] };
+      }
+      if (unnamed) {
+        // A `DROP` action whose target could not be read. Refusing to classify it
+        // as safe is the whole of failing safe: an action this file does not
+        // understand is not an action it can vouch for.
+        return {
+          danger: 'confirm',
+          reason: `This statement drops part of ${named}, and what it drops could `
+            + 'not be read from the text. Check it before running it.',
+          object: obj,
+          names: [],
+        };
+      }
+      return { danger: 'safe', reason: '', object: obj, names: [] };
     }
     case 'TRUNCATE':
       return {
@@ -208,23 +412,26 @@ function danger(s: Statement): Pick<Classified, 'danger' | 'reason' | 'object'> 
         reason: `Truncating ${named} deletes every row. It is not logged row by `
           + 'row, so there is nothing to roll back to afterwards.',
         object: obj,
+        names: [],
       };
     case 'DELETE':
-      if (hasTopLevelWhere(s)) return { danger: 'safe', reason: '', object: obj };
+      if (hasTopLevelWhere(s)) return { danger: 'safe', reason: '', object: obj, names: [] };
       return {
         danger: 'confirm',
         reason: `This DELETE has no WHERE clause, so it removes every row in ${named}.`,
         object: obj,
+        names: [],
       };
     case 'UPDATE':
-      if (hasTopLevelWhere(s)) return { danger: 'safe', reason: '', object: obj };
+      if (hasTopLevelWhere(s)) return { danger: 'safe', reason: '', object: obj, names: [] };
       return {
         danger: 'confirm',
         reason: `This UPDATE has no WHERE clause, so it rewrites every row in ${named}.`,
         object: obj,
+        names: [],
       };
     default:
-      return { danger: 'safe', reason: '', object: obj };
+      return { danger: 'safe', reason: '', object: obj, names: [] };
   }
 }
 
@@ -248,8 +455,11 @@ export interface Script {
   /** Every statement that is not `safe`, for a dialog that lists them. */
   dangerous: Classified[];
   /**
-   * Names that must be typed back. Plural because a script can drop two tables,
-   * and confirming one of them is not confirming the other.
+   * Names that must be typed back, across every statement.
+   *
+   * Plural because confirming one object is not confirming another — which is
+   * true both across statements and *inside* one, and the second half is what
+   * this used to get wrong: `DROP TABLE a, b` offered only `a`.
    */
   namesToType: string[];
   /**
@@ -284,9 +494,9 @@ export function classify(sql: string): Script {
     statements,
     danger: worst,
     dangerous,
-    namesToType: statements
-      .filter((s) => s.danger === 'type_name' && s.object !== null)
-      .map((s) => s.object!),
+    // Flattened from each statement's own list, so a script that drops two
+    // tables in one statement and a column in another asks for all three.
+    namesToType: [...new Set(statements.flatMap((s) => s.names))],
     ownsTransaction: statements.some((s) => s.transactionControl),
     limitable: statements.length === 1 && statements[0]!.limitable ? statements[0]! : null,
   };

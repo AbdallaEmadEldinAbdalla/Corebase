@@ -240,3 +240,130 @@ describe('the shape of the answer', () => {
     expect(lex('/* c */ SELECT 1').map((t) => t.value)).toEqual(['SELECT', '1']);
   });
 });
+
+/**
+ * The `ALTER TABLE` ladder (D-468).
+ *
+ * These exist because the first version of `danger()` switched on the leading
+ * keyword and let every `ALTER` fall through to `default: → safe`. `ALTER TABLE
+ * users DROP COLUMN email` therefore ran from the SQL console with no
+ * confirmation of any kind — as destructive as `DROP TABLE`, and silent.
+ *
+ * It was found by running the classifier over the table editor's operation
+ * catalog and reading the output, not by reading the code. That is the lesson
+ * worth keeping: `ALTER` reaching `default:` is invisible in the source and
+ * obvious in a table of results.
+ */
+describe('ALTER TABLE, whose DROP actions are not all equal', () => {
+  it('BYPASS: dropping a column asks for the column name, not the table', () => {
+    const s = classify('alter table public.posts drop column legacy_flag');
+    expect(s.danger).toBe('type_name');
+    // The column. Typing the table name would confirm a statement the user may
+    // have misread — the table is the one thing they already know they are on.
+    expect(s.namesToType).toEqual(['legacy_flag']);
+    expect(s.dangerous[0]!.reason).toContain('deletes the data in it');
+  });
+
+  it('`COLUMN` is optional in Postgres, so a bare name is still a column', () => {
+    expect(classify('alter table t drop legacy_flag').namesToType).toEqual(['legacy_flag']);
+  });
+
+  it('skips IF EXISTS to find the name', () => {
+    expect(classify('alter table t drop column if exists c').namesToType).toEqual(['c']);
+  });
+
+  it('every dropped column is asked for, not just the first', () => {
+    // One statement, two columns. Asking for one and dropping two is the hole
+    // the comma list opens, and it is the same hole `DROP TABLE a, b` had.
+    expect(classify('alter table t drop column a, drop column b').namesToType)
+      .toEqual(['a', 'b']);
+  });
+
+  it('dropping a constraint is a confirmation, not a typed name', () => {
+    const s = classify('alter table public.posts drop constraint posts_author_fkey');
+    expect(s.danger).toBe('confirm');
+    expect(s.namesToType).toEqual([]);
+    // The consequence, which is not "it is gone" — it is that writes which used
+    // to be rejected now succeed.
+    expect(s.dangerous[0]!.reason).toContain('can be written from now on');
+  });
+
+  it('names the constraint too when one statement drops both', () => {
+    // The first version returned early on the column and never mentioned the
+    // constraint: a warning the user reads, believes complete, and confirms.
+    const reason = classify('alter table t drop constraint ck, drop column a')
+      .dangerous[0]!.reason;
+    expect(reason).toContain('"a"');
+    expect(reason).toContain('"ck"');
+  });
+
+  describe('the actions that contain the word DROP and destroy nothing', () => {
+    // A guard that searched the statement text for `DROP` would demand a typed
+    // name for each of these — reversible one-line changes — and that is exactly
+    // how people learn to type through confirmations.
+    for (const sql of [
+      'alter table t alter column c drop default',
+      'alter table t alter column c drop not null',
+      'alter table t alter column c drop identity',
+      'alter table t alter column c drop expression',
+    ]) {
+      it(`stays safe: ${sql}`, () => {
+        expect(classify(sql).danger).toBe('safe');
+      });
+    }
+  });
+
+  describe('the ordinary operations, which must not gain a rung', () => {
+    for (const sql of [
+      "alter table public.posts add column status text not null default 'draft'",
+      'alter table public.posts alter column price type numeric(10,2) using price::numeric(10,2)',
+      'alter table public.posts rename to articles',
+      'alter table public.posts rename column status to state',
+      'alter table public.posts enable row level security',
+      'alter table t add constraint u unique (a, b)',
+      'alter table t add constraint ck check (n > 0)',
+    ]) {
+      it(`stays safe: ${sql.slice(0, 52)}…`, () => {
+        expect(classify(sql).danger).toBe('safe');
+      });
+    }
+  });
+
+  it('a comma inside a column list does not start a new action', () => {
+    // `UNIQUE (a, b)` is one action. Splitting on that comma would read `b)` as
+    // a second action and could mis-lead it.
+    expect(classify('alter table t add constraint u unique (a, b)').danger).toBe('safe');
+  });
+
+  it('an unreadable DROP action fails to `confirm`, never to `safe`', () => {
+    // An action this file cannot parse is an action it cannot vouch for.
+    const s = classify('alter table t drop column (');
+    expect(s.danger).toBe('confirm');
+  });
+});
+
+describe('a comma list of objects', () => {
+  it('BYPASS: DROP TABLE a, b asks for both', () => {
+    // It asked for `a` alone, so typing one table name confirmed dropping two —
+    // while `namesToType`'s own comment claimed "confirming one of them is not
+    // confirming the other". The comment was true across statements and false
+    // inside one, and a comma list is one statement.
+    expect(classify('drop table a, b').namesToType).toEqual(['a', 'b']);
+    expect(classify('drop table public.posts, public.comments').namesToType)
+      .toEqual(['public.posts', 'public.comments']);
+  });
+
+  it('CASCADE is not an object name', () => {
+    expect(classify('drop table public.posts cascade').namesToType).toEqual(['public.posts']);
+    expect(classify('drop table a, b restrict').namesToType).toEqual(['a', 'b']);
+  });
+
+  it('a quoted name keeps its quotes, because that is what is on the screen', () => {
+    expect(classify('alter table t drop column "odd name"').namesToType)
+      .toEqual(['"odd name"']);
+  });
+
+  it('de-duplicates across statements so one name is asked for once', () => {
+    expect(classify('drop table a; drop table a').namesToType).toEqual(['a']);
+  });
+});
