@@ -1,0 +1,5 @@
+{
+  "extends": "@steadhold/config/tsconfig.base.json",
+  "compilerOptions": { "noEmit": true, "types": ["node"], "allowImportingTsExtensions": true },
+  "include": ["src/**/*.ts"]
+}
