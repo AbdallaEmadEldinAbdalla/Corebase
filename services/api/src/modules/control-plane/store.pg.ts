@@ -406,13 +406,43 @@ export function createPgStore(opts: PgStoreOptions): ControlPlaneStore {
             WHERE project_id = $1 AND action = 'project.retry_requested'`, [row.id]);
         const retryCount = (seen.rows[0]?.n ?? 0) + 1;
 
-        // `checkpoint` is deliberately untouched — the saga resumes from it.
+        /**
+         * The checkpoint is kept, **minus the substrate steps**.
+         *
+         * Keeping it is what makes a retry resume rather than rebuild, and that
+         * is still right for the expensive steps — `configure_backups` and
+         * `take_backup` are minutes of work and re-doing them is the cost P7j
+         * exists to avoid.
+         *
+         * But a checkpoint is a record of what was *done*, not an observation
+         * that it still holds, and the saga's steps are check-then-act only when
+         * they actually run: a skipped step checks nothing. So a container that
+         * has gone away since — removed by hand, or lost when a port collision
+         * made Docker roll its start back — leaves `start_container` marked
+         * complete and the next step failing on a container that is not there.
+         * Observed twice: `could not write pgbackrest.conf (exit null)`, which is
+         * what writing a file into a missing container looks like.
+         *
+         * These four are the ones worth re-verifying, and it costs seconds: every
+         * one of them inspects before it acts (`inspectContainer` before create,
+         * `networkExists` before create, the volume likewise), so re-running them
+         * against intact substrate is a handful of API calls that confirm what is
+         * already there — and against missing substrate it is the repair.
+         */
         await client.query(
           `UPDATE provisioning_jobs
               SET state = 'pending', attempts = 0, last_error = NULL,
                   started_at = NULL, finished_at = NULL, heartbeat_at = NULL,
-                  scheduled_for = now(), updated_at = now()
-            WHERE id = $1`, [job.id]);
+                  scheduled_for = now(), updated_at = now(),
+                  checkpoint = CASE
+                    WHEN checkpoint ? 'completed' THEN
+                      jsonb_set(checkpoint, '{completed}', COALESCE((
+                        SELECT jsonb_agg(step)
+                          FROM jsonb_array_elements_text(checkpoint->'completed') AS step
+                         WHERE step <> ALL($2::text[])), '[]'::jsonb))
+                    ELSE checkpoint END
+            WHERE id = $1`,
+          [job.id, ['create_volume', 'create_network', 'start_container', 'wait_healthy']]);
 
         const updated = await client.query<ProjectRowDb>(
           `UPDATE projects SET status = 'creating', updated_at = now() WHERE ref = $1

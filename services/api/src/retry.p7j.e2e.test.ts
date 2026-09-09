@@ -147,17 +147,31 @@ describe('P7j — retrying a failed project', () => {
   t('EXIT CRITERION: the checkpoint survives, so completed steps are not redone', async () => {
     const owner = await account();
     const p = await project(owner);
-    await deadLettered(p.projectId, ['create_volume', 'start_container', 'wait_healthy']);
+    await deadLettered(p.projectId,
+      ['create_volume', 'start_container', 'wait_healthy', 'configure_backups']);
 
     expect((await retry(p.ref, owner)).statusCode).toBe(202);
 
     const { rows } = await pool.query<{ checkpoint: { completed?: string[] } | null }>(
       `SELECT checkpoint FROM provisioning_jobs
         WHERE project_id = $1 AND job_type = 'provision_project'`, [p.projectId]);
-    // Every saga step is check-then-act, so keeping this is what makes a retry
-    // resume rather than rebuild. Wiping it would be correct and wasteful.
-    expect(rows[0]?.checkpoint?.completed)
-      .toEqual(['create_volume', 'start_container', 'wait_healthy']);
+    /**
+     * The **expensive** steps survive; the substrate steps are dropped so they
+     * re-verify.
+     *
+     * This expectation changed, and the reason is a defect the original version
+     * hid. Keeping the whole checkpoint is what makes a retry resume rather than
+     * rebuild — right for `configure_backups`, which is minutes of work. It is
+     * wrong for `start_container`: a checkpoint records what was *done*, not that
+     * it still holds, and a skipped step checks nothing. A container removed since
+     * (by hand, or by Docker rolling back a start when a port bind failed) left
+     * the step marked complete and the next one failing with `could not write
+     * pgbackrest.conf (exit null)` — writing into a container that is not there.
+     *
+     * Re-running the four substrate steps costs seconds because every one of them
+     * inspects before it acts.
+     */
+    expect(rows[0]?.checkpoint?.completed).toEqual(['configure_backups']);
   });
 
   t('asks for a delivery whose attempt number rises on every retry', async () => {
