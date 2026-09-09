@@ -19,6 +19,7 @@ export const keys = {
   projectUsage: (ref: string) => ['project', ref, 'usage'] as const,
   members: (orgId: string) => ['org', orgId, 'members'] as const,
   invites: (orgId: string) => ['org', orgId, 'invites'] as const,
+  tokens: ['tokens'] as const,
 };
 
 export const useMe = () => useQuery({ queryKey: keys.me, queryFn: api.me });
@@ -140,6 +141,34 @@ export function useProjectUsage(ref: string, enabled = true) {
     staleTime: 60_000,
     retry: false,
     enabled,
+  });
+}
+
+/** Personal access tokens. The list never contains a secret. */
+export const useTokens = () => useQuery({ queryKey: keys.tokens, queryFn: api.tokens });
+
+/**
+ * Mint a token.
+ *
+ * The result is deliberately **not** written into the cache: it is the only copy
+ * of the secret that will ever exist, and the list must not hold it. The caller
+ * keeps it in component state for as long as the page is open, and invalidating
+ * the list refetches the safe shape.
+ */
+export function useCreateToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ name, expiresInDays }: { name: string; expiresInDays?: number }) =>
+      api.createToken(name, expiresInDays),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: keys.tokens }); },
+  });
+}
+
+export function useRevokeToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.revokeToken(id),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: keys.tokens }); },
   });
 }
 

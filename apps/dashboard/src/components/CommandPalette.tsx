@@ -242,6 +242,12 @@ export function CommandPalette({ open, onClose, orgSlug, projectRef }: {
 
     if (me.data?.user) {
       list.push(
+        // Ahead of the two that were here, because it is a destination and they
+        // are conveniences. Its keywords carry "token" and "api key": someone
+        // looking for a personal access token will not search for "account".
+        { id: 'go-account', group: 'Account', label: 'Account settings',
+          keywords: 'account profile token tokens pat personal access api key cli password sessions',
+          hint: 'g a', run: go('/account') },
         { id: 'copy-email', group: 'Account', label: `Copy ${me.data.user.email}`,
           keywords: 'email account',
           run: async () => {

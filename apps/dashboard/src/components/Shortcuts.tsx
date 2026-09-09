@@ -26,6 +26,7 @@ const groups = (meta: string): { title: string; keys: [string, string][] }[] => 
     ['g k', 'API keys'],
     ['g u', 'Usage'],
     ['g s', 'Settings — the project’s, or the org’s outside one'],
+    ['g a', 'Your account and access tokens'],
   ] },
   { title: 'Lists and menus', keys: [
     ['↑ ↓', 'Move'],

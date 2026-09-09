@@ -58,6 +58,9 @@ export function AppShell({ children, orgSlug, projectRef, nav }: {
       '[': sidebar.toggle,
     },
     go: {
+      // `g a` works everywhere, unlike every other entry here. The account is not
+      // inside an org or a project, so it is the one destination with no `if`.
+      a: () => router.push('/account'),
       p: () => { if (orgSlug) router.push(`/org/${orgSlug}`); },
       m: () => { if (orgSlug) router.push(`/org/${orgSlug}/members`); },
       o: () => { if (projectRef) router.push(`/project/${projectRef}`); },
@@ -265,6 +268,9 @@ function AccountMenu() {
             </div>
           ) : null}
           <div className="sh-menu__sep" />
+          <MenuItem onSelect={() => { close(); router.push('/account'); }}>
+            Account settings <span className="palette__hint">g a</span>
+          </MenuItem>
           <MenuItem onSelect={() => { close(); window.dispatchEvent(new Event('sh:shortcuts')); }}>
             Keyboard shortcuts <span className="palette__hint">?</span>
           </MenuItem>

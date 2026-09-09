@@ -212,6 +212,28 @@ export interface ProjectUsage {
   activity: { last_active_at: string | null };
 }
 
+/** A personal access token as listed — never including the secret. */
+export interface AccessToken {
+  id: string;
+  name: string;
+  /** `shp_` plus the first characters, for telling two tokens apart. */
+  prefix: string;
+  scopes: string[];
+  expires_at: string | null;
+  last_used_at: string | null;
+  created_at: string;
+}
+
+/** The create response, which is the only time the secret exists outside a hash. */
+export interface NewAccessToken {
+  token: string;
+  id: string;
+  name: string;
+  prefix: string;
+  expires_at: string | null;
+  warning: string;
+}
+
 /** `serializeProject` in services/api/src/modules/control-plane/serialize.ts. */
 export interface Project {
   id: string;              // prj_<uuid>
@@ -295,6 +317,30 @@ export const api = {
         body: { email, password, ...(displayName ? { display_name: displayName } : {}) } }),
 
   logout: () => request<void>('/v1/auth/logout', { method: 'POST' }),
+
+  /** `GET /v1/auth/tokens`. The token itself is never in this response. */
+  tokens: () => request<{ tokens: AccessToken[] }>('/v1/auth/tokens'),
+
+  /**
+   * Mint a personal access token.
+   *
+   * The 201 carries the token **once** (D-060) and its own `warning`. The caller
+   * relays that field rather than writing its own sentence: if the platform ever
+   * changes what it promises about storage, the page changes with it.
+   *
+   * `scopes` is deliberately not a parameter. The column exists and D-062 lists
+   * scoping as future work — nothing authorizes against it, so a token created
+   * with `scopes: ['read']` has full access. Offering the field would be offering
+   * a restriction that is not applied.
+   */
+  createToken: (name: string, expiresInDays?: number) =>
+    request<NewAccessToken>('/v1/auth/tokens', {
+      method: 'POST',
+      body: { name, ...(expiresInDays === undefined ? {} : { expires_in_days: expiresInDays }) },
+    }),
+
+  revokeToken: (id: string) =>
+    request<void>(`/v1/auth/tokens/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   orgs: () => request<{ orgs: Org[] }>('/v1/orgs'),
 
