@@ -26,7 +26,7 @@ Warning ladder: **(i) info** — plain confirm; **(ii) caution** — amber confi
 
 | UI operation | Generated SQL shape | Ladder |
 |---|---|---|
-| Create table | `CREATE TABLE public.posts (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), created_at timestamptz NOT NULL DEFAULT now(), …);` followed by `ALTER TABLE … ENABLE ROW LEVEL SECURITY; ALTER TABLE … FORCE ROW LEVEL SECURITY;` (D-083 — always appended, shown in the preview, not hidden) | i |
+| Create table | `CREATE TABLE public.posts (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), created_at timestamptz NOT NULL DEFAULT now(), …);` followed by `ALTER TABLE … ENABLE ROW LEVEL SECURITY;` (D-083 — always appended, shown in the preview, not hidden). **No `FORCE`:** D-191 superseded D-083's FORCE half, because FORCE applies the policies to the table's owner — the customer's own `developer` role — so a forced table with no policies rejects the owner's own first `INSERT` and breaks every ORM and seed script on a new project. | i |
 | Rename table | `ALTER TABLE public.posts RENAME TO articles;` | ii — "REST endpoint `/rest/v1/posts` changes; clients referencing it break" |
 | Drop table | `DROP TABLE public.posts;` (`RESTRICT` implicit; a dependents list is shown — CASCADE only via explicit checkbox that re-renders the preview with `CASCADE` and escalates the warning) | iii — type table name |
 | Add column | `ALTER TABLE … ADD COLUMN status text NOT NULL DEFAULT 'draft';` (NOT NULL without default on a non-empty table is blocked with the reason) | i |
@@ -52,10 +52,9 @@ create table public.posts (
 );
 
 alter table public.posts enable row level security;
-alter table public.posts force row level security;
 ```
 
-Confirm executes all three statements as one run (one transaction) via the D-132 path. The success toast offers **Save as migration**, producing `20260827131500_create_posts.sql` with exactly that content — nothing normalized, nothing reformatted. The name suffix is derived from the operation and editable before download.
+Confirm executes both statements as one run (one transaction) via the D-132 path. The success toast offers **Save as migration**, producing `20260827131500_create_posts.sql` with exactly that content — nothing normalized, nothing reformatted. The name suffix is derived from the operation and editable before download.
 
 ### Data grid and the execution path
 
@@ -105,6 +104,7 @@ A permanent panel on every table's page — RLS status is not buried in settings
 ## Decisions
 
 - **D-132 — Dashboard database operations (table editor and SQL editor) execute via the platform API (`/v1/projects/:ref/db/query`) over the platform's own connection to the project database, as a dedicated per-project `steadhold_admin` role (full DDL/DML + BYPASSRLS on customer schemas, never superuser), with every statement audited and rate-limited; the public data API and browser-held `service_role` keys are never used for dashboard operations.** *(Rationale: keeps god-mode credentials out of the browser, gives the editor the raw-SQL and introspection surface PostgREST cannot provide, and funnels every GUI action through one audited, request-id'd, rate-limited path.)*
+- **D-469 — The create-table flow emits `ENABLE ROW LEVEL SECURITY` and **not** `FORCE`, and cost warnings are prose in the preview rather than rungs on the confirmation ladder. Narrows D-133.** *(Rationale: two corrections found while building the loop. The **FORCE** half is a documentation bug this doc carried: the worked example above followed the original D-083, which D-191 superseded — and following it would have shipped a create flow whose first `INSERT` fails with "new row violates row-level security policy", since FORCE binds the table's owner and the owner is the customer's `developer` role. It would also have made the table page contradict itself, because `RlsPanel` states on every RLS surface that the grid is the owner's view and ignores the policies — true of an enabled table, false of a forced one — and introspection reports `relrowsecurity`, not `relforcerowsecurity`, so the panel could not have told the difference. The **ladder** half is about honesty: this doc's rungs mix destruction ("type the object's name") with cost ("table rewrite; ACCESS EXCLUSIVE lock"), and only destruction is enforceable — it is enforced server-side by D-468, where a browser cannot be the guard. So a cost fact renders as a sentence in the preview with no checkbox and no extra button, and the confirm control is identical whether or not one is present. A client-side gate on a statement the server would run unasked is theatre that `curl` disproves, and two ladders on one screen are read as one, which devalues the one that is real.)*
 - **D-133 — Every table-editor operation compiles to visible, verbatim SQL shown in a preview panel before execution, is offered afterwards as a plain-SQL migration file per D-028, and RLS policy creation uses templates that expand to editable `CREATE POLICY` SQL — no black-box wizard in V1. Inline row editing is PK-guarded parameterized DML; tables without a primary key are read-only in the grid.** *(Rationale: §41's translate-to-SQL rule is what keeps the GUI honest and the schema portable (D-004) — users graduate from clicking to reading to writing SQL on the same screen; PK-guarded DML is the only UPDATE/DELETE shape that cannot silently hit more rows than the user sees.)*
 
 ## Open Questions

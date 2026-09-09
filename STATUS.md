@@ -4561,7 +4561,7 @@ The scope is ~30 routes. What is missing is mostly **API, not UI**:
 
 | Surface | Blocker |
 |---|---|
-| ~~Table editor~~ (read path) | **Built — P7m.** Table list, grid with sort and paging, structure in the header, and the per-table RLS panel. What remains is the write half: the ~14 DDL operations with their SQL preview and three-rung warning ladder, inline row edit / insert / delete, and save-as-migration — that last one genuinely API-blocked, since D-076 wants a server-side `schema_migrations` row plus a written migration file and there is no endpoint |
+| ~~Table editor~~ (read path, and DDL) | **Built — P7m and P7n.** Table list, grid with sort and paging, the Structure section, the per-table RLS panel, and thirteen DDL operations through one preview→confirm loop. Three things remain. **Indexes, foreign keys and CHECK/UNIQUE constraints** are API-blocked, not descoped: introspection returns tables, columns, functions and policies, so there is no index or constraint list to act on and the FK fan-in warning cannot be computed — two more catalog queries in `introspect.ts` unblock all of it, and `CREATE INDEX CONCURRENTLY` needs OQ-132 settled first (V1 would emit a plain `CREATE INDEX` and say that it locks writes). The **anonymous-access toggle** D-108 describes is blocked on the same gap in a smaller way: the grant and revoke operations are built, but a *toggle* has to render its current state and nothing in the payload reports `has_table_privilege('anon', …)`, so it is two explicit verbs rather than a switch that cannot know whether it is on. **Row-level DML** — inline edit, insert, delete — is unblocked and simply not built; the grid already refuses to edit a keyless table and now offers to add the key. **Save-as-migration** is genuinely API-blocked: D-076 wants a server-side `schema_migrations` row plus a written file and there is no endpoint, so the loop offers a correctly-named `.sql` download and says it is not recorded |
 | SQL editor | **Endpoint built — P7l**: `POST /v1/projects/:ref/db/query` with all six D-134 rails, and `GET …/db/introspect` for the completion source. Two things still stand in the way: saved queries and history (blocked on OQ-134, since history stores verbatim SQL and therefore any literal typed into a `WHERE`), and rail 3's per-project timeout, which has no column — the default and cap are enforced, the persistence is not |
 | Auth users, storage browser | Data-plane only (`/auth/v1/admin/*`, `/storage/v1/*`), which needs a `service_role` key — and a session-cookie dashboard (D-062) must never hold one in the browser. Needs a control-plane proxy, which is an architectural decision, not a screen |
 | Logs, metrics, backups list, audit | No endpoints |
@@ -4857,6 +4857,262 @@ nothing stable to promise; the no-primary-key banner explains ctid; the RLS pane
 expands to the policy with its command, roles and `USING`; both themes; 375px
 single-column with no page scroll and the grid scrolling itself. 159 dashboard
 tests, 271/271 api, 15/15 typecheck, `next build` clean.
+
+## 4o. P7n — the destructive guard could not see a column drop
+
+Found before writing any of the table editor's write half, by running
+`classify()` over the operation catalog in
+[table editor](docs/09-dashboard/02-table-editor.md) and reading the output
+instead of the code. Two holes, both in shipped code, both reachable from the SQL
+console today.
+
+**`ALTER TABLE users DROP COLUMN email` was `safe`.** `danger()` switched on the
+leading keyword and every `ALTER` fell through to `default: → safe`, so a column
+drop — as irreversible as `DROP TABLE`, and the doc's rung (iii) — ran with no
+confirmation of any kind. `ALTER` reaching `default:` is invisible in the source
+and obvious in a table of results, which is the whole reason this was found.
+
+**`DROP TABLE a, b` asked the user to type `a`.** `objectName` read the first name
+only, so confirming one table dropped two — while `namesToType`'s own comment
+claimed *"confirming one of them is not confirming the other"*. That claim was
+true across statements and false inside one, because a comma list is one
+statement. The comment described the rule and the code did not implement it: the
+second time this session a justification I wrote turned out to be a claim rather
+than a fact.
+
+`Classified` gains `names: string[]` — every name this statement needs typed back
+— and `object` becomes the statement's *subject*, used for the reason sentence
+rather than for confirmation.
+
+**The guard reads an action list, not the statement's text.** This is what keeps
+the fix from over-firing: `ALTER TABLE t ALTER COLUMN c DROP DEFAULT` contains the
+word `DROP` and destroys nothing. A guard that searched for `DROP` would demand a
+typed name for a reversible one-line change, which is exactly how people learn to
+type through confirmations. So `alterActions()` splits on depth-zero commas —
+`UNIQUE (a, b)` is one action, not two — and only actions *led* by `DROP` are
+weighed. `DEFAULT`, `NOT NULL`, `IDENTITY`, `EXPRESSION`, `GENERATED`, `CLUSTER`,
+`OIDS` and `STATISTICS` are listed as the exceptions rather than inferred, because
+`COLUMN` is optional in Postgres and `DROP legacy_flag` is legal. A column
+genuinely named `default` must be quoted to exist, so it lexes as an `ident` and
+cannot collide. An action whose target cannot be parsed classifies `confirm`,
+never `safe`.
+
+The name to type for a column drop is the **column**. The table is the one thing
+the user already knows they are looking at, so asking for it confirms nothing.
+
+**Proven, not assumed.** Removing the `ALTER` case fails 8 tests; making the comma
+list read one name again fails 2; restored, 59/59 pass. Live against a fresh
+project:
+
+| request | result |
+|---|---|
+| `alter table posts drop column legacy_flag` | **409** — "Dropping the column `"legacy_flag"` from public.posts deletes the data in it." |
+| the same, `confirm_destructive: true` | **409** — "Type `"legacy_flag"` to confirm dropping it." |
+| the same, typing the *table* name | **409** — the flag and the wrong name are both insufficient |
+| the same, typing `legacy_flag` | **200**, and the column is gone from introspection |
+| `drop table public.a, public.b` typing only `public.a` | **409** — "Type `"public.b"` to confirm" |
+| add column · drop default · drop not null · rename column · change type | **200** each, `danger: safe`, no added friction |
+
+The audit log is the other half of the proof: the three refusals wrote **no rows
+at all** — it jumps straight from the type change to the confirmed drop — so
+D-464's "a refusal is not an attempt on the database" still holds with a new rung
+in the ladder. The confirmed drop is recorded as `danger: type_name, confirmed:
+true`, which is what makes the log able to answer *was this asked for*.
+
+59 sql-guard tests, 271/271 api, sql-guard typechecks.
+
+## 4p. P7n — the table editor's write half: the DDL loop
+
+D-133's rule is the whole design: *every UI operation compiles to visible SQL,
+and the SQL is what runs.* So the centre of this step is
+`apps/dashboard/src/lib/ddl.ts` — a pure compiler from an operation to a `Plan`
+(the script, a past-tense line for the toast, its cost notices, and a D-028
+filename). Nothing in it executes; a `Plan` is a value, which is what makes 48
+tests possible without a database.
+
+**Fifteen operations**: create table, rename table, drop table (RESTRICT or
+CASCADE), add column, rename column, change type, drop column, set and drop NOT
+NULL, set and drop default, add primary key, enable RLS, and grant and revoke
+anonymous read. Indexes, foreign keys and CHECK/UNIQUE constraints are **not**
+here, and the reason is an API gap rather than a scope choice — introspection
+returns tables, columns, functions and policies, so there is no index or
+constraint list to pick from and the FK fan-in warning ("deletes on `users` will
+seq-scan `posts`") cannot be computed. That is §8's, and it is the natural first
+half of the next step.
+
+### The ladder mismatch, and how it was resolved
+
+The doc's warning ladder mixes two unlike things: destruction (`DROP TABLE`
+needs the object's name typed) and **cost** ("table rewrite; ACCESS EXCLUSIVE
+lock for the duration"). Only the first is enforceable, and a browser cannot be
+the guard — so the resolution is that they are different *kinds*, not different
+rungs (D-469):
+
+- **The guard is the server's.** The dialog imports `@steadhold/sql-guard` and
+  runs the same `classify()` the API runs, so it cannot ask for a plain
+  confirmation on a statement the server will refuse without a typed name. Not a
+  mirror — the actual package, because two implementations of a safety ladder
+  diverge, and they diverge in the direction where the dialog is wrong.
+- **Cost is prose.** A notice renders as a sentence with no checkbox and no extra
+  button, and the confirm control is identical whether or not one is present. A
+  client-side gate on a statement the server would run unasked is theatre that
+  `curl` disproves, and two ladders on one screen are read as one — which
+  devalues the one that is real.
+
+### Where the operations live
+
+The read path put each column's type and nullability in the *grid header*, which
+was right and left the write half with nowhere to hang its verbs: that header is
+already a `<button>` for sorting, and a menu inside a button is invalid HTML. So
+there is now a **Structure** section — a table, since six comparable attributes
+across every row is §4's threshold with nothing arguable about it — with one
+action column carrying a `Menu` per row. Five buttons in a 52px row is the
+squeeze that took the members table apart.
+
+Table-scoped verbs sit in a "Change table" menu on the page head. `New table`
+lives on `/table-editor` itself, because the subject of a create is the schema
+rather than any table — and it is reachable as `?new=table`, which is what the
+IA's onboarding checklist needs ("step one opens the create-table dialog") and
+what §1 asks of every view.
+
+**One accent.** §5 rule 1 allows one primary action per view, and this page had
+two candidates. When RLS is off the accent goes to the banner that fixes it — a
+table the anon key can read and write in full is the most important thing on the
+screen — and otherwise to "Add column". The page decides, not either component,
+because "per view" is a property of the page.
+
+### The operation the spec did not list, found by checking a sentence
+
+The create-table notice said *"your API returns no rows from this table until it
+has a policy"*. Checking that against a live project rather than trusting it
+turned up something more interesting than a wording bug.
+
+`authenticated` and `anon` **fail differently**, and the corpus is precise about
+why: default privileges grant table-level `SELECT/INSERT/UPDATE/DELETE` to
+`authenticated` and `service_role` only, and **`anon` gets no default table
+grant** (D-108). So on a new table `authenticated` holds the grant, RLS filters,
+and it gets `[]` — while `anon` holds nothing and is refused outright.
+
+Which means a `CREATE POLICY … TO anon USING (true)` **does nothing on its own.**
+Measured: a table carrying exactly that policy answers `permission denied for
+table articles`; the same policy returns all 120 rows the moment `GRANT SELECT …
+TO anon` runs; a `REVOKE` closes it again with the policy untouched. A developer
+following the RLS cookbook's "public read" recipe and testing it with their anon
+key gets a permission error from a policy that is perfectly correct — the same
+shape of trap as Phase 6's storage-policy finding.
+
+D-108 already anticipates this and says anonymous access is "opt-in via explicit
+per-table `GRANT` (**the dashboard toggle** emits it)" — a table-editor
+capability the table-editor doc never lists. It is built now, as two explicit
+verbs rather than a toggle: a toggle has to render its current state,
+introspection does not report grants, and a switch that cannot know whether it is
+on is worse than a pair of buttons that claim nothing. Recorded as a gap.
+
+The grant also became a **`confirm` rung** on the server's ladder (D-470). It is
+the statement that turns "no policies ⇒ no access" from a promise into a former
+promise, and it was previously `safe` — asserted by an existing test that listed
+it among examples of "nothing is being destroyed", which is true and is not the
+whole of what matters about it.
+
+### Five defects found by reading rather than running
+
+**`FORCE` would have shipped a create flow whose first INSERT fails.** The
+table-editor doc's worked example appends `force row level security`, following
+the original D-083 — and **D-191 superseded that half**. FORCE binds the table's
+*owner*, the owner is the customer's `developer` role, so a forced table with no
+policies rejects the owner's own insert and breaks every ORM and seed script on a
+new project. It would also have made this page contradict itself: `RlsPanel` tells
+every developer the grid is the owner's view and ignores the policies, which is
+true of an enabled table and false of a forced one — and introspection reports
+`relrowsecurity`, not `relforcerowsecurity`, so the panel could not have told the
+difference. The doc is corrected rather than worked around (D-469).
+
+**A component declared inside a component remounts on every keystroke.** The type
+field and the whole per-operation form were declared inside `TableOps`, so each
+render created a *new component type* — and React remounts on a type change. The
+form is driven by `useState`, so every render is a keystroke: every field would
+have accepted exactly one character before losing focus. Hoisted to module scope,
+and the form is now *called* rather than rendered as `<Form />`.
+
+**`error.pg` was computed, serialised and thrown away.** The API's `pgDetail()`
+carries a comment saying `position` "is the field that matters and the reason this
+is not just `err.message`", and the client parsed `{code, message, request_id}`
+and discarded the rest. `ApiError` now carries `details` and a checked `pg`
+accessor, and the dialog renders SQLSTATE, the character offset, and Postgres's
+own `hint` verbatim.
+
+**Three CSS rules that matched nothing.** `.tok-key`, `.tok-str` and `.tok-com`
+have been in `shell.css` since the code block was built, and `grep` found them
+nowhere else in the dashboard — the "syntax-highlighted" pane the spec asks for
+had a palette and no tokenizer. `lib/sql-highlight.ts` is that tokenizer, 20
+tests, returning *spans as data* so no HTML is constructed near a string that is
+about to run as SQL. It cannot reuse the guard's lexer, which correctly drops
+comments and whitespace: highlighting needs every byte back in order, and the
+asserted invariant is that joining the spans returns the input exactly.
+
+**A 28×28 hit area on every row menu in the app.** Design-system §5 rule 5 puts
+the floor at 40×40 "even when the control is 18px", and `.rowbtn` was a fixed
+28×28 with no padding — found by reading the rule against the stylesheet while
+planning a surface that would have added five more per column. A pseudo-element
+carries the 40px target so the visible surface stays quiet.
+
+### Two things the loop says that the SQL does not
+
+A create-table dialog that stops at the SQL would be honest and not useful. The
+notices carry what the statement leaves out: adding a primary key **also makes
+the columns NOT NULL**, which no client was told about; a `DEFAULT` applies to
+future inserts and touches no existing row; a rename is free in the database and
+breaks `/rest/v1/posts` for every deployed client; and `RESTRICT` refusing is the
+*useful* outcome, because it names what would have broken.
+
+Row counts in those notices are `reltuples`, so `-1` reads "an unknown number of
+rows — this table has never been analysed" and keeps the lock warning, because
+the lock is certain and the count is not. Rendering `-1` as "0 rows" would be a
+number that gets acted on.
+
+### What is not called "Save as migration"
+
+D-076's promise is that a saved change is *recorded as applied* — a
+`schema_migrations` row plus a written file — and there is no endpoint for it. The
+button is therefore **"Download .sql"**, correctly named per D-028, beside one
+sentence saying it is not recorded as applied and that a fresh database will run
+it. It does **not** tell the user to reconcile with `steadhold db pull --changes`,
+which is the right eventual answer and is Phase 8: instructing someone to run a
+command that does not exist is Q20's failure moved into a help string, and worse
+there, because it reads as a workflow rather than a promise.
+
+### Verification
+
+**What was verified live**, against a real project on the Docker stack, by
+building each `Plan` with the compiler and sending it exactly the way the dialog
+sends it — same endpoint, same `confirm_destructive` / `confirm_names`:
+
+| | result |
+|---|---|
+| all fifteen operations | execute against a real Postgres; commands `CREATE+ALTER`, `ALTER`, `GRANT`, `REVOKE`, `DROP` as expected |
+| the ladder | unconfirmed column drop → **409** naming the column; the flag alone → **409** asking for the name; the name → applied |
+| the anon chain | policy alone → `permission denied`; + grant → **120 rows**; revoke → denied again, policy untouched |
+| the unconfirmed grant | **409**, naming the *table* rather than the privilege |
+| the owner's first insert | **succeeds** on a table created by the editor — which is the whole of why `FORCE` was dropped (D-191) |
+| `add primary key` | `pg_attribute.attnotnull` really becomes true, so the notice's claim about NOT NULL is the truth |
+| the refusals | NOT NULL-with-rows is a *refusal*; an empty name is a *todo*; neither reaches the database |
+
+A version skew between the two halves showed up during this and is worth
+recording: the dashboard normalises the name a confirmation asks for, and while
+the API was still running the previous classifier every confirmed drop came back
+**409 with a name the user had just typed**. That is the argument for the
+normalisation living in the shared package rather than in the dialog, and it
+arrived as evidence rather than as reasoning.
+
+**What was not verified: the pixels.** Both browser surfaces were unavailable in
+this session — the in-app pane's policy check never cleared for `localhost:3000`,
+and the Chrome extension was not connected. So the dialog's layout, both themes,
+the 375px stack, the focus ring and the `Escape` return are **read but not seen**.
+Every claim above is an API-level one. This is recorded rather than glossed: the
+gate's own instruction is to drive the running app where a browser is available,
+and it was not.
+
+
 
 ## 5. Rules the code follows
 
@@ -5243,6 +5499,51 @@ filters never narrow" (the `auth` schema proves they do) and "the palette input 
 the only focusable element" (its options are tabbable buttons). Both read as
 authoritative. Check the premise before writing the reason.
 
+**A third instance, with the code disagreeing rather than the world.**
+`namesToType`'s comment said "confirming one of them is not confirming the
+other" and the code read only the first name of a comma list, so `DROP TABLE a,
+b` asked for one name and dropped two. The comment was not wrong about what the
+rule *should* be — it was a specification the code did not meet, sitting where it
+read as a description of the code. Those are the expensive ones, because the
+reader has no reason to doubt them.
+
+**Classify by walking the structure, not by searching the text.** `ALTER TABLE t
+ALTER COLUMN c DROP DEFAULT` and `ALTER TABLE t DROP COLUMN c` share a keyword and
+differ in everything that matters. A guard that greps for `DROP` demands a typed
+name for a reversible one-line change, which teaches people to type through
+confirmations and so makes the dangerous case *less* safe than before the guard
+existed. Splitting the action list is what separates them (**D-468**).
+
+**A switch's `default:` is where new syntax goes to be declared safe.** Every
+`ALTER` fell into `default: → safe` and column drops ran unconfirmed for as long
+as the classifier has existed. Nothing in the source looks wrong; the omission is
+only visible in output. Run the thing over its own specification's catalog and
+read the table.
+
+**A component declared inside a component remounts on every render.** React
+compares element *types* to decide between updating and remounting, and a
+function declared in a render body is a new type each time — so an input inside
+one loses focus and cursor position on every keystroke, which in a form driven by
+`useState` means every keystroke. Declare it at module scope, or call it as a
+function instead of rendering it as `<Thing />`. It cost nothing to fix and would
+have looked like "the dialog only accepts one character".
+
+**CSS that matches nothing is a claim the product does not keep.** `.tok-key`,
+`.tok-str` and `.tok-com` had been in `shell.css` since the code block was built,
+so the stylesheet asserted that this product highlights SQL and nothing in it
+ever emitted one of those classes. Dead CSS is invisible in a way dead code is
+not: nothing errors, nothing is unused-flagged, and the feature is simply absent.
+`grep` for a class before believing a stylesheet.
+
+**A doc can carry a decision that has been superseded, and it will read as
+current.** The table-editor doc's worked example appended `force row level
+security` under a D-083 reference, and D-191 had overturned exactly that half —
+so following the doc would have shipped a create-table flow whose first `INSERT`
+fails. This is what CLAUDE.md's "the decision log wins when two documents
+disagree" is *for*, and the disagreement is only visible if you look the
+referenced decision up rather than trusting the citation beside it. Fix the doc
+when you find one, or the next reader repeats it.
+
 **A route registered behind an `if` is a route no guard can see.** The audit
 guard enumerates routes by building the app and listening to registration, and it
 passed the whole of P7l without ever seeing the new endpoint, because the test
@@ -5523,6 +5824,44 @@ PostgREST. Neither licenses raising the planned density (D-091's 150 projects/no
 
 ## 8. What is not built yet
 
+
+### Recorded review-gate gaps on the DDL loop (P7n)
+
+- **Q15 — the drop-table dialog does not state a recovery window, because there
+  is no honest number for it.** §5 asks a destructive confirmation to say "what is
+  recoverable and for how long", and the truthful answer here is "from a backup",
+  full stop: the point-in-time window is a property of the project's plan and
+  retention, and reading it needs the backups API this dialog does not call. The
+  dialog says a backup restore is the only way back and names nothing it cannot
+  source, which is Q19 winning a tie against Q15. Closing it means threading the
+  project's retention into the dialog.
+- **Q5/Q7 — keypress activation is still unverified on the new components**, for
+  the same harness reason recorded under P7m below: every control is a native
+  `<button>` or `<input>` with an accessible name and there is no `onClick` on a
+  non-interactive element, but the pane's synthetic keys do not trigger the UA's
+  activation behaviour. The `DdlDialog` adds an `Escape` handler and a
+  capture-then-focus effect matching `ConfirmDialog`'s contract, both read rather
+  than exercised.
+- **The pixels are unverified in this session.** Both browser surfaces were
+  unavailable — the in-app pane's policy check never cleared for
+  `localhost:3000`, and the Chrome extension was not connected — so the dialog's
+  layout, both themes, the 375px stack, the focus ring and the `Escape` return
+  are read but not seen. Everything in §4p's verification table is an API-level
+  claim. The gate's own instruction is to drive the running app *where a browser
+  is available*; it was not, and this is the honest record of that rather than a
+  claim of a visual pass.
+- **Anonymous access is two verbs, not the toggle D-108 describes.** A toggle has
+  to render its current state and introspection does not report grants, so a
+  switch would have to claim something it cannot know. Closing this needs
+  `has_table_privilege('anon', …)` in the introspection payload — the same
+  addition indexes and constraints need, and the natural first half of the next
+  step.
+- **The `inert` attribute is the whole of the form's greying while the SQL is
+  authoritative.** It is correct and current (Baseline 2024), and it is one
+  attribute doing an accessibility job — a browser without it would leave the
+  form's controls tabbable behind an authoritative textarea. The `aria-hidden`
+  beside it covers screen readers; nothing covers tab order on an old browser.
+  Recorded rather than polyfilled.
 
 ### Recorded review-gate gaps on the table editor (P7m)
 

@@ -4,8 +4,13 @@
     {
       "name": "dashboard",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@steadhold/dashboard", "dev"],
-      "port": 3000
+      "runtimeArgs": [
+        "--filter",
+        "@steadhold/dashboard",
+        "dev"
+      ],
+      "port": 3000,
+      "autoPort": false
     }
   ]
 }

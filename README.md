@@ -80,7 +80,7 @@ Projects also **pause and resume** now, which is what makes a database per free 
 
 Chasing a test failure along the way turned up something older: the worker was opening unbounded keep-alive connections to data nodes through Node's global HTTP agent, which had been breaking the Docker engine outright and reading as "Docker Desktop is flaky" for weeks.
 
-All three Phase-1 exit criteria are met. Above the database, the data plane is still Phase 2+: no data API (PostgREST), no end-user auth service, no storage, no realtime — and the dashboard is a shell, so there is no table editor, SQL editor, members page or billing yet.
+All three Phase-1 exit criteria are met. (That sentence was written when Phase 2 began; the data plane, storage and most of the dashboard have since landed — see [STATUS.md](STATUS.md) for what exists today.)
 
 > **[STATUS.md](STATUS.md) is the handover document**: what works, how to run it locally, what every rule in the code is defending against, and what is not built yet. Read it before the corpus if you are here to contribute.
 
@@ -335,6 +335,72 @@ quota check read a table only `service_role` may read, and the resulting
 permission error was reported as "your policies do not allow this", blaming a
 policy that was correct. Five green steps, one whole class of caller untested.
 
+## Phase 7 — the dashboard (in progress)
+
+The shell, the project surfaces, the members and account pages, and the table
+editor's read path are built; the table editor's write half and the SQL editor
+are not. [STATUS.md](STATUS.md) §4j–§4o has the per-step detail and §8 the gaps.
+
+Two things from it are worth stating here because they are decisions rather than
+progress.
+
+**Dashboard database operations run as the customer's own role, not as a
+privileged one.** Every table-editor and SQL-editor statement goes through
+`POST /v1/projects/:ref/db/query` and executes as `developer` — the role behind
+the connection string the customer already holds (D-462). `steadhold_admin` has
+no `BYPASSRLS`, because a session that *is* the owner already sees every row and
+the attribute would only add a way to be wrong. It also fixes something the plan
+did not consider: a table created while running as a platform role would be
+*owned* by a platform role, so the customer could not drop their own table and
+`steadhold export` would emit objects owned by a role that does not exist in
+vanilla Postgres.
+
+**The destructive guard reads structure, not text.** Writing the write half
+started by running the classifier over the operation catalog in the
+[table-editor spec](docs/09-dashboard/02-table-editor.md) and reading the output,
+which found that `ALTER TABLE users DROP COLUMN email` had always classified as
+*safe* — as irreversible as `DROP TABLE`, and silent — and that `DROP TABLE a, b`
+asked the user to type one name while dropping two. Both are fixed by parsing an
+`ALTER`'s action list, which is also what keeps the fix from over-firing:
+`ALTER COLUMN c DROP DEFAULT` contains the word `DROP` and destroys nothing, and a
+guard that demanded a typed name for a reversible one-line change would teach
+people to type through confirmations (D-468).
+
+**Every table-editor operation is a SQL generator with a preview, and the
+preview is what runs.** Thirteen operations compile through one pure module, so
+the statement in the dialog is the statement sent — and the dialog runs the
+*same* `@steadhold/sql-guard` the API runs, rather than a copy of it, so it
+cannot offer a plain confirmation for something the server will refuse without a
+typed name. Cost warnings ("this takes an ACCESS EXCLUSIVE lock and rewrites
+about 250 rows") are prose in the preview with no checkbox: only destruction is
+enforceable, a browser cannot be a guard, and two ladders on one screen are read
+as one — which devalues the one that is real (D-469).
+
+The notices carry what the SQL leaves out, which is most of what surprises
+people: adding a primary key also makes those columns `NOT NULL`, a `DEFAULT`
+touches no existing row, a rename is free in the database and 404s every
+deployed client, and `RESTRICT` refusing is the useful outcome because it names
+what would have broken.
+
+There is no "Save as migration" button, because that promise is a
+`schema_migrations` row plus a written file (D-076) and there is no endpoint yet.
+There is a **"Download .sql"** button, correctly named per D-028, next to one
+sentence saying it is not recorded as applied.
+
+Checking one of those notices found something better than a wording bug. It said
+"your API returns no rows until this table has a policy", and the two API roles
+actually fail *differently*: `authenticated` holds a default table grant so RLS
+filters it to `[]`, while **`anon` holds no grant at all** and is refused
+outright. Which means a `CREATE POLICY … TO anon USING (true)` does nothing on
+its own — measured, a table carrying exactly that policy answers `permission
+denied`, and the same policy returns every row the moment `GRANT SELECT … TO
+anon` runs. A developer following the RLS cookbook's public-read recipe would
+have got a permission error from a policy that was perfectly correct. The grant
+is now a first-class operation with its own confirmation, because it is the
+statement that turns "no policies ⇒ no access" from a promise into a former one
+(D-470).
+
+
 ## Run it
 
 ```bash
@@ -444,7 +510,7 @@ Staging is Docker Compose plus Docker-in-Docker standing in for a control node a
 | `infra/docker/pgbouncer` | The per-project pooler image: transaction mode, `auth_query` against a lookup that allowlists one role, every rule baked in |
 | `infra/docker/staging` | The local stand-in for staging, including Prometheus, Loki, Alloy and Grafana with the dashboard provisioned as code |
 | `packages/metrics` | A Prometheus registry — counters, gauges, histograms, with label sets declared up front so the cardinality budget is hard to break |
-| `packages/sql-guard` | The SQL statement classifier: the **authoritative** half of the SQL editor's destructive-statement guard and its row-limit append (D-134), shared with the dashboard's instant-feedback copy and the CLI's guard parity |
+| `packages/sql-guard` | The SQL statement classifier: the **authoritative** half of the SQL editor's destructive-statement guard and its row-limit append (D-134), shared with the dashboard's instant-feedback copy and the CLI's guard parity. It walks an `ALTER TABLE`'s action list rather than searching its text, so a column drop is a typed-name confirmation and `DROP DEFAULT` is not (D-468) |
 | `apps/dashboard` | The dashboard: login, signup, org switcher, projects grid, create-project flow, project overview, project usage, project settings with pause and a danger zone, retrying a failed project, the paused/resuming experience, org members and invitations, organization settings, accepting an invitation, and the account page with personal access tokens — Next.js App Router, TanStack Query, session cookies, no BFF |
 | `demo/auth` | The Phase 4 demo: a plain HTML page that signs up, verifies from a real email, logs in and explains the JWT claims — the auth API's first browser client |
 | `.github/workflows` | CI in two lanes — a one-minute unit lane run against dead database ports, and an integration lane that stands up the whole Docker stack — plus the nightly crash, lifecycle and reboot drills |
