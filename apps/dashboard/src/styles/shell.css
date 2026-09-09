@@ -120,15 +120,6 @@
    to fit in it. The breadcrumb is the one part with arbitrary-length content, so
    it is the one that yields — `.crumb__label` below already truncates; what it
    lacked was the `min-width: 0` that lets it. */
-@media (max-width: 560px) {
-  /* The palette's shortcut hint names a key the device does not have. Dropping it
-     is not a compromise on this width, it is the more honest label. The palette
-     is still reachable by the button itself, and `?` lists the keys for anyone
-     with a keyboard (§2's three routes are unaffected). */
-  .bar .kbd { display: none; }
-  .crumb { max-width: 140px; }
-}
-
 /* ── breadcrumb, where every segment is a switcher (§1) ───────────────────── */
 .crumbs { display: flex; align-items: center; gap: 2px; min-width: 0; }
 .crumbs__sep { color: var(--sh-text-muted); font: var(--sh-body-s); padding: 0 2px; }
@@ -150,6 +141,20 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
 }
 .crumb__caret { color: var(--sh-text-muted); font-size: 10px; flex: none; }
+
+/* After the breadcrumb rules, not before them — which is where this was, and it
+   made the `max-width` line dead: same specificity, and the later `.crumb`
+   declaration won, so a 375px phone still allowed a 220px crumb. Measured as
+   `max-width: 220px` at a 375px viewport, which is how it was found. A media
+   query does not raise specificity; only order decides. */
+@media (max-width: 560px) {
+  /* The palette's shortcut hint names a key the device does not have. Dropping it
+     is not a compromise on this width, it is the more honest label. The palette
+     is still reachable by the button itself, and `?` lists the keys for anyone
+     with a keyboard (§2's three routes are unaffected). */
+  .bar .kbd { display: none; }
+  .crumb { max-width: 140px; }
+}
 
 /* ── the sidebar ──────────────────────────────────────────────────────────── */
 .nav {
@@ -465,6 +470,21 @@ tr:hover .rowbtn, .rowbtn:focus-visible, .rowbtn[aria-expanded="true"] {
   border: 0; border-bottom: 1px solid var(--sh-border);
   background: none; color: var(--sh-text); font: var(--sh-body-l);
 }
+/* §2 says focus is never removed, only replaced, and this removes it. Recorded
+   as a gap rather than patched blind.
+
+   The caret is *an* indicator and the input is auto-focused, so in practice a
+   keyboard user is rarely lost. But the justification that would make this
+   correct — "the input is the only focusable thing in the palette" — is **false**:
+   `CommandPalette.tsx:353` renders each option as a `<button>` with no
+   `tabIndex={-1}`, so Tab walks into the list. That is a second, larger problem
+   in the same widget: a listbox driven by `aria-activedescendant` expects its
+   options not to be focusable, and as it stands DOM focus and
+   `aria-activedescendant` can point at different rows.
+
+   Both belong to the palette's focus model and deserve their own verification
+   pass, not a one-line change at the end of an unrelated step. STATUS §8 carries
+   them. */
 .palette__input:focus { outline: none; }
 .palette__input::placeholder { color: var(--sh-text-muted); }
 .palette__list { max-height: 46vh; overflow-y: auto; padding: var(--sh-space-4); }
@@ -576,3 +596,169 @@ a.section__note { text-decoration: none; }
 
 /* Inline text links keep their underline — inside a paragraph it is the only
    thing marking them as links, and colour alone is not enough. */
+
+/* ── the table editor's two panes ─────────────────────────────────────────────
+   A selector that stays and a subject that changes (§3). The list is the
+   context; re-mounting it on every table would lose the scroll position of the
+   thing the user is navigating with.
+
+   `minmax(0, …)` on both tracks, for the reason D-460 records: a bare `1fr` is
+   `minmax(auto, 1fr)`, so the track's floor becomes its content's min-content —
+   and this track holds a data grid, which is the widest thing in the app. */
+.tablepane {
+  display: grid;
+  grid-template-columns: minmax(0, 232px) minmax(0, 1fr);
+  gap: var(--sh-space-24);
+  align-items: start;
+}
+.tablepane__main { min-width: 0; }
+
+/* A **media** query, and against D-441's usual preference for container queries.
+   Two things rule it out here.
+
+   An element cannot answer its own container query — the first version put
+   `container-type` on `.tablepane` and queried `.tablepane`, so it never fired:
+   `232px 15px` at 375px and a page that scrolled sideways. That is the same
+   mistake `.facts` made earlier, and the escape `.facts` used — style the
+   children, span the cells — cannot work here, because what has to change is the
+   parent's own *tracks*.
+
+   The remaining option is a container on a new ancestor, and that is the D-460
+   trap: `container-type` implies `contain: layout`, which makes the element the
+   containing block for `position: fixed` — and this page will grow dialogs the
+   moment the DDL flow lands. Planting that is a correctness bug waiting for the
+   next step.
+
+   So: a viewport query, whose error is bounded and cosmetic. The pane is the
+   window minus the project nav (232px, or 56px railed) minus two 24px gutters,
+   so 1000px of window is about 720px of pane — the width where two panes stop
+   being useful. With the nav railed it stacks a little early, which is a smaller
+   fault than either alternative. */
+@media (max-width: 1000px) {
+  .tablepane { grid-template-columns: minmax(0, 1fr); }
+}
+
+.tablelist { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.tablelist__group {
+  font: var(--sh-caption); letter-spacing: var(--sh-tracking-caption);
+  text-transform: uppercase; color: var(--sh-text-muted);
+  padding: var(--sh-space-12) var(--sh-space-8) 4px;
+}
+.tablelist__row {
+  display: flex; align-items: center; gap: var(--sh-space-8);
+  padding: 6px var(--sh-space-8); border-radius: var(--sh-radius-sm);
+  font: var(--sh-body-s); color: var(--sh-text-secondary);
+  text-decoration: none; min-width: 0;
+  transition: background 120ms ease, color 120ms ease;
+}
+.tablelist__row:hover { background: var(--sh-surface-alt); color: var(--sh-text); }
+/* `aria-current`, not a class. The attribute is what a screen reader reads, so
+   styling the same thing keeps the two from disagreeing. */
+.tablelist__row[aria-current="page"] {
+  background: var(--sh-accent-subtle); color: var(--sh-text); font-weight: 600;
+}
+.tablelist__name {
+  font: var(--sh-code); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; min-width: 0; flex: 1;
+}
+.tablelist__tag {
+  font: var(--sh-caption); color: var(--sh-text-muted); flex: none;
+  border: 1px solid var(--sh-border); border-radius: var(--sh-radius-sm);
+  padding: 0 4px;
+}
+.tablelist__empty {
+  font: var(--sh-body-s); color: var(--sh-text-muted);
+  margin: var(--sh-space-8) var(--sh-space-8) 0; padding: 0;
+}
+
+/* ── the RLS panel ────────────────────────────────────────────────────────────
+   Permanently on the table page, because the API's security model *is* RLS
+   (D-036) and a page that shows rows without showing who else can read them is
+   answering the easier question. */
+.rls {
+  display: flex; flex-wrap: wrap; align-items: baseline;
+  gap: var(--sh-space-8);
+  padding: var(--sh-space-12) var(--sh-space-16);
+  background: var(--sh-surface-alt); border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-lg);
+  margin-bottom: var(--sh-space-16);
+}
+.rls--warn { background: var(--sh-warning-bg); border-color: var(--sh-warning-bg); }
+.rls__toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: none; border: 0; padding: 0; cursor: pointer; color: inherit;
+}
+.rls__toggle:disabled { cursor: default; }
+.rls__badge {
+  font: var(--sh-body-s); font-weight: 600; color: var(--sh-text);
+  border: 1px solid var(--sh-border-strong); border-radius: var(--sh-radius-sm);
+  padding: 1px 6px; background: var(--sh-surface); white-space: nowrap;
+}
+/* No-policies is D-083's *safe* default, so it is informational and never red —
+   drawing it as an error trains people to dismiss the one badge that matters. */
+.rls__badge--info { color: var(--sh-text-secondary); }
+.rls__badge--muted { color: var(--sh-text-muted); }
+.rls__badge--warn { color: var(--sh-warning); border-color: var(--sh-warning); }
+.rls__caret { color: var(--sh-text-muted); font-size: 10px; }
+.rls__text { font: var(--sh-body-s); color: var(--sh-text-secondary); flex: 1; min-width: 240px; }
+.rls__list {
+  flex-basis: 100%; display: flex; flex-direction: column; gap: var(--sh-space-8);
+  margin-top: var(--sh-space-4);
+}
+.rls__policy {
+  background: var(--sh-surface); border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-sm); padding: var(--sh-space-8) var(--sh-space-12);
+}
+.rls__policyhead {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sh-space-8);
+}
+.rls__roles { font: var(--sh-body-s); color: var(--sh-text-muted); }
+.rls__expr {
+  display: flex; gap: var(--sh-space-8); margin-top: 4px; min-width: 0;
+}
+.rls__expr > span {
+  font: var(--sh-caption); letter-spacing: var(--sh-tracking-caption);
+  color: var(--sh-text-muted); flex: none; padding-top: 2px;
+}
+.rls__expr > code { overflow-wrap: anywhere; min-width: 0; }
+
+/* ── the data grid ────────────────────────────────────────────────────────────
+   The one container in the app allowed to scroll sideways: a forty-column table
+   is wider than any window, and squeezing it is what makes a cell unreadable.
+   Scoped here so the *page* never scrolls (D-460). */
+.gridwrap {
+  background: var(--sh-surface); border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-lg) var(--sh-radius-lg) 0 0;
+  overflow-x: auto; max-width: 100%;
+}
+.grid { min-width: max-content; }
+.grid thead th { vertical-align: bottom; padding: 0; }
+.grid__sort {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  width: 100%; background: none; border: 0; cursor: pointer; color: inherit;
+  padding: var(--sh-space-8) var(--sh-space-12); text-align: left;
+}
+.grid__sort:hover { background: var(--sh-surface-alt); }
+.grid__col { font: var(--sh-body-s); font-weight: 600; color: var(--sh-text); }
+/* Type and nullability in the header, not in a tab away from the values — they
+   are what a developer needs *while* reading a row. */
+.grid__type { font: var(--sh-caption); color: var(--sh-text-muted); white-space: nowrap; }
+.grid__arrow { position: absolute; right: 8px; top: 8px; color: var(--sh-text-muted); }
+.grid thead th { position: relative; }
+.grid td { white-space: nowrap; max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
+/* `null` and an empty string render identically as text and are different
+   values — in a grid over someone's data that is the difference between "no
+   answer" and "a blank answer". */
+.grid__null { font: var(--sh-code); color: var(--sh-text-muted); font-style: italic; }
+.grid__empty { font: var(--sh-caption); color: var(--sh-text-muted); }
+
+.sh-linkbtn {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font: inherit; color: var(--sh-accent); text-decoration: underline;
+}
+.sqlpeek { margin-top: var(--sh-space-12); }
+.sqlpeek > summary {
+  font: var(--sh-body-s); color: var(--sh-text-secondary); cursor: pointer;
+}
+.sqlpeek .sh-code { margin-top: var(--sh-space-8); max-width: 100%; }
+.sqlpeek pre { white-space: pre-wrap; overflow-wrap: anywhere; }

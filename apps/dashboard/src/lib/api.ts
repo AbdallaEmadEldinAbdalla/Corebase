@@ -304,8 +304,96 @@ export const PROJECT_STATES = [
   'provisioning', 'ready', 'paused', 'resuming', 'restoring', 'failed', 'deleting', 'deleted',
 ] as const;
 
+/* ── the SQL console (P7l) ───────────────────────────────────────────────── */
+
+/** One statement's result. `type` is the Postgres OID, not a name. */
+export interface StatementResult {
+  rows: Record<string, unknown>[];
+  row_count: number;
+  fields: { name: string; type: number }[];
+  duration_ms: number;
+  /** What actually ran, including any LIMIT the server appended. */
+  executed_sql: string;
+  truncated: boolean;
+  command: string;
+}
+
+export interface IntrospectionTable {
+  schema: string;
+  name: string;
+  kind: string;
+  owner: string;
+  rls_enabled: boolean;
+  /**
+   * `reltuples`. An **estimate**, and `-1` means the table has never been
+   * analysed — which is not zero, and must never be rendered as one.
+   */
+  rows_estimate: number;
+  comment: string | null;
+}
+
+export interface IntrospectionColumn {
+  schema: string;
+  table: string;
+  name: string;
+  /** `format_type` output, so `character varying(40)` keeps its length. */
+  type: string;
+  nullable: boolean;
+  default: string | null;
+  position: number;
+  is_primary_key: boolean;
+  is_identity: boolean;
+  comment: string | null;
+}
+
+export interface IntrospectionPolicy {
+  schema: string;
+  table: string;
+  name: string;
+  command: string;
+  permissive: boolean;
+  roles: string[];
+  using: string | null;
+  check: string | null;
+}
+
+export interface Introspection {
+  schemas: string[];
+  tables: IntrospectionTable[];
+  columns: IntrospectionColumn[];
+  functions: { schema: string; name: string; arguments: string; returns: string; kind: string }[];
+  policies: IntrospectionPolicy[];
+  roles: string[];
+  /** Which lists hit their server-side cap. A short list must say it is short. */
+  truncated: Record<string, boolean>;
+}
+
 export const api = {
   me: () => request<MeResponse>('/v1/auth/me'),
+
+  /** The project's schema, in one payload — the editors' whole left-hand side. */
+  introspect: (ref: string) =>
+    request<Introspection>(`/v1/projects/${encodeURIComponent(ref)}/db/introspect`),
+
+  /**
+   * Run SQL through the audited console path (D-132).
+   *
+   * `params` are bound, never interpolated — the grid's filters and its row edits
+   * both go through here and the table editor spec is explicit that user input
+   * never reaches a statement as text.
+   */
+  runSql: (ref: string, body: {
+    sql: string;
+    params?: readonly unknown[];
+    role?: 'admin' | 'anon' | 'authenticated';
+    claims?: Record<string, unknown>;
+    read_only?: boolean;
+    confirm_destructive?: boolean;
+    confirm_names?: readonly string[];
+  }) =>
+    request<{ results: StatementResult[] }>(
+      `/v1/projects/${encodeURIComponent(ref)}/db/query`,
+      { method: 'POST', body }),
 
   login: (email: string, password: string) =>
     request<{ user: NonNullable<MeResponse['user']>; csrf_token: string }>(

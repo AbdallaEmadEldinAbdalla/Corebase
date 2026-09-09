@@ -144,6 +144,9 @@ export function CommandPalette({ open, onClose, orgSlug, projectRef }: {
       list.push(
         { id: 'go-overview', group: 'Go to', label: 'Project overview',
           hint: 'g o', run: go(`/project/${projectRef}`) },
+        { id: 'go-tables', group: 'Go to', label: 'Table editor',
+          keywords: 'table tables schema rows grid data columns rls policies',
+          hint: 'g t', run: go(`/project/${projectRef}/table-editor`) },
         { id: 'go-connect', group: 'Go to', label: 'Connect',
           keywords: 'connection string psql uri database url',
           hint: 'g c', run: go(`/project/${projectRef}/connect`) },

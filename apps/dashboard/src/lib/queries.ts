@@ -20,6 +20,12 @@ export const keys = {
   members: (orgId: string) => ['org', orgId, 'members'] as const,
   invites: (orgId: string) => ['org', orgId, 'invites'] as const,
   tokens: ['tokens'] as const,
+  /**
+   * The whole schema under one key, because it is fetched and invalidated as one
+   * thing — D-134 says any successful DDL invalidates the cache, and a key per
+   * catalog list would mean five invalidations that can partially fail.
+   */
+  introspection: (ref: string) => ['project', ref, 'introspection'] as const,
 };
 
 export const useMe = () => useQuery({ queryKey: keys.me, queryFn: api.me });
@@ -399,3 +405,60 @@ export function useCreateProject(orgId: string) {
     },
   });
 }
+
+/**
+ * The project's schema.
+ *
+ * `refetchOnWindowFocus` and a 60s interval are D-134's answer to DDL run
+ * *outside* the dashboard — psql, `db push` — which the client cannot be told
+ * about. Push-invalidation via an event trigger is OQ-133 and is not decided, so
+ * the honest version is polling that says how stale it can be rather than a cache
+ * that pretends to be live.
+ *
+ * DDL run *inside* the dashboard invalidates this key directly; that is the fast
+ * path and it is what `useRunSql` does below.
+ */
+export function useIntrospection(ref: string) {
+  return useQuery({
+    queryKey: keys.introspection(ref),
+    queryFn: () => api.introspect(ref),
+    refetchOnWindowFocus: true,
+    refetchInterval: 60_000,
+    // The server sets `cache-control: private, max-age=10`; matching it here
+    // stops several mounting panels from each firing a request.
+    staleTime: 10_000,
+  });
+}
+
+/**
+ * Run SQL, and invalidate the schema when the statement changed it.
+ *
+ * "Changed it" is decided from the server's own `command` per statement rather
+ * than by re-classifying the SQL in the browser: the server is the one that knows
+ * what ran, including any statement it rewrote. A `SELECT` leaves the cache
+ * alone, which is what makes the grid's own reads cheap.
+ */
+export function useRunSql(ref: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Parameters<typeof api.runSql>[1]) => api.runSql(ref, body),
+    onSuccess: (data) => {
+      const ddl = data.results.some((r) => DDL_COMMANDS.has(r.command));
+      if (ddl) void qc.invalidateQueries({ queryKey: keys.introspection(ref) });
+    },
+  });
+}
+
+/**
+ * Leading keywords that change the schema.
+ *
+ * A list rather than "anything that is not SELECT", because the difference
+ * matters in the cheap direction: an `INSERT` does not change the schema and
+ * re-reading the whole catalog after every row edit would make the grid feel
+ * slower the more it is used. Over-invalidating is only a performance bug, so
+ * anything uncertain belongs *in* this set.
+ */
+const DDL_COMMANDS = new Set([
+  'CREATE', 'ALTER', 'DROP', 'TRUNCATE', 'COMMENT', 'GRANT', 'REVOKE',
+  'RENAME', 'REINDEX', 'CLUSTER', 'REFRESH', 'IMPORT', 'SECURITY',
+]);

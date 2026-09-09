@@ -1,7 +1,6 @@
 import {
-  BarChart3, Cable, Gauge, KeyRound, LayoutGrid, Settings, Users,
-  type LucideIcon,
-} from 'lucide-react';
+  BarChart3, Cable, Gauge, KeyRound, LayoutGrid, Settings, Table2, Users,
+  type LucideIcon } from 'lucide-react';
 
 /**
  * The Steadhold mark — the chiselled S, cut at the waist.
@@ -113,6 +112,8 @@ const ICONS = {
   keys: KeyRound,
   /** Two figures — one silhouette reads as "account", a different page. */
   members: Users,
+  /** A grid, because the page is rows and columns before it is anything else. */
+  'table-editor': Table2,
   usage: BarChart3,
   settings: Settings,
 } satisfies Record<string, LucideIcon>;
