@@ -4561,7 +4561,7 @@ The scope is ~30 routes. What is missing is mostly **API, not UI**:
 
 | Surface | Blocker |
 |---|---|
-| ~~Table editor~~ (read path, and DDL) | **Built — P7m and P7n.** Table list, grid with sort and paging, the Structure section, the per-table RLS panel, and thirteen DDL operations through one preview→confirm loop. Three things remain. **Indexes, foreign keys and CHECK/UNIQUE constraints** are API-blocked, not descoped: introspection returns tables, columns, functions and policies, so there is no index or constraint list to act on and the FK fan-in warning cannot be computed — two more catalog queries in `introspect.ts` unblock all of it, and `CREATE INDEX CONCURRENTLY` needs OQ-132 settled first (V1 would emit a plain `CREATE INDEX` and say that it locks writes). The **anonymous-access toggle** D-108 describes is blocked on the same gap in a smaller way: the grant and revoke operations are built, but a *toggle* has to render its current state and nothing in the payload reports `has_table_privilege('anon', …)`, so it is two explicit verbs rather than a switch that cannot know whether it is on. **Row-level DML** — inline edit, insert, delete — is unblocked and simply not built; the grid already refuses to edit a keyless table and now offers to add the key. **Save-as-migration** is genuinely API-blocked: D-076 wants a server-side `schema_migrations` row plus a written file and there is no endpoint, so the loop offers a correctly-named `.sql` download and says it is not recorded |
+| ~~Table editor~~ (read path, and DDL) | **Built — P7m and P7n.** Table list, grid with sort and paging, the Structure section, the per-table RLS panel, and thirteen DDL operations through one preview→confirm loop. Three things remain. **Dropping an index or a constraint** needs a list of what exists and the introspection payload has neither — two more catalog queries in `introspect.ts` unblock both, plus the **FK fan-in warning's condition** ("if the referencing column has no index") and the **anonymous-access toggle** D-108 describes. The grant and revoke verbs are built; a *toggle* has to render its current state and nothing reports `has_table_privilege('anon', …)`, so it is two buttons rather than a switch that cannot know whether it is on. **`CREATE INDEX CONCURRENTLY`** is separately blocked, and not by OQ-132 being undecided: it cannot run inside a transaction block and the console runs every script in one (D-464), so it needs a non-transactional lane in the execution path. Creating indexes, foreign keys, CHECK and UNIQUE all ship in P7n — an earlier version of this row called them API-blocked, which was true of the two drops and not of the five adds. **Row-level DML** — inline edit, insert, delete — is unblocked and simply not built; the grid already refuses to edit a keyless table and now offers to add the key. **Save-as-migration** is genuinely API-blocked: D-076 wants a server-side `schema_migrations` row plus a written file and there is no endpoint, so the loop offers a correctly-named `.sql` download and says it is not recorded |
 | SQL editor | **Endpoint built — P7l**: `POST /v1/projects/:ref/db/query` with all six D-134 rails, and `GET …/db/introspect` for the completion source. Two things still stand in the way: saved queries and history (blocked on OQ-134, since history stores verbatim SQL and therefore any literal typed into a `WHERE`), and rail 3's per-project timeout, which has no column — the default and cap are enforced, the persistence is not |
 | Auth users, storage browser | Data-plane only (`/auth/v1/admin/*`, `/storage/v1/*`), which needs a `service_role` key — and a session-cookie dashboard (D-062) must never hold one in the browser. Needs a control-plane proxy, which is an architectural decision, not a screen |
 | Logs, metrics, backups list, audit | No endpoints |
@@ -4930,15 +4930,32 @@ and the SQL is what runs.* So the centre of this step is
 filename). Nothing in it executes; a `Plan` is a value, which is what makes 48
 tests possible without a database.
 
-**Fifteen operations**: create table, rename table, drop table (RESTRICT or
-CASCADE), add column, rename column, change type, drop column, set and drop NOT
-NULL, set and drop default, add primary key, enable RLS, and grant and revoke
-anonymous read. Indexes, foreign keys and CHECK/UNIQUE constraints are **not**
-here, and the reason is an API gap rather than a scope choice — introspection
-returns tables, columns, functions and policies, so there is no index or
-constraint list to pick from and the FK fan-in warning ("deletes on `users` will
-seq-scan `posts`") cannot be computed. That is §8's, and it is the natural first
-half of the next step.
+**Nineteen operations**, which is the doc's whole catalog except the two that
+need a list this platform does not report: create table, rename table, drop table
+(RESTRICT or CASCADE), add column, rename column, change type, drop column, set
+and drop NOT NULL, set and drop default, add primary key, enable RLS, grant and
+revoke anonymous read, create index (plain or unique), add foreign key, add CHECK,
+add UNIQUE.
+
+**A claim I had to walk back.** The first version of this section said indexes,
+foreign keys and constraints were "API-blocked, not descoped". Checking that
+against the catalog rather than repeating it: *creating* an index needs only
+column names; `CHECK` needs only an expression; and a foreign key needs the
+target table and its columns, which introspection **does** carry. Only three
+things are genuinely blocked, and each for its own reason:
+
+- **Drop index** and **drop constraint** need a list of what exists, and the
+  payload has neither.
+- **The FK fan-in warning's condition** — "if the referencing column has no
+  index" — cannot be evaluated, so the notice states the consequence *and* the
+  uncertainty, and the "also index this column" box is off by default: an index
+  covering the column under a different name is invisible from here, so
+  defaulting it on would quietly double some tables' write cost.
+- **`CREATE INDEX CONCURRENTLY`** is not blocked by OQ-132 being undecided. It
+  cannot run inside a transaction block, and the console runs every script in one
+  (D-464, rail 5) — so it needs a non-transactional lane in the execution path,
+  which is a server change rather than a preference. V1 emits the plain form and
+  says exactly that in the notice.
 
 ### The ladder mismatch, and how it was resolved
 
@@ -5513,6 +5530,26 @@ differ in everything that matters. A guard that greps for `DROP` demands a typed
 name for a reversible one-line change, which teaches people to type through
 confirmations and so makes the dangerous case *less* safe than before the guard
 existed. Splitting the action list is what separates them (**D-468**).
+
+**A popover cannot live inside a scroll container.** `.pop__menu` is `position:
+absolute`, and `overflow: auto` on an ancestor clips absolutely-positioned
+descendants — so the branded `Select` inside the DDL dialog's scrolling body
+would have opened a list with its bottom cut off, worst on the last field of the
+longest form. Read off the stylesheet rather than seen, because no browser was
+available; the mechanism is not in doubt, and it is the same family as D-460's
+three container-query traps. Where a picker is needed inside a scrolling layer,
+a text input with a `datalist` is both unclipped and the better control: a
+project can have hundreds of tables, and a field you filter beats a list you
+scroll.
+
+**"Blocked" is a claim about each item, not about the group.** The first write-up
+of P7n said indexes, foreign keys and constraints were "API-blocked, not
+descoped" — one sentence covering five operations, of which it was true for two.
+*Creating* an index needs only column names; a `CHECK` needs only an expression;
+a foreign key needs the target table and its columns, which the payload carries.
+Only the two *drops* need a list nothing reports. Grouping them let one real
+blocker excuse four buildable things, which is the comfortable direction for that
+mistake to run in — check the blocker per item before writing the sentence.
 
 **A switch's `default:` is where new syntax goes to be declared safe.** Every
 `ALTER` fell into `default: → safe` and column drops ran unconfirmed for as long

@@ -367,7 +367,7 @@ guard that demanded a typed name for a reversible one-line change would teach
 people to type through confirmations (D-468).
 
 **Every table-editor operation is a SQL generator with a preview, and the
-preview is what runs.** Thirteen operations compile through one pure module, so
+preview is what runs.** Nineteen operations compile through one pure module, so
 the statement in the dialog is the statement sent — and the dialog runs the
 *same* `@steadhold/sql-guard` the API runs, rather than a copy of it, so it
 cannot offer a plain confirmation for something the server will refuse without a
