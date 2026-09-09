@@ -28,7 +28,7 @@ Every mutating call leaves a row in an append-only audit table — enforced by a
 
 Each project gets its own ES256 keypair with `anon` and `service_role` keys, and publishes `GET /v1/projects/:ref/.well-known/jwks.json` so a customer's services can verify tokens without calling us.
 
-**The dashboard shell (P1g).** A Next.js app that is a pure client of the platform API — no BFF, no server-side control-plane access. Sign in, switch organizations, see your projects in a dense table, create one and watch it go `creating` → `ready` without reloading, then copy a connection string that works. Context lives in a breadcrumb where every segment is a switcher, the chrome never re-renders when you navigate inside it, and everything is reachable from the keyboard: `⌘K` for a command palette that navigates, switches, creates and copies, `g p` / `g o` / `g c` / `g k` to jump, `?` for the list.
+**The dashboard shell (P1g).** A Next.js app that is a pure client of the platform API — no BFF, no server-side control-plane access. Sign in, switch organizations, see your projects in a dense table, create one and watch it go `creating` → `ready` without reloading, then copy a connection string that works. Context lives in a breadcrumb where every segment is a switcher, the chrome never re-renders when you navigate inside it, and everything is reachable from the keyboard: `⌘K` for a command palette that navigates, switches, creates and copies, `g p` / `g o` / `g c` / `g k` / `g u` / `g s` / `g a` to jump, `?` for the list.
 
 It is built on the design system that already existed in `design-exports/` rather than on Tailwind + shadcn (D-220): those exports turned out to be a complete component library, and a second component system for the same design would only drift from it. Both themes ship, and tests enforce the three rules that decay silently — no stylesheet may name a ramp step, no drop shadows, and no reference to a token that does not exist.
 
@@ -426,7 +426,7 @@ Staging is Docker Compose plus Docker-in-Docker standing in for a control node a
 | `infra/docker/pgbouncer` | The per-project pooler image: transaction mode, `auth_query` against a lookup that allowlists one role, every rule baked in |
 | `infra/docker/staging` | The local stand-in for staging, including Prometheus, Loki, Alloy and Grafana with the dashboard provisioned as code |
 | `packages/metrics` | A Prometheus registry — counters, gauges, histograms, with label sets declared up front so the cardinality budget is hard to break |
-| `apps/dashboard` | The dashboard: login, signup, org switcher, projects grid, create-project flow, project overview, project usage, project settings with pause and a danger zone, retrying a failed project, the paused/resuming experience, org members and invitations, organization settings, and accepting an invitation — Next.js App Router, TanStack Query, session cookies, no BFF |
+| `apps/dashboard` | The dashboard: login, signup, org switcher, projects grid, create-project flow, project overview, project usage, project settings with pause and a danger zone, retrying a failed project, the paused/resuming experience, org members and invitations, organization settings, accepting an invitation, and the account page with personal access tokens — Next.js App Router, TanStack Query, session cookies, no BFF |
 | `demo/auth` | The Phase 4 demo: a plain HTML page that signs up, verifies from a real email, logs in and explains the JWT claims — the auth API's first browser client |
 | `.github/workflows` | CI in two lanes — a one-minute unit lane run against dead database ports, and an integration lane that stands up the whole Docker stack — plus the nightly crash, lifecycle and reboot drills |
 
@@ -499,6 +499,18 @@ Rebuilding it found a defect that had shipped: `violet/600`, the old *dark* acce
 was 4.23:1 against white and 4.36:1 against ink — it failed AA with either label,
 because the spec justified the accent by measuring only its light value. The floor is
 executable now.
+
+**Applied migrations are immutable, and the repo enforces it.** `migrations/.checksums`
+is committed and `packages/migrate/src/immutable.test.ts` recomputes it on every unit
+run. The runner has always refused to apply a migration whose bytes changed since it
+was applied, but only against a database that already has it — and CI only ever has a
+fresh one, so two renames edited six applied migrations without anything noticing.
+Prose about a column that may need to change belongs in `COMMENT ON`, which a later
+migration can replace (D-456).
+
+```bash
+pnpm --filter @steadhold/migrate checksums   # after ADDING a migration
+```
 
 **`tokens.css` is generated** from
 [`tokens.build.mjs`](apps/dashboard/src/styles/tokens.build.mjs), and the test

@@ -4488,6 +4488,73 @@ between retries. Two of the refusal tests were initially passing *vacuously* —
 border and the button gone, the grid updating by poll with no reload, and
 `project.retry_requested` in the audit log.
 
+### P7k — `/account`, and the credential surface the CLI had no UI for
+
+The last unblocked Phase 7 surface. `/v1/auth/tokens` has been complete since P1c
+and had no UI at all, which made a personal access token something you could only
+create with `curl` — and only revoke the same way.
+
+**What the page is.** A profile card of facts from `/v1/auth/me`, and an access
+token section: a create form (name, and an expiry chosen from 30 / 90 / 365 days or
+never — the useful points on the API's 1–365 range, because nobody has an opinion
+about 137 days), the list as cards, and revoke behind a confirmation. Reachable
+three ways, because it had **zero** entry points before this: the account menu, the
+palette's Account group, and `g a` — which is the one `go` binding with no `if`
+around it, since the account is not inside an org or a project. It is in the printed
+shortcut sheet too; a key that is not listed there is a key for the author only.
+
+**The honest part, and the one worth arguing about.** There is no scope picker, and
+the card's footer says a token has full access to the account. `scopes` is stored
+and never enforced — `kernel/principal.ts` carries it into the principal and nothing
+authorizes against it — so a picker would apply no restriction, which is question 19
+in its worst form: on a credential. Saying so is also the argument for a short
+expiry (D-457). The same fact is now on the column itself, via `COMMENT ON`, so the
+schema states it without anyone needing to find the dashboard.
+
+**The reveal is a dialog, not a banner** (D-458). It was a banner first, copied from
+the invitation's — but an invitation's token is one of several things that result
+carries, and this is the only moment the secret exists on screen. The scrim is inert
+and Escape works: a stray click outside a box must not destroy the only copy, and a
+layer that swallows Escape teaches the user that Escape is unreliable.
+
+**Three defects found by measuring the page rather than looking at it.** The create
+row put its help text inside `.sh-field`, which made that field 22px taller and left
+`align-items: flex-end` lining up field *boxes* instead of controls — input top at
+562 against the select's and the button's 584. `minWidth: 0`, copied from the invite
+form, defeats `.sh-row`'s own `flex-wrap`: with no min-content floor the name field
+crushed toward nothing instead of wrapping, so at 375px the two labels drew on top
+of each other and the document scrolled sideways. And `.sh-btn--ghost` is
+`background: transparent` over `.sh-btn`'s transparent border, so on a tinted banner
+it has neither fill nor edge — 119×32 of invisible control, and the control that
+dismissed the secret. The same variant was doing the same thing to `ErrorSurface`'s
+`request_id` copy button, which is the one thing D-032 exists for.
+
+**Four shared-layer bugs, all reported by the user as "it's zoomed out" and "fix
+this card"** (D-460, D-461). `.shell` floored its content track at the bar's 415px
+min-content, so *every* page overflowed a phone. `.sh-modal`'s implicit grid column
+sized itself to its own item, so `.sh-dialog`'s `max-width: 100%` measured the thing
+it was capping and every dialog overflowed too. `.facts` was a fixed `160px 1fr`
+with no wrap on the value, so any long email overflowed any card. And below 640px a
+232px sidebar leaves 143px of content, which is narrower than the min-content of
+what lives there. Fixing the third one is where the interesting mistake is: making
+`.card__body` a query container broke `position: fixed` for every `ConfirmDialog`,
+because `container-type` implies `contain: layout` and a layout-contained element
+becomes the containing block for fixed descendants — the org delete dialog measured
+476px inside a 375px viewport. The container belongs on `.facts` itself, styling its
+children by spanning cells.
+
+**Verification.** Live against Docker staging: tokens created at 90-day and never
+expiry, the secret authenticated (`GET /v1/auth/me` → `"principal":"token"` for the
+right user and org, `last_used_at` set), the audit row carrying `key_prefix` and
+never the token, revoke soft-revoking scoped to the owner with the list returning to
+its empty state, `Esc` restoring focus to the opener rather than `<body>` in both
+dialogs, the scrim refusing to dismiss the reveal, and both themes. Measured at
+375 / 503 / 1280: no horizontal scroll on the page or in any dialog, the rail forced
+below 640 and the 232px sidebar and its labels back at 1280. 133 dashboard unit
+tests, `tsc` clean.
+
+**P7k also found a migration defect that had nothing to do with it** — see §4l.
+
 ### The rest of Phase 7 — not started, and what blocks it
 
 The scope is ~30 routes. What is missing is mostly **API, not UI**:
@@ -4499,7 +4566,7 @@ The scope is ~30 routes. What is missing is mostly **API, not UI**:
 | Logs, metrics, backups list, audit | No endpoints |
 | ~~Usage per project~~ | **Built — P7e**, endpoint and page. Object-storage bytes remain out: `storage-sweep` computes the authoritative figure and does not record it centrally, which is the worker change that would let the route serve it. CPU, connections and request rate have no source at all. |
 | ~~Org settings~~ | **Built — P7g.** Rename and the danger zone; the slug is permanent because no route changes it |
-| Account, and personal access tokens | **API exists** — `/v1/auth/tokens` is complete and has no UI at all, which makes it the CLI's credential surface with no way to manage it. `/account`'s other three sections are blocked: no route updates a display name, changes a password, or lists sessions |
+| ~~Account, and personal access tokens~~ | **Built — P7k.** Create, list and revoke, with the secret shown once in a dialog. `/account`'s other three sections remain blocked and the page says so: no route updates a display name, changes a password, or lists sessions |
 | ~~Project settings~~ | **Built — P7d.** Pause/resume and the danger zone; renaming still blocked on a missing route |
 
 ~~`D-130` specifies Tailwind + shadcn/ui and the divergence is unrecorded.~~ **This
@@ -4559,6 +4626,45 @@ a payment method, none of which are mine to create. Hetzner's console currently
 warns of *limited availability of cloud instances*, and CCX (dedicated vCPU) is
 usually the constrained line, so the first `up` may need `fsn1` or `hel1` instead of
 `nbg1`; all three are eu-central, so D-024 holds either way.
+
+## 4l. The migration that could not be applied
+
+Found while bringing the staging stack up to verify P7k, which is the only reason it
+was found at all: `./scripts/migrate-staging.sh` exited 1 with
+
+```
+Migration 20260901110000_p1c_access_tokens.sql was already applied but its
+contents changed. Applied migrations are immutable — add a new migration instead.
+```
+
+**The runner was right and had been right for six commits.** The credential-prefix
+rename (D-433) edited two SQL comments inside a migration that was already applied;
+before that, the brand rename edited five more. Both commits verified themselves
+against a database that had been migrated *after* the edit, so both passed. A fresh
+database applies an edited migration happily — it cannot tell you that you changed
+history — and CI only ever has a fresh one.
+
+The consequence is worse than the message suggests. The runner exits non-zero, so it
+does not stop at the changed file and continue; it stops. Any *later* migration would
+not be applied either, on any existing database, until someone reconciled the
+checksum by hand.
+
+**What it is now.** The migration is restored to the bytes that were applied, and
+`20260909120000_p7k_token_prefix_comments.sql` carries the current prefix as
+`COMMENT ON COLUMN` metadata instead — queryable, replaceable by a later migration,
+and visible in `\d+ user_access_tokens`. That column comment also records that
+`scopes` is not enforced, so the schema states it too.
+
+**The guard.** `migrations/.checksums` is committed, and
+`packages/migrate/src/immutable.test.ts` recomputes and compares on every unit run.
+It was proved on all three failure modes before being trusted: an edited file, a new
+file with no manifest line, and a deleted file with a line left behind. `migrations/`
+is now exempt from CI's pre-rename-prefix guard, because that guard was demanding a
+change the runner forbids — the exemption the immutability itself justifies (D-456).
+
+**No schema had diverged.** The staging volume postdates the brand rename, so it
+carries `steadhold_app` and not `corebase_app`; the only mismatch was the one
+comment. That is luck, not design, and it is exactly what the manifest removes.
 
 ## 5. Rules the code follows
 
@@ -4908,6 +5014,47 @@ the staged diff and asserting it equals the added line turns "I think that was j
 the rename" into a check — and it is the only thing standing between a 352-file
 commit and something unrelated riding along in it.
 
+**A migration that has been applied is a record, not a document.** Editing one is
+editing history, and the runner will refuse it on every database that already has
+it — while a fresh database, which is all CI ever has, applies it without comment.
+Two renames did it six times before anything noticed. Prose that may need to change
+belongs in `COMMENT ON`, which a later migration can replace.
+
+**A fresh database cannot tell you that you changed history.** Both commits that
+edited an applied migration verified themselves against a database migrated after
+the edit. Verification has to run against the state the change will actually meet.
+
+**A bare `1fr` is a floor, not a share.** `1fr` means `minmax(auto, 1fr)`, so the
+track cannot go below its content's min-content width. `min-width: 0` on the item
+does not help: the thing refusing to shrink is the track.
+
+**A percentage cap that measures the thing it is capping is not a cap.** A grid with
+no explicit template sizes its implicit column to its item, so `max-width: 100%` on
+that item resolves against the item's own width.
+
+**`container-type` makes an element the containing block for `position: fixed`.**
+It implies `contain: layout`. Putting one on `.card__body` broke every dialog in the
+app, because dialogs render in place inside whichever card opened them. Declare a
+query container only on an element that can never contain a layer.
+
+**A control with no fill and no border is a word.** `.sh-btn--ghost` sets
+`background: transparent` and inherits `.sh-btn`'s transparent border, which reads
+fine beside a primary button on the page surface and disappears entirely on a
+tinted banner.
+
+**`min-width: 0` defeats `flex-wrap`.** Wrapping happens when an item cannot fit at
+its min-content size; removing that floor makes it crush instead. The two are
+alternatives, not companions.
+
+**Help text inside one field of a row breaks the row's alignment.** `.sh-field` is a
+flex column, so a help line makes that field taller and `align-items: flex-end`
+then aligns field boxes rather than the controls in them.
+
+**A default is a preference; a floor is a layout fact.** The sidebar's 1024px rule
+chose what the rail does by default and left the stored preference able to override
+it at any width, including ones where the sidebar does not fit. Those are different
+mechanisms and a product needs both.
+
 ## 6. Decisions made while building (not from the plan)
 
 The [decision log](docs/00-foundation/05-decision-log.md) holds **424 decisions**,
@@ -5060,6 +5207,12 @@ This one had already diverged, silently, for three phases.
 | D-314 | The `auth` tables are created by the image at initdb | Fleet-wide and identical, and it makes the export promise true — end-user data never touches the control plane |
 | D-315 | `steadhold_auth` alone holds table privileges in `auth`, with its own password | `service_role` has BYPASSRLS, so the absent grant is the only thing between it and every password hash |
 | D-316 | No default privileges in `auth`, and force-RLS stays scoped to `public` | Enabling RLS on `auth.users` would lock the auth module out of its own tables — every login failing at once |
+| D-456 | A committed migration is immutable, guarded by `migrations/.checksums` and a unit test; changeable prose goes in `COMMENT ON` | The runner already refused it, but only on a database that had it — and CI only ever has a fresh one, so two renames edited six applied migrations undetected |
+| D-457 | `/account` has no scope picker and says a token has full account access | `scopes` is stored and never authorized against, so a picker would be a control that applies no restriction — and silence would let anyone who knows PATs assume a token is narrow |
+| D-458 | The one-time token reveal is a modal dialog whose scrim is inert; Escape still closes it | It is the only moment the secret exists on screen; a stray click outside a box must not destroy it, and a layer that swallows Escape makes Escape unreliable everywhere |
+| D-459 | The token list is cards, and does not offer both views | `.tablewrap` makes every row look clickable and a token row goes nowhere; both-views is recorded as a gap rather than built, because cards have been asked for twice |
+| D-460 | Shrinkable grid tracks are `minmax(0, 1fr)`; `container-type` never goes on an ancestor of a dialog | Three overflow bugs of one shape, plus the trap: `container-type` implies `contain: layout`, which makes the element the containing block for `position: fixed` |
+| D-461 | Below 640px the rail is forced and the stored preference is left alone | 232px of a 375px screen leaves 143px of content; the preference applies again when there is room, so the layout refuses rather than decides |
 
 ## 7. Measurements
 
@@ -5092,6 +5245,40 @@ PostgREST. Neither licenses raising the planned density (D-091's 150 projects/no
 
 ## 8. What is not built yet
 
+
+### Recorded review-gate gaps on `/account` (P7k)
+
+Every one of these is a "no" on §8 of the UX standard, kept here rather than fixed,
+with the reason. An unrecorded "no" is how the standard decays.
+
+- **Q10 — the token list does not offer both views and remember the choice.** §4
+  wants that where a table and cards are both defensible, and the projects list does
+  exactly it. Here it is cards only (D-459): a table row in this app navigates and a
+  token row has nowhere to go, and cards have now been asked for twice after tables
+  squeezed. Building an unrequested toggle would re-open a settled question. Worth
+  revisiting if a user ever holds enough tokens to want to sort them.
+- **Q15 — revoking a token does not require typing its name.** The standard asks for
+  the typed name on a destructive action. `requireText` exists and is deliberately
+  not used, on D-431's reasoning: the typed name is calibrated for deleting a
+  project, the one act that destroys data, and revoking a token destroys nothing —
+  the form above mints another. It is confirmed exactly as revoking an invitation is.
+  The dialog states there is no undo.
+- **Q16 — the profile card's skeleton does not match its content's shape.** It is
+  four bars in the `.facts` grid; the loaded state is four label-and-value pairs,
+  which is eight cells. The list's skeleton *does* match its cards. Low harm because
+  `/v1/auth/me` is already in cache on any navigation into the page, so the skeleton
+  is rarely seen at all — which is also why it has not earned the work.
+- **Q17 — a failed create shows the message inline without its `request_id`.** The
+  field error carries the sentence only. The full surface — code, sentence,
+  `request_id`, copy — does reach the user, because the same failure also raises
+  `toast.apiError`, but it arrives in the toast rather than beside the field, and
+  the toast expires. `FieldError` has no room for a request id and giving it one is
+  a shared-component change.
+- **`/account` states no organization or project in the breadcrumb (Q1/Q2).** That is
+  correct rather than a gap — the account sits outside both contexts, the same as
+  `/new-org` — but it means the two context questions are answered "there is none"
+  on this surface, and it is recorded so the next reader does not read it as an
+  oversight.
 
 ### Known defects, not yet fixed
 
