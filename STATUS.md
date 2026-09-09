@@ -4561,7 +4561,7 @@ The scope is ~30 routes. What is missing is mostly **API, not UI**:
 
 | Surface | Blocker |
 |---|---|
-| Table editor, SQL editor | ~~No query/DDL execution endpoint exists~~ — **built, P7l**: `POST /v1/projects/:ref/db/query` with all six D-134 rails. Three things still stand between it and the editors: the introspection endpoint (the completion source), saved queries and history, and rail 3's per-project timeout, which has no column — the 60s default and 10-minute cap are enforced, the persistence is not |
+| Table editor, SQL editor | ~~No query/DDL execution endpoint exists~~ — **built, P7l**: `POST /v1/projects/:ref/db/query` with all six D-134 rails, and `GET …/db/introspect` for the completion source and the table list. Two things still stand between them and the editors: saved queries and history (blocked on OQ-134, since history stores verbatim SQL), and rail 3's per-project timeout, which has no column — the default and cap are enforced, the persistence is not |
 | Auth users, storage browser | Data-plane only (`/auth/v1/admin/*`, `/storage/v1/*`), which needs a `service_role` key — and a session-cookie dashboard (D-062) must never hold one in the browser. Needs a control-plane proxy, which is an architectural decision, not a screen |
 | Logs, metrics, backups list, audit | No endpoints |
 | ~~Usage per project~~ | **Built — P7e**, endpoint and page. Object-storage bytes remain out: `storage-sweep` computes the authoritative figure and does not record it centrally, which is the worker change that would let the route serve it. CPU, connections and request rate have no source at all. |
@@ -4759,11 +4759,39 @@ name, rejecting a near-miss, then running. The audit trail carries an attempt ro
 with SQL, role and danger, then success or failure with its SQLSTATE — and the
 three refused DROPs wrote nothing.
 
-**What is still missing before the editors can be built:** the introspection
-endpoint (schemas, tables, columns, functions in one payload — the SQL editor's
-completion source), saved queries and history (`GET/POST
-/v1/projects/:ref/queries`, last 100 executions), and rail 3's *per-project*
-timeout, which has no column and no settings UI — the default and the cap are
+### Introspection — `GET /v1/projects/:ref/db/introspect`
+
+One payload: schemas, tables, columns, functions, policies and role names,
+because that is what the client caches as a single query key and invalidates
+together on DDL. Built on `pg_catalog` rather than `information_schema` for one
+concrete reason — `information_schema` reports `character varying` and drops the
+length, and an editor that completes `varchar` for a `varchar(40)` column is
+worse than one that completes nothing.
+
+A GET, so no CSRF and no audit row: the editor refetches on focus and every 60s,
+and recording that would bury the statements that matter under a UI's polling.
+The connection is still the audited `steadhold_admin` path. `reltuples`, never
+`count(*)` — counting would scan a customer's production tables to draw a
+sidebar. The `has_*_privilege` predicates **do not narrow anything today** and
+the module says so: it always runs as the owner.
+
+**It also exposed why staging kept running out of capacity, and the cause was
+this suite's own fixtures.** Creating a project through the real route enqueues a
+real `provision_project`, and a worker running beside the tests provisions it:
+`allocate_node` books RAM and disk, then the saga dies on the fixture's dead
+port. One run left 29 containers and 29 bookings nothing releases; it reached `no
+node in eu-central fits 350 MB + 1 GB under the 85% placement stop` with 77
+dead-lettered jobs. The suite now deletes the job it queues, tracks every project
+it makes, removes projects before organizations (that FK is RESTRICT, not
+CASCADE — and the first version's `.catch(() => {})` would have hidden the
+failure), and recomputes the node ledger from the rows actually present, which is
+the compensation for deleting rows a counter was tracking.
+
+**What is still missing before the editors can be built:** saved queries and
+history (`GET/POST /v1/projects/:ref/queries`, last 100 executions, 30-day
+retention — OQ-134 has to be settled first, because history stores verbatim SQL
+including any literal typed into a `WHERE`), and rail 3's *per-project* timeout,
+which has no column and no settings UI — the 60s default and 10-minute cap are
 enforced, the persistence is not.
 
 ## 5. Rules the code follows
@@ -5113,6 +5141,21 @@ is far past reading. Re-applying the substitution rules to every removed line in
 the staged diff and asserting it equals the added line turns "I think that was just
 the rename" into a check — and it is the only thing standing between a 352-file
 commit and something unrelated riding along in it.
+
+**A test that creates a project creates a container.** `POST /v1/projects`
+enqueues a real provision job, and a worker running beside the suite does the
+work — books node capacity, then dead-letters on the fixture's dead port. An
+api-suite fixture is not inert just because the test never connects to it.
+
+**Deleting rows a counter tracks leaves the counter wrong.**
+`nodes.ram_reserved_mb` is incremented by `allocate_node` and decremented by its
+compensation, so a test that removes project rows must recompute it or the
+reservation is permanent. Forty runs of one file took a node from empty to over
+its placement stop.
+
+**A `.catch(() => {})` around cleanup hides the cleanup not working.** The first
+version deleted organizations before their projects — RESTRICT, so it always
+failed — and the swallowed error made a no-op look like a tidy-up.
 
 **A route registered behind an `if` is a route no guard can see.** The audit
 guard enumerates routes by building the app and listening to registration, and it
