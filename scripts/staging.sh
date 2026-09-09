@@ -486,6 +486,73 @@ cmd_monitoring() {
     || echo "unavailable"
 }
 
+# ── orphaned project containers ───────────────────────────────────────────────
+#
+# The node outlives the control plane's opinion of it, and the e2e suites make
+# that gap every time they run: they create projects, assert, and delete the
+# *rows* — but nothing gives the worker a delete job, so the containers stay and
+# keep their published host ports. After one `pnpm --filter @steadhold/api test`
+# the node held all thirty of 5433–5462 while the control plane believed three
+# were allocated, and the next real provision failed with
+# `Bind for 0.0.0.0:5434 failed: port is already allocated`.
+#
+# That failure does not look like a port problem from anywhere a developer looks.
+# Docker attaches the project's network, *then* programs the port bindings, and
+# when the bind fails it rolls the attachment back and leaves the container
+# created — so the container comes up with no network, `archive-push` can reach
+# nothing, `stanza-create` never gets its lock, and the saga dead-letters on a
+# **backup** error three steps later. It cost three wrong diagnoses to find once.
+#
+# An orphan is a container whose ref has no row in `projects`. That is the whole
+# definition, and it is why this is safe: a project the control plane still knows
+# about is never touched, whatever state it is in.
+cmd_orphans() {
+  local prune="${1:-}"
+  echo "▸ orphaned project containers"
+
+  if ! docker ps --filter name=sh-data-node --filter status=running -q | grep -q .; then
+    echo "  ✗ sh-data-node is not running — run ./scripts/staging.sh up"; return 1
+  fi
+
+  local known
+  known="$(docker exec sh-control-db psql -U steadhold -d steadhold_control -tAc \
+            'SELECT ref FROM projects' 2>/dev/null | tr -d ' ' | sort -u)" || {
+    echo "  ✗ could not read the control plane — is sh-control-db up?"; return 1; }
+
+  local refs orphans=""
+  refs="$(docker exec sh-data-node docker ps -a --format '{{.Names}}' 2>/dev/null \
+          | sed -n 's/^sh-\([a-z0-9]\{20\}\).*/\1/p' | sort -u)"
+  local r
+  for r in $refs; do
+    printf '%s\n' "$known" | grep -qx "$r" || orphans="$orphans $r"
+  done
+
+  if [ -z "$orphans" ]; then echo "  ✓ none"; return 0; fi
+
+  local n; n="$(printf '%s' "$orphans" | wc -w | tr -d ' ')"
+  if [ "$prune" != "--prune" ]; then
+    echo "  $n orphaned project(s) on the node, unknown to the control plane:"
+    for r in $orphans; do echo "    $r"; done
+    echo "  they hold host ports the allocator will hand out again — remove with:"
+    echo "    ./scripts/staging.sh orphans --prune"
+    return 0
+  fi
+
+  local removed=0
+  for r in $orphans; do
+    local c
+    # Every container for the ref: the database, its pooler and its PostgREST.
+    for c in $(docker exec sh-data-node docker ps -a --format '{{.Names}}' 2>/dev/null \
+               | grep "^sh-${r}"); do
+      docker exec sh-data-node docker rm -f "$c" >/dev/null 2>&1 && removed=$((removed+1))
+    done
+    docker exec sh-data-node docker network rm "sh-${r}-net" >/dev/null 2>&1 || true
+    # Volumes are left alone deliberately: they hold no port, and a volume is the
+    # one thing that could still be wanted if a row is ever restored by hand.
+  done
+  echo "  ✓ removed $removed container(s) across $n project(s); volumes left in place"
+}
+
 case "${1:-}" in
   up) cmd_up ;;
   kek) cmd_kek ;;
@@ -500,8 +567,9 @@ case "${1:-}" in
   nuke) cmd_nuke ;;
   status) cmd_status ;;
   monitoring) cmd_monitoring ;;
+  orphans) cmd_orphans "${2:-}" ;;
   # seed-images before backup-store: the egress probe runs a container from the
   # project image on the node, so the image has to be there first.
   all) cmd_up && cmd_kek && cmd_app_role && cmd_seed_images && cmd_backup_store && cmd_harden_egress && cmd_mail_sink && cmd_verify && cmd_idempotent ;;
-  *) echo "usage: $0 {up|kek|app-role|seed-images|backup-store|harden-egress|mail-sink|verify|idempotent|down|nuke|status|monitoring|all}"; exit 2 ;;
+  *) echo "usage: $0 {up|kek|app-role|seed-images|backup-store|harden-egress|mail-sink|verify|idempotent|down|nuke|status|monitoring|orphans [--prune]|all}"; exit 2 ;;
 esac
