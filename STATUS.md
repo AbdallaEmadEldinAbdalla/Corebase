@@ -5293,6 +5293,50 @@ with the reason. An unrecorded "no" is how the standard decays.
 
 ### Known defects, not yet fixed
 
+- **`scripts/staging.sh backup-store`'s egress check probes the wrong network,
+  and reports success while archiving cannot work.** It creates a throwaway
+  `sh-egress-probe` network inside the node and dials the object store from
+  there — a default bridge with ordinary NAT, which reaches it fine. A real
+  project runs on `10.201.x`, and from there the store was `errno 101, Network
+  is unreachable`. So the line `✓ reachable from a project's private network
+  (NAT egress, as in production)` printed while every `archive-push` on the node
+  was failing in a loop. It is a check that names a property it does not test,
+  and it cost three wrong diagnoses before the container's own
+  `/proc/net/route` was read. The fix is to probe from a container attached to an
+  actual project network, which is also the only version of the check that could
+  ever have failed.
+- **The pgbackrest-lock defect below is misdiagnosed, and the diagnosis is the
+  interesting part.** It reads as "a worker killed mid-`stanza-create` leaves a
+  lock". What was actually observed this session, on a *freshly created*
+  container with no worker ever killed against it: `archive-push` cannot reach
+  the repo, so it retries forever, and it holds `main-archive-1.lock` while it
+  does. `stanza-create` then cannot acquire the lock — 20 attempts over 30s is
+  not enough against a permanent loop — and dead-letters. The lock is a
+  *symptom* of an unreachable repo, and the stale-lock story explains only one
+  of the two ways to reach it. Whatever the fix turns out to be, it has to
+  address "the archiver can never succeed", not only "a lock file was left
+  behind".
+- **A preserved checkpoint is a record, not an observation — and P7j's retry
+  trusts it as one.** D-452/P7j keeps `checkpoint` across a retry deliberately,
+  so completed saga steps are not redone; that is right, and it is what makes a
+  retry resume rather than rebuild. But the steps are check-then-act only when
+  they *run*, and a skipped step checks nothing. Demonstrated by accident:
+  deleting a project's container and retrying made the saga skip
+  `start_container` — its checkpoint said done — and fail two steps later with
+  `could not write pgbackrest.conf (exit null)`, which is what writing a file
+  into a container that does not exist looks like. A retry should re-verify the
+  cheap existence facts (container, volume, network) rather than take the
+  checkpoint's word for them, or the checkpoint should record what it observed
+  rather than what it did.
+- **Local staging cannot currently provision a project, and P7l's provisioning
+  half is therefore unverified.** Project containers are coming up with no
+  network attached at all — `NetworkSettings.Networks` empty,
+  `/proc/net/route` holding nothing but its header — although the saga does pass
+  `networkName` and the network exists on the node. Three consecutive projects
+  failed this way while ten older ones on the same node are attached correctly,
+  so it is a state the node has got into rather than a code path in the saga.
+  Named here because it is what blocks the live verification P7l's console-role
+  work still needs, not because the cause is understood.
 - **A killed pgbackrest leaves a lock that permanently wedges provisioning.** A
   `provision_project` observed dead-lettering five times on
   `unable to acquire lock on file '/tmp/pgbackrest/main-archive-1.lock': Resource

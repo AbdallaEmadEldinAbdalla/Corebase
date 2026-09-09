@@ -226,6 +226,21 @@ importers:
         specifier: ^2.1.3
         version: 2.1.9(@types/node@22.20.1)
 
+  packages/sql-guard:
+    devDependencies:
+      '@steadhold/config':
+        specifier: workspace:*
+        version: link:../config
+      '@types/node':
+        specifier: ^22.7.5
+        version: 22.20.1
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.3
+        version: 2.1.9(@types/node@22.20.1)
+
   packages/types:
     dependencies:
       zod:
