@@ -7,6 +7,7 @@ import { ApiError } from '../lib/api.ts';
 import { SqlPreview } from './SqlPreview.tsx';
 import { CopyButton } from './Copy.tsx';
 import { describeFailure, type Plan } from '../lib/ddl.ts';
+import { namesSatisfied } from '../lib/confirm.ts';
 
 /**
  * The loop, as one layer.
@@ -124,22 +125,20 @@ export function DdlDialog(props: DdlDialogProps) {
   const script = useMemo(() => classify(sql), [sql]);
   const needsNames = script.namesToType;
   /**
-   * Every required name typed, separated by whitespace or commas.
+   * Whether the typed names satisfy the statement — in `lib/confirm.ts`, tested.
    *
-   * Commas because the label reads "Type `a` and `b` to confirm" and a great
-   * many people will write `a, b` — matching on whitespace alone leaves the
-   * confirm button disabled with no explanation, which is a confirmation that
-   * looks broken. The names themselves are compared exactly: this field exists
-   * to be evidence that the user read the question, so a fuzzy match on the name
-   * would defeat it.
+   * It was four lines here, and the four lines were wrong: they split the typed
+   * text on whitespace before comparing, so a column named `"odd name"` — whose
+   * quotes the guard deliberately keeps, because dropping them changes which
+   * identifier it is — tore into `"odd` and `name"` and could never match. The
+   * confirm button would have stayed disabled however carefully the user typed,
+   * with nothing on screen explaining why. Found by extracting the rule in order
+   * to test it, which is the only reason it was found: there is no DOM test
+   * environment here, so a rule left inside a component is a rule nothing checks.
    */
-  const namesSatisfied = (() => {
-    const given = typed.split(/[\s,]+/).filter(Boolean);
-    return needsNames.every((n) => given.includes(n));
-  })();
+  const satisfied = namesSatisfied(needsNames, typed);
 
-  const runnable = 'plan' in built && sql.trim().length > 0
-    && (needsNames.length === 0 || namesSatisfied);
+  const runnable = 'plan' in built && sql.trim().length > 0 && satisfied;
 
   /**
    * Capture-then-focus on the transition into `open`, and nothing else.
