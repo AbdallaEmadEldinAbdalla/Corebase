@@ -136,6 +136,18 @@ afterAll(async () => {
                   JOIN projects p ON p.id = d.project_id
                  WHERE d.node_id = n.id AND p.status <> 'deleted'), 0)`);
   }
+
+  /**
+   * And take the fixture's own node away.
+   *
+   * After the projects, because `project_databases.node_id` references it — and
+   * unconditional, because the row is worth removing whether or not this run
+   * created projects. Leaving one behind per run would build up exactly the kind
+   * of accumulating fixture state the block above exists to undo.
+   */
+  if (up) {
+    await pool.query(`DELETE FROM nodes WHERE hostname = 'p7l-console-fixture'`);
+  }
   await pool?.end();
   rmSync(kekDir, { recursive: true, force: true });
 });
@@ -179,6 +191,42 @@ const as = (w: Who) => ({
  * provisioning anything. Nothing here connects to it — every assertion below is
  * about a decision made before the connection — so a row is the honest fixture.
  */
+/**
+ * The node row this file's placements point at, created by this file.
+ *
+ * `project_databases.node_id` is `NOT NULL`, and the first version read
+ * `(SELECT id FROM nodes ORDER BY created_at LIMIT 1)` — a row it did not create.
+ * That passed for as long as `scripts/dev.sh` was running, because its worker
+ * registers a node at boot, and failed the moment the suite ran on its own: the
+ * subselect returned NULL and the error blamed a not-null constraint rather than
+ * the missing dependency. A fixture that depends on a row left behind by another
+ * package's tests is a fixture that passes for a reason unrelated to what it
+ * asserts.
+ *
+ * **`cordoned`, with the least capacity the schema allows**, and both halves
+ * matter. `placement.ts` selects `WHERE status = 'active'`, so a cordoned node is
+ * invisible to provisioning (`binpack.e2e.test.ts` asserts exactly that) — and
+ * 1 MB of RAM with 1 GB of disk fits no project (the smallest wants 350 MB) even
+ * if some other suite's `UPDATE nodes SET status = 'active'` with no WHERE clause
+ * sweeps it up. Zero would have been better and the schema refuses it:
+ * `nodes_ram_total_mb_check` and `nodes_disk_total_positive` both demand `> 0`,
+ * which is a good constraint — a node with no capacity is a configuration
+ * mistake everywhere except here.
+ *
+ * This file's projects are never really provisioned; the row exists to satisfy a
+ * foreign key, and it must never look like capacity.
+ */
+let fixtureNodeId: string | null = null;
+async function fixtureNode(): Promise<string> {
+  if (fixtureNodeId) return fixtureNodeId;
+  const { rows } = await pool.query<{ id: string }>(
+    `INSERT INTO nodes (hostname, region, status, ram_total_mb, disk_total_gb, address)
+     VALUES ('p7l-console-fixture', 'eu-central', 'cordoned', 1, 1, '127.0.0.1')
+     RETURNING id`);
+  fixtureNodeId = rows[0]!.id;
+  return fixtureNodeId;
+}
+
 async function readyProject(owner: Who): Promise<{ ref: string; orgId: string }> {
   const org = await app.inject({ method: 'POST', url: '/v1/orgs', headers: as(owner),
     payload: { name: 'Console', slug: `p7l-${Date.now()}-${++seq}`.slice(0, 40) } });
@@ -219,13 +267,13 @@ async function readyProject(owner: Who): Promise<{ ref: string; orgId: string }>
     `INSERT INTO project_databases
        (project_id, node_id, connection_host, port, pooler_port, pg_version,
         volume_name, container_id, ram_limit_mb, status)
-     VALUES ($1, (SELECT id FROM nodes ORDER BY created_at LIMIT 1),
+     VALUES ($1, $4,
              '127.0.0.1', $2, $3, '17.5', 'v-p7l', 'c-p7l', 512, 'running')
      ON CONFLICT (project_id) DO UPDATE
        SET connection_host = '127.0.0.1', port = EXCLUDED.port`,
     // `(node_id, port)` is unique, so every fixture needs its own pair — the
     // first version reused 65432 and the second project in the file collided.
-    [projectId, deadPort(), deadPort() + 1]);
+    [projectId, deadPort(), deadPort() + 1, await fixtureNode()]);
   await secrets.put(projectId, SECRET_NAMES.adminRole, 'not-used-by-these-tests');
   return { ref, orgId };
 }
