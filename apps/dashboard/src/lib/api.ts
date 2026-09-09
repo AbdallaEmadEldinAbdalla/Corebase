@@ -36,21 +36,76 @@ export function apiBase(): string {
   return (process.env.NEXT_PUBLIC_STEADHOLD_API ?? 'http://localhost:8099').replace(/\/+$/, '');
 }
 
+/**
+ * A Postgres error's own detail, when the failure came from a customer database.
+ *
+ * `position` is why this type exists. It is a 1-based character offset into the
+ * statement that was sent, which is what lets an editor put the cursor on the
+ * offending token — the difference between "syntax error at or near \"form\""
+ * and the caret sitting on the typo. A syntax error without it is a sentence the
+ * user has to re-find by eye.
+ *
+ * The API deliberately narrows what it forwards (no `where`, no `internalQuery`,
+ * which can carry the body of a platform trigger the customer did not write), so
+ * these four fields are the whole of it.
+ */
+export interface PgErrorDetail {
+  sqlstate: string;
+  position: number | null;
+  detail: string | null;
+  hint: string | null;
+}
+
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
   readonly requestId: string | null;
+  /**
+   * Everything the envelope carried beyond `code`, `message` and `request_id`.
+   *
+   * This used to be dropped on the floor. `services/api/.../db/routes.ts` has a
+   * `pgDetail()` function with a comment explaining that `position` "is the field
+   * that matters and the reason this is not just `err.message`" — and the client
+   * parsed three keys and discarded the rest, so every one of those fields was
+   * computed, serialised, and thrown away. Found by reading both halves while
+   * planning the surface that needed them.
+   */
+  readonly details: Record<string, unknown>;
 
-  constructor(status: number, code: string, message: string, requestId: string | null) {
+  constructor(
+    status: number, code: string, message: string, requestId: string | null,
+    details: Record<string, unknown> = {},
+  ) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
     this.requestId = requestId;
+    this.details = details;
   }
 
   /** True when the fix is "log in again", which the client handles centrally. */
   get isUnauthenticated(): boolean { return this.status === 401; }
+
+  /**
+   * The Postgres detail, or null when this error did not come from a database.
+   *
+   * Checked rather than cast: a 429 from the rate limiter and a 503 from an
+   * unreachable project both arrive as `ApiError` with no `pg` at all, and an
+   * editor that assumed otherwise would render an empty "SQLSTATE:" label.
+   */
+  get pg(): PgErrorDetail | null {
+    const pg = this.details['pg'];
+    if (!pg || typeof pg !== 'object') return null;
+    const d = pg as Record<string, unknown>;
+    if (typeof d['sqlstate'] !== 'string') return null;
+    return {
+      sqlstate: d['sqlstate'],
+      position: typeof d['position'] === 'number' ? d['position'] : null,
+      detail: typeof d['detail'] === 'string' ? d['detail'] : null,
+      hint: typeof d['hint'] === 'string' ? d['hint'] : null,
+    };
+  }
 }
 
 /**
@@ -133,12 +188,21 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   }
 
   if (!res.ok) {
-    const envelope = (parsed as { error?: { code?: string; message?: string; request_id?: string } } | null)?.error;
+    const envelope = (parsed as
+      { error?: Record<string, unknown> & {
+          code?: string; message?: string; request_id?: string } } | null)?.error;
+    // Whatever else the envelope carried. The API spreads `details` into `error`
+    // (see `kernel/errors.ts`), so the extra keys sit beside the three known
+    // ones rather than under a `details` object — and picking them up by
+    // subtraction means a new detail key reaches the client without a change
+    // here.
+    const { code: _c, message: _m, request_id: _r, ...details } = envelope ?? {};
     const err = new ApiError(
       res.status,
       envelope?.code ?? 'UNKNOWN',
       envelope?.message ?? `The API returned ${res.status} with no error envelope.`,
       envelope?.request_id ?? requestId,
+      details,
     );
     if (err.isUnauthenticated) {
       // The session is gone, so the token that went with it is meaningless.
