@@ -72,8 +72,7 @@ export function TableList({ projectRef }: { projectRef: string }) {
       <nav className="tablelist" aria-label="Tables">
         <div className="tablelist__group">Tables</div>
         <p className="tablelist__empty">
-          This database has no tables yet. Creating one is the SQL editor&rsquo;s
-          job until the table editor can do it.
+          This database has no tables yet.
         </p>
       </nav>
     );

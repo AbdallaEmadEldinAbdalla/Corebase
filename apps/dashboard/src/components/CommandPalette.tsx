@@ -160,6 +160,69 @@ export function CommandPalette({ open, onClose, orgSlug, projectRef }: {
           keywords: 'pause stop delete danger zone rename environment',
           hint: 'g s', run: go(`/project/${projectRef}/settings`) },
       );
+
+      /**
+       * The table editor's operations (D-226: "every capability a menu exposes
+       * is also here, and new capabilities land in the palette first").
+       *
+       * Two mechanisms, because the operations divide cleanly:
+       *
+       * - **`create_table` navigates**, since it needs no existing table. It is a
+       *   destination as much as an action, and the table-editor page opens the
+       *   dialog from the query parameter — which also makes it linkable, so the
+       *   onboarding checklist's "Create your first table" step can be a URL
+       *   rather than a second copy of this.
+       * - **The rest dispatch an event** that the table page listens for. A
+       *   palette command cannot reach a dialog that lives on a page, and the
+       *   alternative — lifting twelve dialogs into the shell so the palette can
+       *   own them — is a worse trade than one event. `sh:sidebar` above set the
+       *   precedent.
+       *
+       * These are offered whenever a project is open rather than only on a table
+       * page, and the navigation is part of the command: `run` goes to the editor
+       * first and then fires. A palette that hides a capability until you are
+       * already where it lives is a palette you have to navigate *to*, which is
+       * the opposite of what it is for.
+       *
+       * Column-scoped verbs (rename a column, change its type, drop it) are
+       * deliberately **not** here. They need a column, and a forty-column table
+       * would put 200 commands in this list — which is how a palette stops being
+       * readable. The Structure section's row menu is the picker.
+       */
+      const tableOp = (kind: string) => () => {
+        const editor = `/project/${projectRef}/table-editor`;
+        // Already on a table? Fire straight away. Otherwise the page has to mount
+        // before anything is listening, so the event waits for the navigation.
+        if (pathname.startsWith(editor) && pathname !== editor) {
+          window.dispatchEvent(new CustomEvent('sh:table-op', { detail: { kind } }));
+        } else {
+          router.push(editor);
+        }
+        onClose();
+      };
+      const onTable = pathname.startsWith(`/project/${projectRef}/table-editor/`);
+
+      list.push({
+        id: 'new-table', group: 'Actions', label: 'Create a table',
+        keywords: 'new table add schema create ddl',
+        run: () => { router.push(
+          `/project/${projectRef}/table-editor?new=table`); onClose(); },
+      });
+
+      if (onTable) {
+        list.push(
+          { id: 'add-column', group: 'Actions', label: 'Add a column to this table',
+            keywords: 'new column field ddl alter', run: tableOp('add_column') },
+          { id: 'rename-table', group: 'Actions', label: 'Rename this table',
+            keywords: 'alter rename ddl', run: tableOp('rename_table') },
+          { id: 'enable-rls', group: 'Actions',
+            label: 'Enable Row Level Security on this table',
+            keywords: 'rls policy security row level protect',
+            run: tableOp('enable_rls') },
+          { id: 'drop-table', group: 'Actions', label: 'Drop this table',
+            keywords: 'delete remove destroy ddl', run: tableOp('drop_table') },
+        );
+      }
     }
 
     for (const o of orgs.data?.orgs ?? []) {

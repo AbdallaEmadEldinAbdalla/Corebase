@@ -6,11 +6,16 @@ import { pageSql, countSql } from '../../../../../../lib/grid-sql.ts';
 import { ErrorSurface } from '../../../../../../components/ErrorSurface.tsx';
 import { RlsPanel } from '../../../../../../components/RlsPanel.tsx';
 import { DataGrid } from '../../../../../../components/DataGrid.tsx';
+import { Structure, type ColumnVerb } from '../../../../../../components/Structure.tsx';
+import { TableOps, type Op } from '../../../../../../components/TableOps.tsx';
+import { Menu, MenuItem } from '../../../../../../components/Menu.tsx';
+import type { IntrospectionColumn } from '../../../../../../lib/api.ts';
 
 const PAGE_SIZE = 100;
 
 /**
- * One table: its rows, its columns, and its row-level security.
+ * One table: its rows, its columns, its row-level security, and the operations
+ * that change them.
  *
  * Three things on one page rather than three tabs, because the IA says so
  * (`/[schema]/[table] → grid + structure + RLS panel`) and because the question a
@@ -18,10 +23,23 @@ const PAGE_SIZE = 100;
  * return nothing from this table" is answered by the policy list beside the rows,
  * not by a tab away from them.
  *
- * Everything here is **read-only**. Nothing on this page changes the database:
- * the DDL loop with its SQL preview and warning ladder is the next step, and the
- * controls that would need it say so rather than being drawn and disabled without
- * explanation.
+ * ## Where the verbs live, and why not on the grid
+ *
+ * The read path put each column's type and nullability in the *grid header*,
+ * beside the values, which was right and left the write half with nowhere to
+ * hang its operations: that header is already a `<button>` for sorting, and a
+ * menu inside a button is invalid HTML. So the column verbs live in the
+ * Structure section's one action column, and the table-level verbs live in a menu
+ * on the page head. Nothing is on the grid.
+ *
+ * ## The one accent
+ *
+ * §5 rule 1 allows one primary action per view, and this page has two candidates.
+ * When RLS is off, the accent belongs to the banner that fixes it — that is a
+ * table the anon key can read and write in full, and it is the most important
+ * thing on the screen. Otherwise it belongs to "Add column". The decision is made
+ * here rather than in either component, because "per view" is a property of the
+ * page.
  */
 export default function TablePage(
   { params }: { params: Promise<{ ref: string; schema: string; table: string }> },
@@ -38,6 +56,7 @@ export default function TablePage(
   const [exact, setExact] = useState<number | null>(null);
   const [rows, setRows] = useState<Record<string, unknown>[] | null>(null);
   const [ranSql, setRanSql] = useState<string | null>(null);
+  const [op, setOp] = useState<Op | null>(null);
 
   const meta = intro.data?.tables.find((t) => t.schema === schema && t.name === table);
   const columns = useMemo(
@@ -102,6 +121,51 @@ export default function TablePage(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, intro.data, meta]);
 
+  /**
+   * Re-read the rows after a schema change.
+   *
+   * `useRunSql` invalidates the introspection query when a DDL command runs, so
+   * the column list redraws on its own — but the *rows* came from a mutation,
+   * which no cache invalidates. Without this, dropping a column leaves its
+   * values in the grid until the next sort or page, which reads as the drop
+   * having failed. Clearing the key is what makes the effect above re-fire.
+   */
+  const columnSignature = columns.map((c) => `${c.name}:${c.type}`).join(',');
+  useEffect(() => {
+    lastKey.current = null;
+    setRows(null);
+  }, [columnSignature]);
+
+  /**
+   * The palette's route into this page (D-226).
+   *
+   * Every capability a menu exposes must also be in the palette, and a palette
+   * command cannot open a dialog that lives here — so it dispatches an event and
+   * this listens, the same mechanism the sidebar toggle already uses
+   * (`CommandPalette.tsx`'s `sh:sidebar`). The alternative would be lifting
+   * twelve dialogs into the shell so the palette can reach them, which is a
+   * worse trade: the dialogs belong to the table.
+   *
+   * Column-scoped verbs are parameterised rather than enumerated. A palette
+   * offering "Drop column x" for every column of a forty-column table would be
+   * 200 commands for one page, which is how a palette decays into a list nobody
+   * reads — so the command opens the picker and the user names the column there.
+   */
+  useEffect(() => {
+    const onOp = (e: Event) => {
+      const kind = (e as CustomEvent<{ kind: Op['kind'] }>).detail?.kind;
+      if (!kind) return;
+      // Only the table-scoped operations arrive this way; the column ones need a
+      // column, which the Structure menu is how you choose.
+      if (kind === 'add_column' || kind === 'rename_table'
+        || kind === 'drop_table' || kind === 'enable_rls') {
+        setOp({ kind });
+      }
+    };
+    window.addEventListener('sh:table-op', onOp);
+    return () => window.removeEventListener('sh:table-op', onOp);
+  }, []);
+
   if (intro.isPending) {
     return (
       <div aria-busy="true">
@@ -130,6 +194,32 @@ export default function TablePage(
     );
   }
 
+  const facts = { schema, table, rowsEstimate: meta.rows_estimate };
+  /**
+   * A view's columns cannot be altered, and a table someone else owns cannot be
+   * altered *by us* — the console runs as `developer` (D-462), so an operation on
+   * `pg_stat_statements` would come back as a permission error naming a role the
+   * user has never heard of. Better to say why the verbs are absent.
+   */
+  const isTable = meta.kind === 'table' || meta.kind === 'partitioned_table';
+  const isOurs = meta.owner === 'developer';
+  const editable = isTable && isOurs;
+  const readOnlyReason = editable ? undefined
+    : !isTable ? `a ${meta.kind.replace('_', ' ')} has no columns of its own to change`
+      : `owned by ${meta.owner}, so this editor cannot change it`;
+
+  /** §5 rule 1: the accent goes to the security hole when there is one. */
+  const rlsIsOff = isTable && !meta.rls_enabled;
+
+  const openColumnOp = (verb: ColumnVerb, column: IntrospectionColumn) => {
+    const MAP: Record<ColumnVerb, Op['kind']> = {
+      rename: 'rename_column', type: 'change_type', not_null: 'set_not_null',
+      nullable: 'drop_not_null', default: 'set_default',
+      drop_default: 'drop_default', drop: 'drop_column',
+    };
+    setOp({ kind: MAP[verb], column } as Op);
+  };
+
   return (
     <>
       <div className="head">
@@ -143,9 +233,62 @@ export default function TablePage(
             {meta.comment ? ` · ${meta.comment}` : ''}
           </p>
         </div>
+        {editable ? (
+          <Menu label={`Change the table ${table}`} align="right"
+                trigger={({ toggle, ref: r, open }) => (
+                  <button ref={r} type="button" className="sh-btn sh-btn--secondary"
+                          aria-expanded={open} aria-haspopup="menu" onClick={toggle}>
+                    Change table
+                  </button>
+                )}>
+            {(close) => (
+              <>
+                <MenuItem onSelect={() => { close(); setOp({ kind: 'add_column' }); }}>
+                  Add column…
+                </MenuItem>
+                <MenuItem onSelect={() => { close(); setOp({ kind: 'rename_table' }); }}>
+                  Rename table…
+                </MenuItem>
+                {!meta.rls_enabled ? (
+                  <MenuItem onSelect={() => { close(); setOp({ kind: 'enable_rls' }); }}>
+                    Enable Row Level Security
+                  </MenuItem>
+                ) : null}
+                <div className="sh-menu__sep" />
+                {/**
+                  * Both directions, offered unconditionally, because the page
+                  * cannot tell which is current: introspection reports policies
+                  * and not *grants*, and `anon`'s table grant is the thing that
+                  * decides whether an anon policy does anything at all (D-108).
+                  *
+                  * A toggle would have to claim a state it does not know. Two
+                  * verbs claim nothing, and the preview shows exactly what each
+                  * one runs — which is the whole point of this editor. The
+                  * toggle D-108 describes needs grants in the introspection
+                  * payload; recorded as a gap rather than faked.
+                  */}
+                <MenuItem onSelect={() => { close(); setOp({ kind: 'grant_anon' }); }}>
+                  Allow anonymous read…
+                </MenuItem>
+                <MenuItem onSelect={() => { close(); setOp({ kind: 'revoke_anon' }); }}>
+                  Remove anonymous access…
+                </MenuItem>
+                <div className="sh-menu__sep" />
+                <MenuItem tone="danger"
+                          onSelect={() => { close(); setOp({ kind: 'drop_table' }); }}>
+                  Drop table…
+                </MenuItem>
+              </>
+            )}
+          </Menu>
+        ) : null}
       </div>
 
-      <RlsPanel table={meta} policies={policies} />
+      {/* Spread conditionally, not `: undefined` — `exactOptionalPropertyTypes`
+          makes an explicit undefined a different thing from an absent key. */}
+      <RlsPanel table={meta} policies={policies}
+                {...(rlsIsOff && editable
+                  ? { onEnable: () => setOp({ kind: 'enable_rls' }) } : {})} />
 
       <DataGrid
         columns={columns}
@@ -176,7 +319,26 @@ export default function TablePage(
         }}
         primaryKey={primaryKey}
         executedSql={ranSql}
+        {...(editable
+          ? { onAddPrimaryKey: () => setOp({ kind: 'add_primary_key', candidates: columns }) }
+          : {})}
       />
+
+      <Structure
+        columns={columns}
+        truncated={Boolean(intro.data?.truncated['columns'])}
+        {...(editable ? { onVerb: openColumnOp } : {})}
+        {...(editable && !rlsIsOff ? { onAddColumn: () => setOp({ kind: 'add_column' }) } : {})}
+        {...(readOnlyReason ? { readOnlyReason } : {})}
+      />
+
+      {op ? (
+        // Keyed by the operation, so the form's state resets between operations
+        // rather than carrying the last rename's text into the next one.
+        <TableOps key={`${op.kind}:${'column' in op ? op.column.name : ''}`}
+                  projectRef={ref} op={op} facts={facts} schema={schema}
+                  onClose={() => setOp(null)} />
+      ) : null}
     </>
   );
 }

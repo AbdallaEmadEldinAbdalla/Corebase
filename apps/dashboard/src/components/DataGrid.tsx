@@ -75,6 +75,8 @@ export function DataGrid(props: {
   onCountExactly: () => void;
   primaryKey: readonly string[];
   executedSql: string | null;
+  /** Opens the add-primary-key flow. Absent when the table is not ours. */
+  onAddPrimaryKey?: () => void;
 }) {
   const [showSql, setShowSql] = useState(false);
   const { columns, rows, page, pageSize } = props;
@@ -121,9 +123,18 @@ export function DataGrid(props: {
               without a key there is no order to page by, so a row can appear
               twice or not at all. Editing by <code style={{ font: 'var(--sh-code)' }}>ctid</code> is
               a corruption trap under concurrency, so the grid refuses rather than
-              offering it. Adding a primary key needs the table editor&rsquo;s DDL
-              flow, which is not built yet — the SQL editor can do it today.
+              offering it.
             </div>
+            {/* The fix, one click away, which the table-editor doc asks for by
+                name. It was described here as "not built yet" for exactly as long
+                as that was true. */}
+            {props.onAddPrimaryKey ? (
+              <button type="button" className="sh-btn sh-btn--sm sh-btn--secondary"
+                      style={{ marginTop: 'var(--sh-space-8)' }}
+                      onClick={props.onAddPrimaryKey}>
+                Add a primary key…
+              </button>
+            ) : null}
           </div>
         </div>
       ) : null}

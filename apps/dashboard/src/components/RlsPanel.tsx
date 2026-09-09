@@ -31,7 +31,16 @@ import type { IntrospectionPolicy, IntrospectionTable } from '../lib/api.ts';
  * is any RLS at all, not only when policies are missing.
  */
 export function RlsPanel(
-  { table, policies }: { table: IntrospectionTable; policies: IntrospectionPolicy[] },
+  { table, policies, onEnable }: {
+    table: IntrospectionTable;
+    policies: IntrospectionPolicy[];
+    /**
+     * The one-click fix, present only when RLS is off and the table is ours to
+     * change. Absent rather than disabled: a greyed-out "Fix this" beside a red
+     * banner on someone else's table is a dead end that looks like a bug.
+     */
+    onEnable?: () => void;
+  },
 ) {
   const [open, setOpen] = useState(false);
 
@@ -60,6 +69,15 @@ export function RlsPanel(
           (D&#8209;083); this one does not, so it was either created before that or
           had it turned off.
         </span>
+        {/* The page's one accent action while this banner is up. §5 rule 1 allows
+            one primary action per view, and a table the anon key can read and
+            write in full is the most important thing on the screen — so it wins
+            it from "Add column" for as long as it is true. */}
+        {onEnable ? (
+          <button type="button" className="sh-btn sh-btn--sm rls__fix" onClick={onEnable}>
+            Enable RLS
+          </button>
+        ) : null}
       </div>
     );
   }

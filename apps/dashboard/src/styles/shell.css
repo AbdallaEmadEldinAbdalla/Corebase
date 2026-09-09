@@ -424,6 +424,20 @@
   border: 1px solid transparent; border-radius: var(--sh-radius-sm);
   background: none; color: var(--sh-text-muted); cursor: pointer;
   transition: color 140ms ease, background 140ms ease;
+  /* The 28px box is what you *see*; the 40px box is what you can *hit*.
+     Design-system §5 rule 5 puts the floor at 40×40 "even when the control is
+     18px", and this was a 28×28 target on every row-actions menu in the app —
+     found by reading the rule against the stylesheet while planning a surface
+     that would have added five more per column.
+
+     A pseudo-element rather than padding, because padding would grow the visible
+     surface the hover state paints and make a quiet control loud. `position:
+     relative` scopes it; the row is 52px so 40px never overlaps its neighbours. */
+  position: relative;
+}
+.rowbtn::before {
+  content: ''; position: absolute; top: 50%; left: 50%;
+  width: 40px; height: 40px; transform: translate(-50%, -50%);
 }
 /* No `opacity: 0` default. It used to be invisible until the row was hovered,
    which is gate question 8 — an affordance that exists only on hover — and it
@@ -700,6 +714,12 @@ a.section__note { text-decoration: none; }
 .rls__badge--muted { color: var(--sh-text-muted); }
 .rls__badge--warn { color: var(--sh-warning); border-color: var(--sh-warning); }
 .rls__caret { color: var(--sh-text-muted); font-size: 10px; }
+/* `.rls` aligns on `baseline`, which is right for a badge beside a sentence and
+   wrong for a 32px button — baseline-aligning a button against text sits it low
+   by the height of its own padding. `align-self` opts this one control out
+   without changing the row for the two that want it. `flex: none` because the
+   text beside it has `flex: 1` and would otherwise squeeze the label. */
+.rls__fix { align-self: center; flex: none; }
 .rls__text { font: var(--sh-body-s); color: var(--sh-text-secondary); flex: 1; min-width: 240px; }
 .rls__list {
   flex-basis: 100%; display: flex; flex-direction: column; gap: var(--sh-space-8);
@@ -762,3 +782,103 @@ a.section__note { text-decoration: none; }
 }
 .sqlpeek .sh-code { margin-top: var(--sh-space-8); max-width: 100%; }
 .sqlpeek pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ── the DDL loop's dialog (P7n) ──────────────────────────────────────────────
+   A wider dialog than `.sh-dialog`'s 420px, because a SQL statement is the
+   subject rather than a sentence about one — `alter table "public"."posts" alter
+   column "price" type numeric(10,2)` is 62 characters before the USING clause,
+   and wrapping the thing the user is being asked to approve makes it harder to
+   read than the form it came from.
+
+   Overriding an `sh-` component class from here is the established pattern (see
+   `.sqlpeek .sh-code` below) and is deliberate: `components.css` mirrors the
+   Pencil boards, and a wide dialog is not on a board — it is this surface's
+   layout. `min(680px, 100%)` rather than a media query, so it is the narrower of
+   the two on any viewport and there is no breakpoint to get wrong. */
+.ddl.sh-dialog { width: min(680px, 100%); }
+/* The body scrolls, not the page, so the footer's buttons are always reachable —
+   a confirm button below the fold on a phone is a dialog you cannot complete.
+   `max-height` on the body rather than the dialog, so the title and footer are
+   the fixed frame around it. */
+.ddl__body {
+  display: flex; flex-direction: column; gap: var(--sh-space-16);
+  max-height: min(58vh, 520px); overflow-y: auto;
+  /* Room for the focus ring on the first and last controls inside a scroll
+     container, which otherwise clips it. */
+  padding: 2px;
+  margin-bottom: var(--sh-space-16);
+}
+.ddl__form { display: flex; flex-direction: column; gap: var(--sh-space-12); }
+/* `inert` is what greys the form when the SQL is authoritative. Styled here
+   rather than per-control so a caller cannot forget it. */
+.ddl__form[inert] { opacity: 0.5; }
+.ddl__previewhead {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--sh-space-12); flex-wrap: wrap;
+}
+.ddl__editor { font: var(--sh-code); min-height: 140px; }
+/* The preview must not inherit `.sh-code`'s 440px cap — it is the widest thing
+   in the dialog by design — and a long statement scrolls inside itself rather
+   than widening the dialog past the viewport (D-460). */
+.sqlprev { max-width: 100%; }
+.sqlprev pre { white-space: pre; overflow-x: auto; }
+
+/* Cost notices: prose, not gates. No icon column and no accent — an accent here
+   would compete with the confirm button, which is the one loud thing in the
+   dialog (design system §5 rule 1). The left bar carries the tone, so it
+   survives greyscale and colour-blindness (rule 2). */
+.ddl__notices { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sh-space-8); }
+.ddl__notice {
+  font: var(--sh-body-s); color: var(--sh-text-secondary);
+  padding: var(--sh-space-8) var(--sh-space-12);
+  border-left: 3px solid var(--sh-border-strong);
+  background: var(--sh-surface-alt); border-radius: var(--sh-radius-sm);
+}
+.ddl__notice--lock, .ddl__notice--data { border-left-color: var(--sh-warning); }
+.ddl__notice--scan, .ddl__notice--api { border-left-color: var(--sh-info); }
+.ddl__notice--rls { border-left-color: var(--sh-accent-border); }
+
+.ddl__confirm { margin-top: var(--sh-space-4); }
+.ddl__errmeta {
+  display: flex; flex-wrap: wrap; gap: var(--sh-space-12);
+  align-items: center; margin-top: var(--sh-space-8);
+  font: var(--sh-caption); letter-spacing: var(--sh-tracking-caption);
+  color: var(--sh-text-secondary);
+}
+/* The download sits at the far left of the footer and the decisions at the far
+   right, because it is not part of the decision — it is a thing you may want
+   afterwards, and putting it beside Cancel invites mis-clicks. */
+.ddl__footer { align-items: flex-start; }
+.ddl__spacer { flex: 1 1 auto; }
+.ddl__download { display: flex; flex-direction: column; gap: var(--sh-space-4); max-width: 300px; }
+.ddl__download .sh-help { margin: 0; }
+@media (max-width: 560px) {
+  /* Stacked, with the actions first in the source order they are read in. The
+     download's help text is two lines on a phone and pushing the buttons off
+     screen with it would be the worst version of this. */
+  .ddl__footer { flex-direction: column-reverse; align-items: stretch; }
+  .ddl__download { max-width: none; }
+}
+
+/* ── the structure table (P7n) ───────────────────────────────────────────────
+   A table and not cards: six comparable attributes across every row is §4's
+   threshold with nothing arguable about it, so there is no view toggle and
+   nothing to remember. One action column carrying a menu, because five verbs as
+   five buttons in a 52px row is the squeeze that took the members table apart. */
+.structure { width: 100%; }
+.structure__name { font: var(--sh-code); color: var(--sh-text); }
+.structure__type { font: var(--sh-code); color: var(--sh-text-secondary); }
+.structure__flags { display: flex; gap: var(--sh-space-4); flex-wrap: wrap; }
+.structure__default {
+  font: var(--sh-code); color: var(--sh-text-secondary);
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* The "not filled in yet" line, where the preview will be. Reserves roughly the
+   preview's own height so the dialog does not jump when the first character is
+   typed — a layout shift on keystroke is the same cost as a page load, in
+   miniature. */
+.ddl__todo {
+  margin: 0; min-height: 72px; display: flex; align-items: center;
+  padding: 0 var(--sh-space-12);
+  background: var(--sh-surface-alt); border-radius: var(--sh-radius-md);
+}
