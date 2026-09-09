@@ -16,13 +16,27 @@ export class ApiError extends Error {
   // a second handler is a second place for an internal message to leak out of.
   readonly code: ErrorCode | AuthErrorCode | StorageErrorCode;
 
+  /**
+   * Extra fields merged into the error envelope beside `code` and `message`.
+   *
+   * Added for the SQL console, whose errors are required to carry Postgres's own
+   * `pg: {sqlstate, position, detail, hint}` (SQL-editor doc §Execution) —
+   * `position` is what lets the editor underline the offending token, and
+   * without it a syntax error is a sentence the user has to re-find by eye. Kept
+   * general rather than a `pg` field so the next surface with structured error
+   * detail does not need a third mechanism.
+   */
+  readonly details?: Record<string, unknown>;
+
   constructor(
     statusCode: number, code: ErrorCode | AuthErrorCode | StorageErrorCode, message: string,
+    details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = 'ApiError';
     this.statusCode = statusCode;
     this.code = code;
+    if (details !== undefined) this.details = details;
   }
   static notFound(what: string) {
     return new ApiError(404, ERROR_CODES.PROJECT_NOT_FOUND, `${what} does not exist.`);
@@ -84,7 +98,10 @@ export function registerErrorHandling(app: FastifyInstance) {
     if (err instanceof ApiError) {
       req.log.info({ code: err.code, statusCode: err.statusCode }, 'request rejected');
       return reply.status(err.statusCode).send({
-        error: { code: err.code, message: err.message, request_id: requestId },
+        error: {
+          code: err.code, message: err.message, request_id: requestId,
+          ...(err.details ?? {}),
+        },
       });
     }
     // Framework-level rejections carry their own status: malformed JSON, an

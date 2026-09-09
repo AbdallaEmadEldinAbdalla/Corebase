@@ -9,6 +9,7 @@ import { registerOrgs, type OrgDeps } from './modules/orgs/routes.ts';
 import { registerProjectAuth, type ProjectAuthDeps } from './modules/project-auth/routes.ts';
 import { registerGateway, type GatewayDeps } from './modules/gateway/routes.ts';
 import { registerStorage, type StorageDeps } from './modules/storage/routes.ts';
+import { registerDbRoutes, type DbDeps } from './modules/db/routes.ts';
 import type { PrincipalDeps } from './kernel/principal.ts';
 
 export interface BuildOptions {
@@ -37,6 +38,13 @@ export interface BuildOptions {
   auth?: AuthDeps;
   /** Organizations and membership (P1d). Same rule as auth: absent, not broken. */
   orgs?: OrgDeps;
+  /**
+   * The SQL console's execution path (P7l, D-132). Absent means
+   * `/v1/projects/:ref/db/query` is not registered — the same rule as auth and
+   * orgs, because a console endpoint that exists and cannot reach a project
+   * database is worse than one that is honestly missing.
+   */
+  db?: DbDeps;
   /**
    * Org scoping for the project endpoints (P1d). Absent keeps Milestone 0's
    * behaviour — one implicit org, no permission checks — which is what the
@@ -113,6 +121,11 @@ export function buildApp(opts: BuildOptions = {}): FastifyInstance {
   // routes the monolith serves itself.
   if (opts.gateway) registerGateway(app, opts.gateway);
   if (opts.storage) registerStorage(app, opts.storage);
+  // Before the control plane, which owns `/v1/projects/:ref` and its children:
+  // Fastify's router is exact-match per segment so there is no shadowing today,
+  // but the console's route lives under a path the control plane also serves and
+  // registering it first keeps that visible.
+  if (opts.db) registerDbRoutes(app, opts.db);
 
   registerControlPlane(app, {
     store: opts.store ?? createMemoryStore(),

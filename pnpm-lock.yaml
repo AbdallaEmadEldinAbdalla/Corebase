@@ -283,6 +283,9 @@ importers:
       '@steadhold/secrets':
         specifier: workspace:*
         version: link:../../packages/secrets
+      '@steadhold/sql-guard':
+        specifier: workspace:*
+        version: link:../../packages/sql-guard
       '@steadhold/types':
         specifier: workspace:*
         version: link:../../packages/types

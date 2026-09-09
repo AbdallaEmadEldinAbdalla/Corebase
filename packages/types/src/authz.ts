@@ -56,12 +56,25 @@ export const CAPABILITIES = [
   'project.delete',
   'key.manage',
   'secret.manage',
+  /**
+   * Running SQL through the console — the table editor and the SQL editor
+   * (D-132). A **member** capability, and the argument is not that arbitrary DDL
+   * is mild: it is that a member can already reveal the `developer` connection
+   * string from `GET /v1/projects/:ref?reveal=true`, which is guarded by
+   * `project.read`, and run the same statements from psql. Gating the console
+   * above member would protect nothing and would make the product's main
+   * developer surface unusable for the role it exists for. The console is the
+   * *more* accountable path to what a member already holds — every statement is
+   * audited with an actor, which psql is not (D-463).
+   */
+  'db.query',
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
 
 const MEMBER: Capability[] = [
   'org.read', 'member.read', 'project.read', 'project.create', 'project.lifecycle',
+  'db.query',
 ];
 
 const ADMIN: Capability[] = [

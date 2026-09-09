@@ -33,6 +33,14 @@ const url = process.env.SH_CONTROL_DATABASE_URL;
  */
 /** Shared with the key endpoints, which read the same envelope-encrypted rows. */
 let secretsForApi: ReturnType<typeof createSecretStore> | undefined;
+/**
+ * The control-plane pool, hoisted for the SQL console (P7l).
+ *
+ * The console needs it to resolve a project's placement and to write its audit
+ * rows, and it must be the *same* pool the store uses rather than a second one —
+ * the audit row and the run it describes belong to one connection budget.
+ */
+let poolForApi: Pool | undefined;
 
 const store = await (async () => {
   if (!url) {
@@ -43,6 +51,7 @@ const store = await (async () => {
     return createMemoryStore();
   }
   const pool = new Pool({ connectionString: url, max: 10 });
+  poolForApi = pool;
   const organizationId = await ensureBootstrapOrg(pool);
 
   // The KEK lets the API render connection strings. Without it the API still
@@ -463,6 +472,35 @@ const app = buildApp({
   ...(delivery ? { enqueueRecovery: delivery.enqueueRetry } : {}),
   ...(gateway ? { gateway } : {}),
   ...(storage ? { storage } : {}),
+  /**
+   * The SQL console (P7l, D-132). Registered only with a control pool, a secret
+   * store to read `steadhold_admin`'s password from, and real auth — without any
+   * one of those the endpoint could not work, and an endpoint that exists and
+   * cannot work is worse than one that is honestly absent.
+   *
+   * 60 runs per minute per user. Generous for a person typing, and it is the
+   * *node's* CPU being protected rather than an account, so the budget is per
+   * user across every project they can reach — a runaway loop in a script hits
+   * all of them, not one.
+   */
+  ...(poolForApi && secretsForApi && orgs && auth
+    ? {
+        db: {
+          pool: poolForApi,
+          secrets: secretsForApi,
+          orgs: { roleOf: orgs.orgs.roleOf.bind(orgs.orgs) },
+          principals: {
+            sessions: auth.sessions,
+            tokens: auth.tokens,
+            ...(auth.staticToken ? { staticToken: auth.staticToken } : {}),
+            ...(auth.staticUserId ? { staticUserId: auth.staticUserId } : {}),
+          },
+          limiter: redisUrl
+            ? createRateLimiter(createRedis(redisUrl), { limit: 60, windowSeconds: 60 })
+            : createMemoryRateLimiter({ limit: 60, windowSeconds: 60 }),
+        },
+      }
+    : {}),
 });
 // Said out loud at boot, because "the dashboard cannot log in" and "CORS is off"
 // look nothing alike from the browser's console.

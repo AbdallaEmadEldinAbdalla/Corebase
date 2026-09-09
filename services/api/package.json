@@ -11,18 +11,19 @@
     "test:unit": "vitest run --exclude '**/*.e2e.test.ts' --passWithNoTests"
   },
   "dependencies": {
-    "@steadhold/types": "workspace:*",
-    "fastify": "^5.0.0",
-    "zod": "^3.23.8",
-    "pg": "^8.13.1",
-    "@steadhold/queue": "workspace:*",
-    "@steadhold/secrets": "workspace:*",
+    "@steadhold/audit": "workspace:*",
     "@steadhold/crypto": "workspace:*",
     "@steadhold/email": "workspace:*",
-    "@steadhold/metrics": "workspace:*",
-    "@steadhold/audit": "workspace:*",
     "@steadhold/jwt": "workspace:*",
-    "@steadhold/s3": "workspace:*"
+    "@steadhold/metrics": "workspace:*",
+    "@steadhold/queue": "workspace:*",
+    "@steadhold/s3": "workspace:*",
+    "@steadhold/secrets": "workspace:*",
+    "@steadhold/sql-guard": "workspace:*",
+    "@steadhold/types": "workspace:*",
+    "fastify": "^5.0.0",
+    "pg": "^8.13.1",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@steadhold/config": "workspace:*",

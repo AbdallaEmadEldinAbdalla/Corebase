@@ -180,6 +180,16 @@ describe('P1b — the guard that keeps the exit criterion true', () => {
     // retry number, which is what the recovery delivery id is derived from — so
     // the log is the only record of how many times a project has been retried.
     'POST /v1/projects/:ref/retry',
+    /**
+     * P7l: the console's execution path, and the only route here that audits
+     * **three** times — the attempt before it runs, then success or failure.
+     *
+     * Before, deliberately: a statement recorded only on success cannot answer
+     * the question an audit log exists for, which is what was *attempted*. A
+     * `DROP TABLE` that timed out halfway is exactly what someone comes looking
+     * for, and it would leave no row at all if the write waited for the result.
+     */
+    'POST /v1/projects/:ref/db/query',
     // P3d: audits `project.restore_requested` inside requestRestore, in the same
     // transaction as the new project, its lineage row and its job. The audit names
     // the *source* as its resource, not the copy — "who asked to restore this
@@ -210,6 +220,13 @@ describe('P1b — the guard that keeps the exit criterion true', () => {
       staticToken: TOKEN,
       auth: {} as never,
       orgs: {} as never,
+      // Every optional module has to be switched on here or the guard cannot see
+      // its routes. That is not a detail: `db` was added in P7l and the guard
+      // passed without it, because a route that is never registered is a route
+      // that is never checked — a list that nobody is forced to update, guarded
+      // by a test that cannot see the additions. Anything registered behind an
+      // `if (opts.x)` in `app.ts` belongs in this object.
+      db: {} as never,
       onRoute: (r) => routes.push(`${r.method} ${r.url}`),
     });
     const mutating = routes.filter((r) => /^(POST|PUT|PATCH|DELETE) /.test(r));

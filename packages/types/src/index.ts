@@ -84,6 +84,16 @@ export const ERROR_CODES = {
   PROJECT_PURGED: 'PROJECT_PURGED',
   /** An organization must keep at least one owner (platform API §Roles). */
   LAST_OWNER: 'LAST_OWNER',
+  /**
+   * The customer's SQL was rejected by their own database (P7l, D-132).
+   *
+   * Its own code because it is not our failure and must not read as one: the
+   * envelope carries the Postgres `sqlstate`, `position`, `detail` and `hint`
+   * beside it, which is what the editor underlines the offending token with.
+   * Folding it into VALIDATION_FAILED would lose all four and would put a
+   * customer's typo in the platform's error-rate alert.
+   */
+  SQL_ERROR: 'SQL_ERROR',
   INTERNAL: 'INTERNAL',
 } as const;
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
