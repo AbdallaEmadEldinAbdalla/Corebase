@@ -4561,7 +4561,7 @@ The scope is ~30 routes. What is missing is mostly **API, not UI**:
 
 | Surface | Blocker |
 |---|---|
-| Table editor, SQL editor | No query/DDL execution endpoint exists |
+| Table editor, SQL editor | ~~No query/DDL execution endpoint exists~~ — **built, P7l**: `POST /v1/projects/:ref/db/query` with all six D-134 rails. Three things still stand between it and the editors: the introspection endpoint (the completion source), saved queries and history, and rail 3's per-project timeout, which has no column — the 60s default and 10-minute cap are enforced, the persistence is not |
 | Auth users, storage browser | Data-plane only (`/auth/v1/admin/*`, `/storage/v1/*`), which needs a `service_role` key — and a session-cookie dashboard (D-062) must never hold one in the browser. Needs a control-plane proxy, which is an architectural decision, not a screen |
 | Logs, metrics, backups list, audit | No endpoints |
 | ~~Usage per project~~ | **Built — P7e**, endpoint and page. Object-storage bytes remain out: `storage-sweep` computes the authoritative figure and does not record it centrally, which is the worker change that would let the route serve it. CPU, connections and request rate have no source at all. |
@@ -4665,6 +4665,106 @@ change the runner forbids — the exemption the immutability itself justifies (D
 **No schema had diverged.** The staging volume postdates the brand rename, so it
 carries `steadhold_app` and not `corebase_app`; the only mismatch was the one
 comment. That is luck, not design, and it is exactly what the manifest removes.
+
+## 4m. P7l — the console's execution path
+
+Phase 7's scope list opens with the table editor, and its blocker was never
+architectural: **D-132 had already decided the transport** (`POST
+/v1/projects/:ref/db/query`, a per-project `steadhold_admin` role) and **D-134
+had already decided the six safety rails**. What was missing was the code. This
+step built it, in three parts that can each be verified on their own.
+
+### `@steadhold/sql-guard` — rails 2 and 4
+
+The two rails that are questions about the *text*, so they need no database. A
+package rather than an API module because D-134 names two other consumers: the
+dashboard mirrors it for instant feedback and the CLI needs guard parity for its
+`db reset`-class commands. The word that matters there is **authoritative** — the
+client's copy exists to be fast and this one exists to be right, because a guard
+that only runs in a browser is a suggestion to anyone holding a session cookie.
+
+Most of it is a small lexer, and all of that is about *skipping*: nested block
+comments, dollar-quoted bodies tagged and bare, `E'...'` backslash escapes,
+doubled quotes in strings and identifiers. `SELECT '; DROP TABLE users; --'` is
+one harmless statement and a naive split makes it three.
+
+The `WHERE` check tracks parenthesis depth, and that is the finding worth
+keeping: `DELETE FROM posts USING (SELECT id FROM t WHERE x = 1) s` deletes every
+row **and contains the word WHERE**, so any depth-blind check calls it safe.
+Rail 4 is biased the other way — a false negative shows 5000 rows, a false
+positive corrupts the query — so only the plainest shape takes a `LIMIT`.
+
+36 tests, proved rather than trusted: a planted depth-blind `WHERE` fails exactly
+the subquery-bypass test, and making string literals lex as ordinary characters
+fails exactly the three written for that.
+
+### `steadhold_admin` — and it needs less privilege than D-132 asked for
+
+The role has existed in the image since T5 with no password and no grant. It now
+has both, at provision and on restore, with its own credential — separate from
+`developer`'s because that one is customer-facing and rotating it must not take
+the editors down.
+
+**D-132 specified `BYPASSRLS` and it is not needed** (D-462). `30-force-rls.sql`
+enables RLS on every customer table and deliberately does not force it, because
+the owner is `developer`; `ENABLE` alone constrains non-owners. So a session that
+acts *as* `developer` already sees every row — which is what D-134 asks the
+default console role for. Removing the attribute also fixes a problem D-132 did
+not consider: a table created while running as `steadhold_admin` would be *owned*
+by it, so a customer could not drop their own table from their own connection
+string and `steadhold export` would emit objects owned by a role absent from a
+vanilla Postgres.
+
+The role stays `NOINHERIT` and its image-granted `CREATEROLE` is stripped. It can
+do nothing by itself; every run says which role it acts as, which makes rail 1's
+four options one mechanism rather than one attribute and three `SET ROLE`s.
+Granting `developer` alone was a first version that reads correct and fails with
+`permission denied to set role "anon"` the moment the switcher is used for policy
+debugging — found by trying it.
+
+### The endpoint — rails 1, 3, 5, 6, and the audit
+
+The order inside the transaction is the part worth reading twice (D-464):
+`BEGIN`, timeout, read-only, role, statements, `COMMIT`/`ROLLBACK`. Read-only
+must precede any statement because Postgres refuses it afterwards, and the role
+must be last because dropping to `anon` removes the right to set the other two.
+
+Three bugs the tests found, all of them ordering. `enforceGuard` sat inside the
+runner, which runs inside `withConsoleDb` — so an unconfirmed `DROP TABLE`
+**opened a connection** before being refused, while the comment above it claimed
+the opposite. The empty-script check was behind the connection too. And
+`pgDetail` keyed on any string `code`, so `ECONNREFUSED` became a 400 blaming SQL
+that never ran.
+
+**The audit guard was blind to the new route.** `audit.p1.e2e.test.ts` builds the
+app without `db`, and a route that is never registered is a route that is never
+checked — the list-that-nobody-updates failure one level up from the list. It now
+switches every optional module on, and removing the route from `AUDITED` fails.
+
+`db.query` is a **member** capability (D-463) because a member can already reveal
+the connection string and run the same SQL from psql; the console is the audited
+path to what they hold, and the permission test asserts that premise so it cannot
+quietly stop being true.
+
+**Verification.** 22 new e2e tests, each a refusal or an authorization decision,
+against a fixture pointing at a dead port so a rail that stops refusing fails
+loudly. 255/255 api, 15/15 typecheck and unit. Live against staging on a freshly
+provisioned project: `LIMIT 501` appended and reported in `executed_sql`; 600
+rows truncated to 500 with `truncated: true`; an explicit `LIMIT 3` untouched;
+read-only refusing an INSERT (25006); a three-statement script rolling back so
+the table does not exist afterwards, carrying `position 8`; a 500ms timeout
+firing (57014); `anon` seeing 0 rows where `developer` sees 600; `auth.uid()`
+returning the claim's `sub`; and the destructive ladder refusing, demanding the
+name, rejecting a near-miss, then running. The audit trail carries an attempt row
+with SQL, role and danger, then success or failure with its SQLSTATE — and the
+three refused DROPs wrote nothing.
+
+**What is still missing before the editors can be built:** the introspection
+endpoint (schemas, tables, columns, functions in one payload — the SQL editor's
+completion source), saved queries and history (`GET/POST
+/v1/projects/:ref/queries`, last 100 executions), and rail 3's *per-project*
+timeout, which has no column and no settings UI — the default and the cap are
+enforced, the persistence is not.
 
 ## 5. Rules the code follows
 
@@ -5014,6 +5114,27 @@ the staged diff and asserting it equals the added line turns "I think that was j
 the rename" into a check — and it is the only thing standing between a 352-file
 commit and something unrelated riding along in it.
 
+**A route registered behind an `if` is a route no guard can see.** The audit
+guard enumerates routes by building the app and listening to registration, and it
+passed the whole of P7l without ever seeing the new endpoint, because the test
+built the app without that module. A list nobody is forced to update, checked by
+a test that cannot see the additions.
+
+**`SET TRANSACTION READ ONLY` must precede every statement; `SET LOCAL ROLE` must
+follow every setting.** The first is refused once a statement has run. The second
+is because dropping to a weaker role can remove the right to set the earlier
+ones — so the natural order loses the timeout silently, on exactly the runs where
+an unbounded query is most likely.
+
+**A guard that connects first is not a guard.** Rail 2's refusal was written
+inside the runner, which runs inside the connection helper, so an unconfirmed
+`DROP TABLE` opened a socket before being refused — and the comment above it said
+otherwise. A refusal should cost nothing and leave no audit row.
+
+**Any string in `err.code` is not a SQLSTATE.** Node puts `ECONNREFUSED` there
+too, so keying "the customer's SQL was wrong" on its presence turned an
+unreachable database into a 400 blaming a query that never ran.
+
 **A migration that has been applied is a record, not a document.** Editing one is
 editing history, and the runner will refuse it on every database that already has
 it — while a fresh database, which is all CI ever has, applies it without comment.
@@ -5235,6 +5356,9 @@ This one had already diverged, silently, for three phases.
 | D-459 | The token list is cards, and does not offer both views | `.tablewrap` makes every row look clickable and a token row goes nowhere; both-views is recorded as a gap rather than built, because cards have been asked for twice |
 | D-460 | Shrinkable grid tracks are `minmax(0, 1fr)`; `container-type` never goes on an ancestor of a dialog | Three overflow bugs of one shape, plus the trap: `container-type` implies `contain: layout`, which makes the element the containing block for `position: fixed` |
 | D-461 | Below 640px the rail is forced and the stored preference is left alone | 232px of a 375px screen leaves 143px of content; the preference applies again when there is room, so the layout refuses rather than decides |
+| D-462 | `steadhold_admin` is `NOINHERIT`, has **no `BYPASSRLS`**, and is a member of `developer`, `anon` and `authenticated`. Narrows D-132 | RLS is enabled but not forced, so acting *as* `developer` already sees every row — and it keeps console-created tables owned by the customer, which `steadhold export` depends on |
+| D-463 | `db.query` is a **member** capability | A member can already reveal the `developer` connection string (`project.read` allows it) and run the same SQL from psql; the console is the audited path to what they already hold |
+| D-464 | A console run is `BEGIN`, timeout, read-only, role, statements, commit — and rail 2 refuses before any connection is opened | Read-only is refused once a statement has run, and `SET LOCAL ROLE anon` removes the right to set the timeout; separately, the guard sat behind the connection and opened a socket before refusing |
 
 ## 7. Measurements
 

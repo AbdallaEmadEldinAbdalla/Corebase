@@ -342,13 +342,31 @@ pnpm install
 ./scripts/staging.sh up && ./scripts/migrate-staging.sh && ./scripts/staging.sh kek
 docker build -t steadhold/postgres:17.5 infra/docker/postgres
 docker build -t steadhold/pgbouncer:1.23 infra/docker/pgbouncer
-./scripts/staging.sh seed-images && ./scripts/staging.sh backup-store && ./scripts/staging.sh verify
+./scripts/staging.sh all       # or the individual steps; `all` is the safe one
 ```
 
-`backup-store` creates the bucket, generates the object store's TLS material, and
-proves the store is reachable from inside a project's own private network — the
-same NAT path a real node takes to R2. Skip it and projects still provision, but
-they provision without a backup repo and say so in the log.
+**Run `all`**, or at least include `harden-egress`. `backup-store` creates the
+bucket and the object store's TLS material, and `harden-egress` installs the one
+iptables rule that lets a project container reach it — without that rule
+`archive-push` retries forever, holds pgBackRest's lock, and provisioning
+dead-letters on `stanza-create` three steps later. Skipping `backup-store`
+entirely is survivable (projects provision without a backup repo and say so);
+skipping `harden-egress` after it is not.
+
+`backup-store`'s own reachability line currently claims more than it checks — it
+probes from a throwaway network rather than a project network, so it can print
+`✓ reachable from a project's private network` while a real project cannot reach
+the store at all. Recorded in [STATUS §8](STATUS.md); do not read it as proof.
+
+After running the e2e suites, clear the containers they leave behind:
+
+```bash
+./scripts/staging.sh orphans --prune
+```
+
+They keep their published host ports while the control plane forgets their rows,
+and the next provision then fails — as a *network* error three steps downstream,
+because Docker rolls back a container's network attach when a port bind fails.
 
 Then start the services and watch the whole thing work in about five seconds:
 
@@ -426,6 +444,7 @@ Staging is Docker Compose plus Docker-in-Docker standing in for a control node a
 | `infra/docker/pgbouncer` | The per-project pooler image: transaction mode, `auth_query` against a lookup that allowlists one role, every rule baked in |
 | `infra/docker/staging` | The local stand-in for staging, including Prometheus, Loki, Alloy and Grafana with the dashboard provisioned as code |
 | `packages/metrics` | A Prometheus registry — counters, gauges, histograms, with label sets declared up front so the cardinality budget is hard to break |
+| `packages/sql-guard` | The SQL statement classifier: the **authoritative** half of the SQL editor's destructive-statement guard and its row-limit append (D-134), shared with the dashboard's instant-feedback copy and the CLI's guard parity |
 | `apps/dashboard` | The dashboard: login, signup, org switcher, projects grid, create-project flow, project overview, project usage, project settings with pause and a danger zone, retrying a failed project, the paused/resuming experience, org members and invitations, organization settings, accepting an invitation, and the account page with personal access tokens — Next.js App Router, TanStack Query, session cookies, no BFF |
 | `demo/auth` | The Phase 4 demo: a plain HTML page that signs up, verifies from a real email, logs in and explains the JWT claims — the auth API's first browser client |
 | `.github/workflows` | CI in two lanes — a one-minute unit lane run against dead database ports, and an integration lane that stands up the whole Docker stack — plus the nightly crash, lifecycle and reboot drills |
