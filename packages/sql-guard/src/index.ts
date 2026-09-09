@@ -116,12 +116,41 @@ const SKIP = new Set([
   'IF', 'EXISTS', 'NOT', 'ONLY', 'FROM',
 ]);
 
-/** A token's text exactly as the user wrote it, case included. */
+/**
+ * A quoted identifier whose quotes are doing no work.
+ *
+ * `"posts"` and `posts` name the same column; `"odd name"` and `odd name` do not,
+ * and neither do `"Posts"` and `Posts` — Postgres folds an unquoted identifier to
+ * lower case, so the quotes are load-bearing the moment there is a capital in
+ * there. This matches only the case where dropping them changes nothing.
+ */
+const REDUNDANTLY_QUOTED = /^"([a-z_][a-z0-9_$]*)"$/;
+
+/**
+ * A token's text as a person would type it back.
+ *
+ * `word` tokens are upper-cased by the lexer, so the original has to come out of
+ * the source. Quoted identifiers **lose quotes that mean nothing**, and that is
+ * the interesting half: this used to keep every quote, with a comment saying a
+ * confirmation should ask for what is on the user's screen. That reasoning is
+ * right and its premise stopped being true — when a *person* writes `DROP TABLE
+ * "posts"` the quotes are on their screen, but the table editor generates
+ * `drop table "public"."posts"` and the only place those quotes appear is the
+ * preview. The dialog was therefore about to ask the user to type
+ * `"public"."posts"`, quotes included, under a heading that reads
+ * `public.posts`. Nobody types that, and a confirmation nobody can satisfy is
+ * worse than none.
+ *
+ * Normalising *here* rather than in the dialog is what keeps it correct: the
+ * server compares `confirm_names` against its own `namesToType`, so both sides
+ * have to agree on the spelling — and they agree by running this function.
+ */
 function text(s: Statement, t: Token): string {
-  // `word` tokens are upper-cased by the lexer, so the original has to come back
-  // out of the source. `ident` tokens keep their quotes, which is deliberate: a
-  // confirmation should ask for what is on the user's screen.
-  return t.kind === 'ident' ? t.value : s.sql.slice(t.start - s.start, t.end - s.start);
+  if (t.kind === 'ident') {
+    const bare = REDUNDANTLY_QUOTED.exec(t.value);
+    return bare ? bare[1]! : t.value;
+  }
+  return s.sql.slice(t.start - s.start, t.end - s.start);
 }
 
 /**
@@ -406,6 +435,42 @@ function danger(s: Statement): Pick<Classified, 'danger' | 'reason' | 'object' |
       }
       return { danger: 'safe', reason: '', object: obj, names: [] };
     }
+    /**
+     * `GRANT … TO anon` / `TO PUBLIC`, which is not destructive and is the one
+     * statement in this editor that can expose a customer's data to the internet.
+     *
+     * D-108 makes `anon` opt-in per table: it holds no default grant, so a
+     * `CREATE POLICY … TO anon` alone does nothing and the table stays denied.
+     * The grant is what actually opens it — which means it is also the statement
+     * that turns "no policies ⇒ no access" from a promise into a former promise,
+     * and the product's whole security model rests on that sentence.
+     *
+     * `confirm` rather than `type_name`: nothing is deleted and it is reversible
+     * with a `REVOKE`, so demanding a typed name here would put a data-exposure
+     * warning on the same rung as `DROP TABLE` and teach people to type through
+     * both. A flag is enough to prove the dialog asked.
+     *
+     * Only `anon` and `PUBLIC` reach the rung. `GRANT … TO authenticated` is the
+     * default state of every table already (D-108's default privileges), so
+     * gating it would be a confirmation for something that is already true.
+     */
+    case 'GRANT': {
+      const to = grantee(s);
+      if (to === null) return { danger: 'safe', reason: '', object: obj, names: [] };
+      // `objectName` reads the token after the command, which for a GRANT is the
+      // *privilege* — it produced "grants anonymous callers access to select",
+      // caught by reading the live 409. A grant's object is after `ON`.
+      const target = grantTarget(s);
+      return {
+        danger: 'confirm',
+        reason: `This grants ${to === 'PUBLIC' ? 'every role' : 'anonymous callers'} `
+          + `access to ${target ?? 'this object'}. Anyone holding your project's `
+          + 'anon key can then reach the rows your policies allow — which is the '
+          + 'point, and is worth being sure about.',
+        object: target,
+        names: [],
+      };
+    }
     case 'TRUNCATE':
       return {
         danger: 'confirm',
@@ -433,6 +498,101 @@ function danger(s: Statement): Pick<Classified, 'danger' | 'reason' | 'object' |
     default:
       return { danger: 'safe', reason: '', object: obj, names: [] };
   }
+}
+
+/** Words between a `GRANT`'s `ON` and the object it names, beyond `SKIP`. */
+const GRANT_NOISE = new Set([
+  'ALL', 'TABLES', 'SEQUENCES', 'FUNCTIONS', 'ROUTINES', 'IN',
+]);
+
+/**
+ * What a `GRANT` acts on: the name after its `ON`.
+ *
+ * Not `objectName`, which reads the token after the command — and for `GRANT
+ * SELECT ON public.articles TO anon` that is `SELECT`, the privilege. The reason
+ * string said "grants anonymous callers access to select" until a live 409 was
+ * read rather than assumed.
+ *
+ * `ON ALL TABLES IN SCHEMA x` is described rather than named, because there is no
+ * single object and "access to x" would read as the schema itself.
+ */
+function grantTarget(s: Statement): string | null {
+  const toks = WORDS(s);
+  let depth = 0;
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i]!;
+    if (t.kind === 'punct' && t.value === '(') depth++;
+    else if (t.kind === 'punct' && t.value === ')') depth = Math.max(0, depth - 1);
+    else if (depth === 0 && t.kind === 'word' && t.value === 'ON') {
+      let j = i + 1;
+      const plural = toks[j]?.kind === 'word' && toks[j]!.value === 'ALL';
+      /**
+       * One loop over both sets of noise words, not two.
+       *
+       * Two consecutive loops looked right and were wrong on the form that
+       * mixes them: `ON ALL TABLES IN SCHEMA public` needs `ALL TABLES IN` from
+       * the second set and then `SCHEMA` from the first, so the second loop
+       * stopped at `SCHEMA` and the object came back as the literal word
+       * "SCHEMA". Caught by this rule's own test.
+       */
+      while (j < toks.length && toks[j]!.kind === 'word'
+        && (SKIP.has(toks[j]!.value) || GRANT_NOISE.has(toks[j]!.value))) j++;
+      const got = dottedName(s, j);
+      if (!got) return null;
+      return plural ? `everything in ${got.name}` : got.name;
+    }
+  }
+  return null;
+}
+
+/**
+ * Does this `GRANT` reach `anon` or `PUBLIC`?
+ *
+ * Read from the token *after* a top-level `TO`, which is where a grantee list
+ * starts — `GRANT SELECT ON t TO anon, authenticated`. Depth matters for the
+ * same reason it does everywhere else here: a `TO` inside a parenthesised
+ * expression is not this clause's.
+ *
+ * Returns the first exposing grantee found, or null. Null is `safe`, which is
+ * the right default for the many grants that are internal — `GRANT USAGE ON
+ * SCHEMA`, a grant to a role the customer made, a grant to `service_role`.
+ */
+function grantee(s: Statement): 'anon' | 'PUBLIC' | null {
+  const toks = WORDS(s);
+  /**
+   * `GRANT USAGE ON SCHEMA … TO anon` is not this.
+   *
+   * Schema usage exposes no rows — without a table grant the table is still
+   * denied — and the platform's provisioning already grants it to `anon`, so
+   * every project has it. Firing on it would be a confirmation for the normal
+   * case, which is how a guard becomes something people dismiss. Caught by one
+   * of this rule's own tests, which listed it as an example that should stay
+   * safe.
+   *
+   * Table, sequence and *function* grants all stay in: a `SECURITY DEFINER`
+   * function can hand back rows its caller could never select.
+   */
+  for (let i = 0; i + 1 < toks.length; i++) {
+    if (toks[i]!.kind === 'word' && toks[i]!.value === 'ON'
+      && toks[i + 1]!.kind === 'word' && toks[i + 1]!.value === 'SCHEMA') return null;
+  }
+  let depth = 0;
+  let afterTo = false;
+  for (const t of toks) {
+    if (t.kind === 'punct' && t.value === '(') depth++;
+    else if (t.kind === 'punct' && t.value === ')') depth = Math.max(0, depth - 1);
+    else if (depth === 0 && t.kind === 'word') {
+      if (t.value === 'TO') { afterTo = true; continue; }
+      if (afterTo) {
+        if (t.value === 'PUBLIC') return 'PUBLIC';
+        if (t.value === 'ANON') return 'anon';
+      }
+    } else if (depth === 0 && afterTo && t.kind === 'ident') {
+      // `"anon"` quoted is the same role.
+      if (t.value === '"anon"') return 'anon';
+    }
+  }
+  return null;
 }
 
 const TX = new Set(['BEGIN', 'COMMIT', 'ROLLBACK', 'START', 'END', 'SAVEPOINT']);

@@ -148,7 +148,12 @@ describe('rail 2 — the destructive ladder', () => {
       'CREATE TABLE t (id int)',
       'ALTER TABLE t ADD COLUMN c int',
       'CREATE INDEX ON posts (title)',
-      'GRANT SELECT ON posts TO anon',
+      // `GRANT SELECT ON posts TO anon` used to be in this list and has moved to
+      // its own block below. It was here as one more example of "nothing is
+      // being destroyed", which is true — and it is also the one statement in
+      // the product that can put a customer's rows on the internet.
+      'GRANT SELECT ON posts TO authenticated',
+      'GRANT USAGE ON SCHEMA public TO anon',
       'EXPLAIN SELECT * FROM posts',
     ]) expect(one(sql).danger, sql).toBe('safe');
   });
@@ -365,5 +370,123 @@ describe('a comma list of objects', () => {
 
   it('de-duplicates across statements so one name is asked for once', () => {
     expect(classify('drop table a; drop table a').namesToType).toEqual(['a']);
+  });
+});
+
+describe('the name a person is asked to type', () => {
+  it('BYPASS: drops quotes that mean nothing, because the generator wrote them', () => {
+    /**
+     * The table editor emits `drop table "public"."posts"`, so without this the
+     * dialog asks the user to type `"public"."posts"` — quotes included — under a
+     * heading that reads `public.posts`. Nobody types that, and a confirmation
+     * nobody can satisfy is worse than no confirmation.
+     *
+     * The rule this replaced ("quoted identifiers keep their quotes, because a
+     * confirmation should ask for what is on the user's screen") was right about
+     * a statement a *person* wrote and wrong about a generated one. The premise
+     * changed; the comment did not.
+     */
+    expect(classify('drop table "public"."posts"').namesToType).toEqual(['public.posts']);
+    expect(classify('alter table "public"."posts" drop column "legacy_flag"').namesToType)
+      .toEqual(['legacy_flag']);
+  });
+
+  it('keeps quotes that change the meaning', () => {
+    // `"odd name"` and `odd name` are not the same identifier, and Postgres folds
+    // an unquoted identifier to lower case — so a capital makes the quotes
+    // load-bearing too.
+    expect(classify('alter table t drop column "odd name"').namesToType)
+      .toEqual(['"odd name"']);
+    expect(classify('alter table t drop column "Mixed"').namesToType)
+      .toEqual(['"Mixed"']);
+    expect(classify('drop table "has space"').namesToType).toEqual(['"has space"']);
+  });
+
+  it('normalises in the classifier, so both sides of the wire agree', () => {
+    // The API compares `confirm_names` against its own `namesToType`. If the
+    // dialog normalised and the server did not, every confirmed drop would 409
+    // — so the normalisation has to live in the shared code, and this asserts
+    // that one call produces the spelling both halves use.
+    const script = classify('drop table "public"."a", "public"."b"');
+    expect(script.namesToType).toEqual(['public.a', 'public.b']);
+    expect(script.dangerous[0]!.reason).toContain('"public.a" and "public.b"');
+  });
+});
+
+describe('the grant that opens a table to the internet', () => {
+  /**
+   * D-108 makes `anon` opt-in per table: it holds no default table grant, so a
+   * `CREATE POLICY … TO anon USING (true)` on its own does **nothing** and the
+   * table stays denied. Verified live — `permission denied for table articles`
+   * against a table carrying exactly that policy.
+   *
+   * Which makes the `GRANT` the statement that actually opens it, and therefore
+   * the statement that turns "no policies ⇒ no access" from a promise into a
+   * former promise. The product's security model rests on that sentence, so the
+   * statement that ends it says so.
+   */
+  it('BYPASS: GRANT … TO anon needs a confirmation', () => {
+    const c = one('GRANT SELECT ON public.posts TO anon');
+    expect(c.danger).toBe('confirm');
+    expect(c.reason).toContain('anon key');
+    // Not `type_name`: nothing is deleted and a REVOKE undoes it, so putting it
+    // on the same rung as DROP TABLE would teach people to type through both.
+    expect(c.names).toEqual([]);
+  });
+
+  it('TO PUBLIC counts too, and says so differently', () => {
+    expect(one('GRANT SELECT ON public.posts TO PUBLIC').danger).toBe('confirm');
+    expect(one('GRANT SELECT ON public.posts TO PUBLIC').reason).toContain('every role');
+  });
+
+  it('finds anon anywhere in the grantee list, not just first', () => {
+    expect(one('GRANT SELECT ON t TO authenticated, anon').danger).toBe('confirm');
+    expect(one('GRANT SELECT ON t TO "anon"').danger).toBe('confirm');
+  });
+
+  it('leaves the grants that are already every table\'s default alone', () => {
+    // `authenticated` and `service_role` hold these on every table by default
+    // privileges (D-108), so a confirmation here would be a confirmation for
+    // something that is already true — and a guard that fires on the normal case
+    // is a guard people learn to dismiss.
+    expect(one('GRANT SELECT ON t TO authenticated').danger).toBe('safe');
+    expect(one('GRANT ALL ON t TO service_role').danger).toBe('safe');
+  });
+
+  it('is not fooled by a role whose name merely contains anon', () => {
+    expect(one('GRANT SELECT ON t TO anonymous_reports').danger).toBe('safe');
+    expect(one('GRANT SELECT ON t TO canonical_user').danger).toBe('safe');
+  });
+
+  it('REVOKE is safe — closing a door needs no ceremony', () => {
+    expect(one('REVOKE ALL ON public.posts FROM anon').danger).toBe('safe');
+  });
+});
+
+describe("a GRANT's object is after its ON, not after the command", () => {
+  it('BYPASS: names the table, not the privilege', () => {
+    // `objectName` reads the token after the command, which for a GRANT is
+    // `SELECT`. The reason string said "grants anonymous callers access to
+    // select" until the live 409 was read rather than assumed.
+    const c = one('GRANT SELECT ON "public"."articles" TO anon');
+    expect(c.object).toBe('public.articles');
+    expect(c.reason).toContain('access to public.articles');
+    expect(c.reason).not.toContain('access to select');
+  });
+
+  it('skips the noise word in ON TABLE t', () => {
+    expect(one('GRANT SELECT ON TABLE posts TO anon').object).toBe('posts');
+  });
+
+  it('describes a whole-schema grant rather than naming the schema as the object', () => {
+    // "access to public" would read as the schema itself; this is every table in
+    // it, which is a much bigger thing to be agreeing to.
+    expect(one('GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon').object)
+      .toBe('everything in public');
+  });
+
+  it('handles several privileges before the ON', () => {
+    expect(one('GRANT SELECT, INSERT, UPDATE ON public.posts TO anon').object)
+      .toBe('public.posts');
   });
 });
