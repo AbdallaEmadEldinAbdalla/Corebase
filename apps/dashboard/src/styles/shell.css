@@ -7,15 +7,22 @@
    Fixed top bar, fixed sidebar, scrolling content. The chrome is outside the
    route that changes, so navigating within a context repaints only the content
    region — UX standard §1. */
+/* `minmax(0, 1fr)`, never a bare `1fr`.
+   A bare `1fr` is `minmax(auto, 1fr)`, so the content column's *floor* is its
+   content's min-content width — and the header spans it. The bar is a
+   non-wrapping flex row (mark, breadcrumb, search, avatar) whose min-content came
+   to 415px, so on a 375px phone the whole document was 415px wide and the browser
+   zoomed out to fit it: every page, not one. `min-width: 0` on `.main` could not
+   help, because the thing being floored was the *track*, not the item in it. */
 .shell {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 232px 1fr;
+  grid-template-columns: 232px minmax(0, 1fr);
   grid-template-rows: 48px 1fr;
   grid-template-areas: "bar bar" "nav main";
 }
 .shell--noNav {
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-areas: "bar" "main";
 }
 
@@ -30,7 +37,7 @@
    way `.sh-sr` hides things — clipped, not `display: none` — so a screen reader
    still reads "Projects" and the accessible name of each row is unchanged whether
    the rail is open or shut. */
-.shell--railed { grid-template-columns: 56px 1fr; }
+.shell--railed { grid-template-columns: 56px minmax(0, 1fr); }
 
 .shell--railed .nav { padding: var(--sh-space-12) var(--sh-space-8); }
 .shell--railed .nav__label { display: none; }
@@ -52,6 +59,41 @@
 .shell--railed .sh-nav-item { width: 40px; height: 40px; margin: 0 auto; padding: 0; }
 
 
+/* ── the rail is not optional on a phone ──────────────────────────────────────
+   232px of a 375px screen leaves 143px for the content, and 143px is narrower
+   than the min-content of everything that lives there — so the document itself
+   came out 476px wide and the browser zoomed out to fit it. Worse, `.sh-modal` is
+   `position: fixed; inset: 0`, which sizes to the initial containing block, and
+   that block expands with the overflow: every dialog measured 476px too and hung
+   off the right edge.
+
+   So below this width the rail is forced, whatever the stored preference says.
+   The preference is *not* rewritten — `lib/sidebar.ts` keeps whatever the user
+   chose, and it applies again as soon as there is room for it; this is the layout
+   refusing to draw something that does not fit, not a decision made on the user's
+   behalf.
+
+   The declarations are repeated rather than shared with `.shell--railed` above,
+   and that is deliberate: a class cannot be applied by a media query, and the
+   alternative — setting one from JS on resize — puts a layout fact in React state
+   where it can disagree with the CSS. Repetition that a stylesheet can check
+   beats agreement that nothing can. */
+@media (max-width: 640px) {
+  .shell { grid-template-columns: 56px minmax(0, 1fr); }
+  .shell .nav { padding: var(--sh-space-12) var(--sh-space-8); }
+  .shell .nav__label { display: none; }
+  .shell .sh-nav-item { justify-content: center; gap: 0; }
+  .shell .sh-nav-item__label {
+    position: absolute; width: 1px; height: 1px;
+    padding: 0; margin: -1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap; border: 0;
+  }
+  .shell .nav__foot { display: none; }
+  .shell .nav__rail { justify-content: center; margin-top: auto; }
+  .shell .sh-nav-item { width: 40px; height: 40px; margin: 0 auto; padding: 0; }
+}
+
+
 .bar {
   grid-area: bar;
   display: flex; align-items: center; gap: var(--sh-space-12);
@@ -65,6 +107,18 @@
   background: var(--sh-accent); flex: none;
 }
 .bar__spacer { flex: 1; }
+/* Letting the track shrink is only half of it: the bar's own children then have
+   to fit in it. The breadcrumb is the one part with arbitrary-length content, so
+   it is the one that yields — `.crumb__label` below already truncates; what it
+   lacked was the `min-width: 0` that lets it. */
+@media (max-width: 560px) {
+  /* The palette's shortcut hint names a key the device does not have. Dropping it
+     is not a compromise on this width, it is the more honest label. The palette
+     is still reachable by the button itself, and `?` lists the keys for anyone
+     with a keyboard (§2's three routes are unaffected). */
+  .bar .kbd { display: none; }
+  .crumb { max-width: 140px; }
+}
 
 /* ── breadcrumb, where every segment is a switcher (§1) ───────────────────── */
 .crumbs { display: flex; align-items: center; gap: 2px; min-width: 0; }
@@ -80,7 +134,12 @@
 }
 .crumb:hover { background: var(--sh-surface-alt); border-color: var(--sh-border); }
 .crumb[aria-expanded="true"] { background: var(--sh-surface-alt); border-color: var(--sh-border-strong); }
-.crumb__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* `min-width: 0` is what makes the ellipsis reachable: a flex item's floor is its
+   min-content width, so without it the label refused to shrink and the truncation
+   here never had anything to do. */
+.crumb__label {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
 .crumb__caret { color: var(--sh-text-muted); font-size: 10px; flex: none; }
 
 /* ── the sidebar ──────────────────────────────────────────────────────────── */
@@ -154,7 +213,23 @@
   background: var(--sh-surface); border: 1px solid var(--sh-border);
   border-radius: var(--sh-radius-lg); overflow: hidden;
 }
+/* No `container-type` here, however tempting. `container-type: inline-size`
+   implies `contain: layout`, and a layout-contained element becomes the
+   containing block for `position: fixed` descendants — so declaring it here broke
+   every `ConfirmDialog` in the app, because `.sh-modal` is rendered in place
+   inside whichever card opened it. Measured on the org danger zone at 375px: the
+   modal came out 476px wide instead of the viewport's 375, and the dialog hung
+   off the edge. The container that `.facts` needs is declared on `.facts` itself,
+   below, where nothing fixed can ever live. */
 .card__body { padding: var(--sh-space-24); }
+/* A card carries no margin of its own, so a card followed by a list — or by a
+   second card — met edge to edge, the card's rounded bottom corner touching the
+   next block's rounded top corner. Same defect class as two stacked banners
+   (D-448): every piece here is spaced *internally* and nothing said what the gap
+   between two of them should be. Scoped to `.card + *` rather than `* + *`
+   because `.section__head` already carries its own bottom margin, and doubling it
+   would move every page. */
+.section > .card + * { margin-top: var(--sh-space-16); }
 /* The danger zone. `.sh-card--error` exists but belongs to the *grid* card, which
    is 340px wide by design — using it for a full-width section silently caps the
    section. Same role token, page-card family. */
@@ -167,12 +242,51 @@
 }
 
 /* Definition rows. Label column is fixed so values line up across cards. */
-.facts { display: grid; grid-template-columns: 160px 1fr; gap: var(--sh-space-12) var(--sh-space-24); }
+.facts {
+  display: grid;
+  /* `minmax(0, 160px)`, not `160px`. A fixed first track cannot give anything
+     back, so inside a narrow card the value column got what was left — 107px of
+     a 375px window — and an email broke mid-word down four lines. */
+  grid-template-columns: minmax(0, 160px) minmax(0, 1fr);
+  gap: var(--sh-space-12) var(--sh-space-24);
+  /* The container is this element, and the query below styles its *children*.
+     An element cannot answer its own container query, so the stacking is done by
+     spanning the cells rather than by rewriting this template — which is also why
+     the container can live here, on a `<dl>` that will never hold a dialog,
+     instead of on the card body where `contain: layout` broke fixed positioning. */
+  container-type: inline-size;
+}
+/* Below this there is no honest two-column reading of a label and a value: the
+   label wants 160px and the value wants whatever an email address needs.
+   Keyed off the *card's* width rather than the window's, because the content
+   column is the window minus the sidebar minus two gutters (D-441) — the
+   container is declared on `.card__body` above. An element cannot be its own
+   container, which is how the first version of this failed silently: with
+   `container-type` on `.facts` itself the query matched nothing and the grid
+   stayed at `160px 107px`. */
+@container (max-width: 420px) {
+  .facts { gap: 0; }
+  /* Each cell takes the full row, which stacks label over value without the
+     parent's template changing. */
+  .facts__k, .facts__v { grid-column: 1 / -1; }
+  .facts__k { padding-top: var(--sh-space-12); }
+  .facts__k:first-of-type { padding-top: 0; }
+}
 .facts__k {
   font: var(--sh-caption); letter-spacing: var(--sh-tracking-caption);
   text-transform: uppercase; color: var(--sh-text-muted); padding-top: 3px;
 }
-.facts__v { font: var(--sh-body-m); min-width: 0; }
+/* `overflow-wrap` on the value itself and not only on a `code` child. The child
+   rule was written for connection strings and the same need is there for any
+   unbreakable value — an email address is the common one. */
+/* `margin: 0` because this is a `<dd>`, which the UA gives a 40px
+   `margin-inline-start`. In the two-column grid that margin was invisible — grid
+   placement put the value in its own track either way — so it sat there unnoticed
+   until the stacked layout above put label and value in one column and the value
+   appeared indented under it. */
+.facts__v {
+  font: var(--sh-body-m); min-width: 0; overflow-wrap: anywhere; margin: 0;
+}
 .facts__v code { font: var(--sh-code); overflow-wrap: anywhere; }
 
 /* ── tables ───────────────────────────────────────────────────────────────── */

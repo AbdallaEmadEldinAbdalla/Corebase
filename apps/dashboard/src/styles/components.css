@@ -220,6 +220,13 @@ body{margin:0;background:var(--sh-bg);color:var(--sh-text);font:var(--sh-body-m)
    fixed, above the popups (`.pop__menu` is z-index 40), centring its dialog. */
 .sh-modal{position:fixed;inset:0;z-index:60;display:grid;place-items:center;
   padding:var(--sh-space-24);
+  /* An explicit `minmax(0, 1fr)` column, because the *implicit* one sized itself
+     to its item: with no template the column became 420px — the dialog's own
+     width — and `.sh-dialog`'s `max-width: 100%` then resolved against that 420px
+     rather than against this element's 327px content box. A percentage cap that
+     measures the thing it is capping is not a cap, and the panel hung off the
+     right edge of a 375px phone in every dialog in the app. */
+  grid-template-columns:minmax(0,1fr);
   /* An overlay must not inherit typography from wherever it happens to be
      declared. `position: fixed` takes it out of *flow*, but inheritance follows
      the DOM — so a dialog opened from a right-aligned table cell came out
@@ -229,13 +236,22 @@ body{margin:0;background:var(--sh-bg);color:var(--sh-text);font:var(--sh-body-m)
   text-align:start;font:var(--sh-body-m);color:var(--sh-text)}
 .sh-modal .sh-scrim{position:absolute;inset:0;width:100%;height:100%;padding:0;
   border:0;border-radius:0;cursor:default}
-.sh-modal .sh-dialog{position:relative}
+/* `min-width: 0` because a grid item's *automatic minimum size* is its min-content
+   width, and that beats `max-width: 100%`. So `.sh-dialog`'s 420px stood up
+   against a 327px grid area on a 375px phone and the panel hung off the right
+   edge — every dialog in the app, confirmations included, not just the one this
+   was found on. */
+.sh-modal .sh-dialog{position:relative;min-width:0}
 .sh-scrim{background:var(--sh-scrim);padding:var(--sh-space-32);border-radius:var(--sh-radius-md)}
 .sh-dialog{width:420px;max-width:100%;background:var(--sh-surface);border:1px solid var(--sh-border);
   border-radius:var(--sh-radius-lg);padding:var(--sh-space-24)}
 .sh-dialog__title{font:600 18px/26px var(--sh-font-ui);color:var(--sh-text)}
 .sh-dialog__text{font:var(--sh-body-s);color:var(--sh-text-secondary);margin:8px 0 var(--sh-space-16)}
-.sh-dialog__footer{display:flex;gap:var(--sh-space-12);justify-content:space-between;
+/* `flex-wrap` so the two buttons stack rather than being the thing that holds the
+   panel open: the footer's min-content is what made the dialog refuse to narrow.
+   `justify-content` stays `space-between` for the normal single-line case. */
+.sh-dialog__footer{display:flex;flex-wrap:wrap;gap:var(--sh-space-12);
+  justify-content:space-between;
   margin:var(--sh-space-20) -24px -24px;padding:var(--sh-space-16) var(--sh-space-24);
   border-top:1px solid var(--sh-border)}
 .sh-code{background:var(--sh-code-bg);border-radius:var(--sh-radius-md);overflow:hidden;max-width:440px}

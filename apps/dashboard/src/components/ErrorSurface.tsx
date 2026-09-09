@@ -42,7 +42,15 @@ export function ErrorSurface({ error, onRetry, title }: {
         {api?.requestId ? (
           <div className="reqid" style={{ marginTop: 'var(--sh-space-8)' }}>
             <span>{api.requestId}</span>
-            <button type="button" className="sh-btn sh-btn--ghost sh-btn--sm" onClick={copy}>
+            {/* `--secondary`, not `--ghost`. `.sh-btn` is `border: 1px solid
+                transparent` and `--ghost` sets `background: transparent` without
+                restoring an edge, so on this banner's tint the button had neither
+                fill nor border and rendered as a word — measured against the
+                banner's own `--sh-error-bg`. Ghost is fine on the plain surface
+                beside a primary button, which is every other use of it; here it
+                was the only control on the tint, and it is the one D-032 exists
+                for: the `request_id` is the single thing support can search. */}
+            <button type="button" className="sh-btn sh-btn--secondary sh-btn--sm" onClick={copy}>
               {copied ? 'Copied' : 'Copy'}
             </button>
           </div>
