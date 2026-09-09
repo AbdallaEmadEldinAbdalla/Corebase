@@ -50,6 +50,12 @@ beforeAll(async () => {
     // presents as a constraint violation in every test and looks like a bug in
     // the code under test. They are recognisable by `volume_name`.
     await pool.query(`DELETE FROM project_databases WHERE volume_name = 'v-p7l'`);
+    // And anything a previous run left when it was killed part-way — projects
+    // before organizations, for the RESTRICT reason spelled out in `afterAll`.
+    await pool.query(
+      `DELETE FROM projects WHERE organization_id IN
+         (SELECT id FROM organizations WHERE slug LIKE 'p7l-%')`);
+    await pool.query(`DELETE FROM organizations WHERE slug LIKE 'p7l-%'`);
     secrets = createSecretStore(pool, createEnvelope({ kekDir }));
     const users = createUserStore(pool);
     const orgStore = createOrgStore(pool);
@@ -78,6 +84,58 @@ beforeAll(async () => {
 }, 20_000);
 
 afterAll(async () => {
+  /**
+   * Take the fixture projects away, and their organizations with them.
+   *
+   * A suite that leaves rows behind is a suite that changes the next run's
+   * environment, and here the rows are not inert: each one is a project the
+   * control plane believes in, holding a node booking. Cleaning up in `afterAll`
+   * rather than only sweeping in `beforeAll` means a passing run leaves nothing,
+   * which is the difference between a test that is repeatable and one that is
+   * merely self-healing.
+   */
+  if (up && made.length > 0) {
+    // Projects first, then their organizations. `projects.organization_id` is
+    // **RESTRICT**, not CASCADE, so deleting the org first fails with `still
+    // referenced from table "projects"` — and the first version of this wrapped
+    // that in a `.catch(() => {})`, which would have hidden the failure and left
+    // the rows behind exactly as before. `project_databases` *is* CASCADE, so
+    // the placement goes with the project.
+    const orgs = await pool.query<{ organization_id: string }>(
+      `SELECT DISTINCT organization_id FROM projects WHERE id = ANY($1::uuid[])`, [made]);
+    await pool.query(`DELETE FROM projects WHERE id = ANY($1::uuid[])`, [made]);
+    if (orgs.rows.length > 0) {
+      await pool.query(`DELETE FROM organizations WHERE id = ANY($1::uuid[])`,
+        [orgs.rows.map((r) => r.organization_id)]);
+    }
+
+    /**
+     * Put the node ledger back.
+     *
+     * `nodes.ram_reserved_mb` is a **counter**, incremented by the saga's
+     * `allocate_node` and decremented by its compensation — so deleting project
+     * rows out from under it leaves the reservation forever. There is a race this
+     * suite cannot close: a worker running beside it (and one is running whenever
+     * anyone is verifying anything) can claim the provisioning job in the moment
+     * between creating the project and deleting the job above, and that claim
+     * books capacity.
+     *
+     * One 350 MB leak per run is enough to reach `no node in eu-central fits`
+     * within a few dozen runs, which is what happened. Recomputing from the rows
+     * that are actually there is the correct compensation for deleting rows a
+     * counter was tracking, and it is idempotent.
+     */
+    await pool.query(
+      `UPDATE nodes n
+          SET ram_reserved_mb = COALESCE((
+                SELECT SUM(d.ram_limit_mb) FROM project_databases d
+                  JOIN projects p ON p.id = d.project_id
+                 WHERE d.node_id = n.id AND p.status <> 'deleted'), 0),
+              disk_reserved_gb = COALESCE((
+                SELECT CEIL(SUM(d.disk_limit_mb) / 1024.0) FROM project_databases d
+                  JOIN projects p ON p.id = d.project_id
+                 WHERE d.node_id = n.id AND p.status <> 'deleted'), 0)`);
+  }
   await pool?.end();
   rmSync(kekDir, { recursive: true, force: true });
 });
@@ -89,6 +147,9 @@ const t = (n: string, fn: () => Promise<void>, ms = 30_000) =>
   }, ms);
 
 let seq = 0;
+/** Every project this file created, so `afterAll` can take them away again. */
+const made: string[] = [];
+
 /**
  * A port in the ephemeral range with nothing listening on it, unique per call.
  *
@@ -128,6 +189,26 @@ async function readyProject(owner: Who): Promise<{ ref: string; orgId: string }>
     payload: { name: `p7l-app-${++seq}`, org_id: orgId } });
   const { ref, id } = (created.json() as { project: { ref: string; id: string } }).project;
   const projectId = id.replace('prj_', '');
+  made.push(projectId);
+
+  /**
+   * Drop the provisioning job this project just queued.
+   *
+   * Not tidiness — a correctness bug in the first version of this file. Creating
+   * a project through the real route enqueues a real `provision_project`, and a
+   * worker running beside the suite (`scripts/dev.sh`, which is up whenever
+   * anyone is verifying anything) **provisions it**: `allocate_node` books RAM
+   * and disk against the node, then the saga fails on this fixture's deliberately
+   * dead port and dead-letters. One run of this file left 29 real Postgres
+   * containers behind and 29 bookings that nothing releases.
+   *
+   * It took the node from empty to `no node in eu-central fits 350 MB + 1 GB
+   * under the 85% placement stop` — 77 dead-lettered jobs and 39 containers —
+   * and the next real provision then failed for capacity that no real project was
+   * using. Deleting the row here means the queue delivery finds nothing and
+   * no-ops, which is the behaviour the sweeper already relies on.
+   */
+  await pool.query(`DELETE FROM provisioning_jobs WHERE project_id = $1`, [projectId]);
 
   await pool.query(`UPDATE projects SET status = 'ready' WHERE id = $1`, [projectId]);
   // A placement pointing at a port with nothing behind it. Deliberate: every
@@ -331,7 +412,14 @@ describe('P7l — the console execution path', () => {
         method: 'POST', url: '/v1/projects',
         headers: { ...as(owner), 'idempotency-key': `p7l-c-${Date.now()}-${++seq}` },
         payload: { name: `p7l-creating-${++seq}`, org_id: orgId } });
-      const ref = (created.json() as { project: { ref: string } }).project.ref;
+      const { ref, id } = (created.json() as { project: { ref: string; id: string } }).project;
+      // Recorded like `readyProject` does, and deliberately: this test builds its
+      // own project inline (it needs one that is still `creating`) and the first
+      // version forgot to push it, so `afterAll` cleaned up every project except
+      // this one — visible as exactly one leftover `p7l-%` organization.
+      made.push(id.replace('prj_', ''));
+      await pool.query(`DELETE FROM provisioning_jobs WHERE project_id = $1`,
+        [id.replace('prj_', '')]);
 
       const res = await run(ref, owner, { sql: 'SELECT 1' });
       expect(res.statusCode).toBe(409);
@@ -359,6 +447,89 @@ describe('P7l — the console execution path', () => {
         expect(res.statusCode).toBe(409);
         expect(msg(res)).toMatch(/before the SQL console existed/);
       });
+  });
+
+  /**
+   * The introspection payload. What can be asserted without a container is who
+   * may ask for it and what happens when the project cannot be reached — the
+   * *contents* need a real catalog and are verified live against staging.
+   */
+  describe('introspection', () => {
+    const look = (ref: string, w: Who) =>
+      app.inject({ method: 'GET', url: `/v1/projects/${ref}/db/introspect`,
+                   headers: { cookie: `${SESSION_COOKIE}=${w.cookie}` } });
+
+    t('needs no CSRF token, because it is a GET that changes nothing', async () => {
+      const owner = await account();
+      const p = await readyProject(owner);
+      // No CSRF header at all. The editor refetches this on focus and every 60s
+      // (D-134); requiring a token would make a read into a mutation.
+      const res = await look(p.ref, owner);
+      expect(res.statusCode).not.toBe(403);
+      // 503, because the fixture's port has nothing behind it — which is the
+      // proof it got all the way past authorization to the connection.
+      expect(res.statusCode).toBe(503);
+    });
+
+    t('no session is 401', async () => {
+      const owner = await account();
+      const p = await readyProject(owner);
+      const res = await app.inject({
+        method: 'GET', url: `/v1/projects/${p.ref}/db/introspect` });
+      expect(res.statusCode).toBe(401);
+    });
+
+    t('an outsider gets 404, not 403 — same rule as the query route', async () => {
+      const owner = await account();
+      const p = await readyProject(owner);
+      const outsider = await account();
+      expect((await look(p.ref, outsider)).statusCode).toBe(404);
+    });
+
+    t('a member may introspect: it is the same capability as running SQL', async () => {
+      const owner = await account();
+      const p = await readyProject(owner);
+      const member = await account();
+      await pool.query(
+        `INSERT INTO organization_members (organization_id, user_id, role)
+         VALUES ($1, $2, 'member')`,
+        [p.orgId.replace('org_', ''), member.userId.replace('usr_', '')]);
+      const res = await look(p.ref, member);
+      expect(res.statusCode).not.toBe(403);
+      expect(res.statusCode).not.toBe(404);
+    });
+
+    t('a paused project says so rather than timing out', async () => {
+      const owner = await account();
+      const p = await readyProject(owner);
+      await pool.query(`UPDATE projects SET status = 'paused' WHERE ref = $1`, [p.ref]);
+      const res = await look(p.ref, owner);
+      expect(res.statusCode).toBe(409);
+      expect(msg(res)).toMatch(/paused/);
+    });
+
+    t('an unreachable database is 503, not 500 — it is our problem, not their SQL',
+      async () => {
+        const owner = await account();
+        const p = await readyProject(owner);
+        const res = await look(p.ref, owner);
+        expect(res.statusCode).toBe(503);
+        expect(msg(res)).toMatch(/not answering/);
+      });
+
+    t('reading the schema writes no audit row', async () => {
+      const owner = await account();
+      const p = await readyProject(owner);
+      await look(p.ref, owner);
+      // Scoped to `db.%`: creating the project writes its own `project.created`
+      // row, so counting everything asserted the wrong thing and passed for the
+      // wrong reason. 60 polls a minute per open tab would bury the statements
+      // that matter, which is what this is actually about.
+      const { rows } = await pool.query<{ n: string }>(
+        `SELECT count(*) AS n FROM audit_logs a JOIN projects p ON p.id = a.project_id
+          WHERE p.ref = $1 AND a.action LIKE 'db.%'`, [p.ref]);
+      expect(rows[0]!.n).toBe('0');
+    });
   });
 
   describe('the audit trail', () => {

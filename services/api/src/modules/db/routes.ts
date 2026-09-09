@@ -10,6 +10,7 @@ import { require_ } from '../../kernel/permissions.ts';
 import { resolvePrincipal, type PrincipalDeps } from '../../kernel/principal.ts';
 import type { Role } from '@steadhold/types';
 import { consoleContext, withConsoleDb } from './context.ts';
+import { introspect } from './introspect.ts';
 import { runScript, enforceGuard, MAX_TIMEOUT_MS, type ConsoleRole } from './run.ts';
 import { rateLimitKey, type RateLimiter } from '../../kernel/rate-limit.ts';
 
@@ -80,6 +81,28 @@ function pgDetail(err: unknown): Record<string, unknown> | undefined {
   };
 }
 
+/**
+ * The membership check both routes need.
+ *
+ * Extracted rather than repeated: it decides a 404-not-403, which is the sort of
+ * thing that gets one route right and the second one subtly wrong. A ref is
+ * guessable in principle, so a non-member must get the same answer as a stranger
+ * rather than a 403 that confirms the project exists.
+ */
+async function requireMember(
+  deps: DbDeps, req: unknown, organizationId: string,
+): Promise<{ userId: string; role: Role }> {
+  const principal = await resolvePrincipal(req as never, deps.principals);
+  if (!principal.userId) {
+    throw new ApiError(403, ERROR_CODES.UNAUTHORIZED,
+      'This endpoint runs SQL as a person and the static token is not a user.');
+  }
+  const role = await deps.orgs.roleOf(principal.userId, organizationId);
+  if (!role) throw ApiError.notFound('Project');
+  require_(role, 'db.query');
+  return { userId: principal.userId, role };
+}
+
 export function registerDbRoutes(app: FastifyInstance, deps: DbDeps): void {
   app.post('/v1/projects/:ref/db/query', async (req, reply) => {
     const { ref } = req.params as { ref: string };
@@ -109,17 +132,8 @@ export function registerDbRoutes(app: FastifyInstance, deps: DbDeps): void {
      * `db.query` is a member capability for the reason recorded on it: a member
      * can already reveal the connection string and run the same SQL from psql.
      */
-    const principal = await resolvePrincipal(req, deps.principals);
-    if (!principal.userId) {
-      throw new ApiError(403, ERROR_CODES.UNAUTHORIZED,
-        'This endpoint runs SQL as a person and the static token is not a user.');
-    }
-    const role = await deps.orgs.roleOf(principal.userId, ctx.organizationId);
-    if (!role) throw ApiError.notFound('Project');
-    require_(role, 'db.query');
-    const actor: Actor = {
-      type: 'user', userId: principal.userId, ip: req.ip ?? null, requestId,
-    };
+    const { userId } = await requireMember(deps, req, ctx.organizationId);
+    const actor: Actor = { type: 'user', userId, ip: req.ip ?? null, requestId };
 
     /**
      * Rate limited per user, not per project.
@@ -130,7 +144,7 @@ export function registerDbRoutes(app: FastifyInstance, deps: DbDeps): void {
      * by being busy elsewhere.
      */
     if (deps.limiter) {
-      const hit = await deps.limiter.hit(rateLimitKey('db-query', principal.userId));
+      const hit = await deps.limiter.hit(rateLimitKey('db-query', userId));
       if (!hit.allowed) {
         reply.header('retry-after', String(hit.retryAfterSeconds));
         throw new ApiError(429, ERROR_CODES.VALIDATION_FAILED,
@@ -271,6 +285,75 @@ export function registerDbRoutes(app: FastifyInstance, deps: DbDeps): void {
         // 400, not 500: the customer's SQL was rejected by the customer's own
         // database. A 500 would put their typo in our error-rate alert and tell
         // them the platform is broken.
+        throw new ApiError(400, ERROR_CODES.SQL_ERROR, (err as Error).message, detail);
+      }
+      throw err;
+    }
+  });
+
+  /**
+   * `GET /v1/projects/:ref/db/introspect` — the editors' schema payload.
+   *
+   * One request returning schemas, tables, columns, functions, policies and role
+   * names, because that is what the doc specifies and what the client caches: the
+   * SQL editor's completion source and the table editor's whole left-hand side
+   * are one query key, invalidated together on any successful DDL.
+   *
+   * A **GET**, and that is a real decision rather than REST habit. It reads and
+   * changes nothing, so it wants HTTP caching and it must not need a CSRF token —
+   * the editor refetches this on window focus and every 60 seconds while it is
+   * open (D-134), and a mutating verb would make that a stream of audited
+   * "attempts" in a log that is meant to record what a person did.
+   *
+   * Not audited, for the same reason. Reading one's own schema is not an event;
+   * recording it 60 times a minute per open tab would bury the statements that
+   * matter under the polling of a UI. The *connection* is still the audited
+   * `steadhold_admin` path — what is skipped is a row per read, not the identity.
+   */
+  app.get('/v1/projects/:ref/db/introspect', async (req, reply) => {
+    const { ref } = req.params as { ref: string };
+    const ctx = await consoleContext(deps, ref);
+    await requireMember(deps, req, ctx.organizationId);
+
+    try {
+      const data = await withConsoleDb(ctx, async (client) => {
+        // Read-only and short. Introspection touches only the catalog, so a run
+        // that cannot finish in ten seconds is a database in trouble rather than
+        // a big schema — and holding the console's 60s budget for a sidebar
+        // would make a slow project feel broken twice over.
+        await client.query('BEGIN');
+        try {
+          await client.query('SET LOCAL statement_timeout = 10000');
+          await client.query('SET TRANSACTION READ ONLY');
+          await client.query('SET LOCAL ROLE "developer"');
+          const out = await introspect(client);
+          await client.query('COMMIT');
+          return out;
+        } catch (err) {
+          await client.query('ROLLBACK').catch(() => {});
+          throw err;
+        }
+      });
+
+      // Private, and briefly. The payload is one customer's schema, so a shared
+      // cache must never hold it; 10 seconds is enough to collapse the burst of
+      // requests an editor makes when several panels mount at once, and short
+      // enough that the DDL-invalidation the client does is still what governs
+      // freshness.
+      reply.header('cache-control', 'private, max-age=10');
+      return reply.status(200).send(data);
+    } catch (err) {
+      if (err instanceof ApiError) throw err;
+      const netCode = (err as { code?: unknown }).code;
+      if (typeof netCode === 'string'
+          && ['ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EHOSTUNREACH', 'ENETUNREACH']
+            .includes(netCode)) {
+        throw new ApiError(503, ERROR_CODES.INTERNAL,
+          'This project\'s database is not answering. It may be restarting — '
+          + 'try again in a moment.');
+      }
+      const detail = pgDetail(err);
+      if (detail) {
         throw new ApiError(400, ERROR_CODES.SQL_ERROR, (err as Error).message, detail);
       }
       throw err;
