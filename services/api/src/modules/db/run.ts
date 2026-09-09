@@ -79,13 +79,42 @@ export interface StatementResult {
 }
 
 /**
- * Refuse a run that has not cleared rail 2, before opening a connection.
+ * Every reason to refuse a run, in one place, before any connection is opened.
  *
- * Before, deliberately: a refused run should cost nothing, and a guard that
- * connects first is a guard an attacker can use to open connections. It also
- * means the refusal cannot be confused with a database error.
+ * One function because the alternative kept happening: three separate checks
+ * were written inside `runScript`, which runs inside `withConsoleDb`, so each one
+ * let the *connection* happen first — a refusal arriving as whatever the socket
+ * did. Two were caught by tests expecting 409 and 400 and getting 400 and 503;
+ * the third (bound params against a multi-statement script) was caught the same
+ * way an hour later. A rule that has to be remembered at three call sites is a
+ * rule that decays at the next one, so there is now one call site and the runner
+ * calls the same function for defence in depth.
+ *
+ * A refused run must cost nothing: no connection, and no audit row, because a
+ * refusal is not an attempt on the database.
  */
-export function enforceGuard(script: Script, req: RunRequest): void {
+export function checkRequest(script: Script, req: RunRequest): void {
+  if (script.statements.length === 0) {
+    throw new ApiError(400, ERROR_CODES.VALIDATION_FAILED,
+      'There is no statement to run.');
+  }
+
+  /**
+   * Bound parameters belong to exactly one statement.
+   *
+   * `client.query` takes one `values` array, so a multi-statement script would
+   * hand *the same* array to every statement — silently misbinding rather than
+   * failing, which is the worst of both. The only caller that binds is the table
+   * editor's DML, and that is always a single statement (`UPDATE … WHERE pk =
+   * $2`), so refusing is not a limitation anybody meets; it is a misuse that
+   * would otherwise write the wrong row.
+   */
+  if (req.params && req.params.length > 0 && script.statements.length > 1) {
+    throw new ApiError(400, ERROR_CODES.VALIDATION_FAILED,
+      'Bound parameters apply to a single statement. Send one statement per run, '
+      + 'or inline the values.');
+  }
+
   if (script.danger === 'safe') return;
 
   if (!req.confirmDestructive) {
@@ -131,11 +160,9 @@ export async function runScript(
   client: Client, req: RunRequest,
 ): Promise<{ results: StatementResult[]; script: Script }> {
   const script = classify(req.sql);
-  if (script.statements.length === 0) {
-    throw new ApiError(400, ERROR_CODES.VALIDATION_FAILED,
-      'There is no statement to run.');
-  }
-  enforceGuard(script, req);
+  // The route has already called this before connecting; calling it again costs
+  // nothing and means a future caller cannot skip it.
+  checkRequest(script, req);
 
   const role: ConsoleRole = req.role ?? 'admin';
   const timeout = Math.min(req.timeoutMs ?? DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);

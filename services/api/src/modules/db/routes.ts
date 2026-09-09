@@ -11,7 +11,7 @@ import { resolvePrincipal, type PrincipalDeps } from '../../kernel/principal.ts'
 import type { Role } from '@steadhold/types';
 import { consoleContext, withConsoleDb } from './context.ts';
 import { introspect } from './introspect.ts';
-import { runScript, enforceGuard, MAX_TIMEOUT_MS, type ConsoleRole } from './run.ts';
+import { runScript, checkRequest, MAX_TIMEOUT_MS, type ConsoleRole } from './run.ts';
 import { rateLimitKey, type RateLimiter } from '../../kernel/rate-limit.ts';
 
 /**
@@ -163,28 +163,18 @@ export function registerDbRoutes(app: FastifyInstance, deps: DbDeps): void {
      */
     const script = classify(body.sql);
 
-    // Also before the connection, and for the same reason the guard is: an empty
-    // script is a client bug, and answering it with whatever the socket did is
-    // both slower and wrong. It surfaced as a 500 from the dead-port fixture.
-    if (script.statements.length === 0) {
-      throw ApiError.validation('There is no statement to run.');
-    }
-
     /**
-     * Rail 2, here rather than inside the runner — and the ordering is the point,
-     * not tidiness. `runScript` also enforces it, but it runs inside
-     * `withConsoleDb`, so leaving this to the runner meant the *connection*
-     * happened first: a `DROP TABLE` with no confirmation opened a socket before
-     * being refused. The test that asserts a 409 caught it as a 400, because the
-     * connection failed before the guard ever ran.
+     * Every refusal, here, before a socket is opened — see `checkRequest`.
      *
-     * Two consequences, both wanted. A refused run costs nothing, so the endpoint
-     * cannot be used to open connections. And a refusal is not an attempt on the
-     * database, so it writes no audit row — the log stays a record of what was
-     * actually tried.
+     * The ordering is the point rather than tidiness: `runScript` runs inside
+     * `withConsoleDb`, so a check left to the runner lets the connection happen
+     * first and a refusal arrives as whatever the socket did. That went wrong
+     * three times in this module before the checks were collected into one
+     * function.
      */
-    enforceGuard(script, {
+    checkRequest(script, {
       sql: body.sql,
+      ...(body.params ? { params: body.params } : {}),
       ...(body.confirm_destructive === undefined
         ? {} : { confirmDestructive: body.confirm_destructive }),
       ...(body.confirm_names ? { confirmNames: body.confirm_names } : {}),

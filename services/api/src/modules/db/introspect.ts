@@ -21,14 +21,21 @@ import type { Client } from 'pg';
  * The trade is that `pg_catalog` does **not** filter itself by privilege, so
  * every query here carries an explicit `has_*_privilege` check.
  *
- * Those checks **do not narrow anything today**, and that is worth saying rather
- * than implying otherwise: the endpoint always runs as `developer`, the owner, so
- * every predicate passes. They are here because the alternative is a query whose
- * correctness depends on the role never changing — and the role is exactly the
- * thing rail 1 exists to change. If introspection is ever offered under `anon` to
- * show a developer what their API can see, these are what make it true instead of
- * a second implementation. Until then they are unexercised, and no test claims
- * they filter.
+And they **do** narrow, which a first version of this comment claimed they did
+ * not. Running as the owner is not the same as running as a superuser: `developer`
+ * has `USAGE` on the `auth` schema — it needs it to write policies that call
+ * `auth.uid()` (D-189) — and **no table privileges in it at all**, because
+ * `steadhold_auth` alone holds those and that grant is what keeps end-user
+ * password hashes out of reach (D-315). So `auth` appears in `schemas` and none
+ * of its tables appear in `tables`, which is exactly right and is only true
+ * because of `has_table_privilege`. Seen by looking at the rendered list and
+ * noticing the schema had no tables under it.
+ *
+ * `has_column_privilege` is the one that is genuinely unexercised today, since
+ * the owner holds every column of its own tables. It stays for the same reason
+ * the others earn their keep: the role is the thing rail 1 exists to change, and
+ * a query whose correctness depends on the role never changing is a query waiting
+ * to leak.
  *
  * ## What it runs as
  *
@@ -91,9 +98,20 @@ export interface IntrospectionPolicy {
   schema: string;
   table: string;
   name: string;
+  /* `roles` is `text[]` and the cast in the query is load-bearing — see below. */
   /** `SELECT`, `INSERT`, `UPDATE`, `DELETE` or `ALL`. */
   command: string;
   permissive: boolean;
+  /**
+   * A real array, because the query casts to `text[]`.
+   *
+   * Without the cast this field **is a lie**: `pg_get_userbyid` returns `name`,
+   * so `array_agg` gives `name[]` (OID 1003), and node-pg has no parser for that
+   * OID — it hands back the Postgres literal `'{authenticated}'` as a plain
+   * string. The type said `string[]`, the runtime had a string, nothing complained
+   * until the browser called `.join()` on it and the uncaught TypeError took the
+   * page down. `::text[]` is `text[]` (OID 1009), which node-pg does parse.
+   */
   roles: string[];
   using: string | null;
   check: string | null;
@@ -229,12 +247,12 @@ export async function introspect(client: Client): Promise<Introspection> {
                             ELSE 'ALL' END AS command,
             pol.polpermissive AS permissive,
             COALESCE(
-              (SELECT array_agg(pg_catalog.pg_get_userbyid(r) ORDER BY r)
+              (SELECT array_agg(pg_catalog.pg_get_userbyid(r)::text ORDER BY r)
                  FROM unnest(pol.polroles) AS r
                 WHERE r <> 0),
               -- polroles = {0} means PUBLIC, which is not a role id and would
               -- otherwise come back as an empty list reading as "no roles".
-              ARRAY['PUBLIC']) AS roles,
+              ARRAY['PUBLIC'])::text[] AS roles,
             pg_catalog.pg_get_expr(pol.polqual, pol.polrelid) AS using,
             pg_catalog.pg_get_expr(pol.polwithcheck, pol.polrelid) AS check
        FROM pg_catalog.pg_policy pol

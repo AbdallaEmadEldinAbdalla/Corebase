@@ -343,6 +343,26 @@ describe('P7l — the console execution path', () => {
         .toBe(400);
     });
 
+    t('params with a multi-statement script are refused, not misbound', async () => {
+      const owner = await account();
+      const p = await readyProject(owner);
+      // `client.query` takes one values array, so the same params would be handed
+      // to every statement — an UPDATE writing the wrong row rather than an
+      // error. Refusing is the only safe answer and nothing legitimate does it.
+      const res = await run(p.ref, owner, {
+        sql: 'SELECT $1::int; SELECT $1::int', params: [1] });
+      expect(res.statusCode).toBe(400);
+      expect(msg(res)).toMatch(/single statement/);
+    });
+
+    t('params with one statement are fine', async () => {
+      const owner = await account();
+      const p = await readyProject(owner);
+      const res = await run(p.ref, owner, { sql: 'SELECT $1::int', params: [1] });
+      // Past the rails, failing at the dead port — which is how we know.
+      expect(res.statusCode).toBe(503);
+    });
+
     t('a timeout beyond the 10-minute cap is refused rather than clamped silently',
       async () => {
         const owner = await account();
