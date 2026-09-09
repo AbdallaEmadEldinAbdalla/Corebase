@@ -10,7 +10,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:unit": "vitest run --exclude '**/*.e2e.test.ts' --passWithNoTests"
+    "test:unit": "vitest run --exclude '**/*.e2e.test.ts' --passWithNoTests",
+    "checksums": "node --experimental-strip-types src/checksums.ts ../../migrations"
   },
   "dependencies": {
     "pg": "^8.13.1"

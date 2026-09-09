@@ -327,9 +327,18 @@ jobs:
           # job is to *remove* the old thing from a host provisioned before
           # the rename. Such a line carries a `pre-rename` marker, which has
           # to be typed deliberately and says why it is there.
+          #
+          # `migrations/` is excluded for a reason the marker cannot express: an
+          # applied migration is checksummed by the runner, so its bytes are
+          # immutable and a rename *cannot* reach it. Demanding one there demands
+          # exactly what `packages/migrate` refuses — which is how the prefix
+          # rename broke `migrate-staging.sh` for six commits (D-456). Prose about
+          # a column that may need renaming belongs in `COMMENT ON`, which a later
+          # migration can replace; the immutability itself is guarded by
+          # `packages/migrate/src/immutable.test.ts`.
           hits="$(git grep -nIE '\b[cC][bB][a-zA-Z0-9]{0,6}[-_.:]' \
             -- ':!STATUS.md' ':!docs/00-foundation/05-decision-log.md' \
-               ':!.github/workflows/ci.yml' \
+               ':!.github/workflows/ci.yml' ':!migrations' \
             | grep -v 'pre-rename' || true)"
           if [ -n "$hits" ]; then
             echo "These still carry the pre-rename prefix (D-412, D-422, D-433):"
