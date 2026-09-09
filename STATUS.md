@@ -5050,6 +5050,17 @@ alternatives, not companions.
 flex column, so a help line makes that field taller and `align-items: flex-end`
 then aligns field boxes rather than the controls in them.
 
+**A modifier class is still the base class.** `.shell--noNav` is also `.shell`, so
+a media query written against `.shell` reached a layout it had no business
+touching — it put a two-column grid on a template whose areas are single-column,
+and the page came out 56px wide. A rule that only makes sense for one variant has
+to say which one.
+
+**When early CSS holds and later layout is missing, suspect the CSS, not the
+cache.** I blamed the dev server's first compile, then a `.next` polluted by
+running `pnpm build` before `pnpm dev`, and cleared it for nothing. Reading the
+computed `grid-template-columns` named the bug in one call.
+
 **A default is a preference; a floor is a layout fact.** The sidebar's 1024px rule
 chose what the rail does by default and left the stored preference able to override
 it at any width, including ones where the sidebar does not fit. Those are different
