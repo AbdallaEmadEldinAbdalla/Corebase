@@ -357,6 +357,26 @@ did not consider: a table created while running as a platform role would be
 `steadhold export` would emit objects owned by a role that does not exist in
 vanilla Postgres.
 
+**The table editor is a grid that fills the screen, and the schema is a
+disclosure beside it.** Rows are 26px, the toolbar and the footer stay put, and
+the rows are the only thing that scrolls — the reference is Supabase's grid, and
+the design system's "52px rows" is calibrated for a projects list where a row is
+an identity you recognise rather than a record you compare (D-476). Structure,
+the index and constraint list, and the RLS policies open between the toolbar and
+the rows, one at a time, because reading a policy list is something you do
+*against* the data rather than instead of it. A table with row-level security
+switched off says so in a red banner across the view, in the words that matter:
+anyone with the anon key can read and write every row of it through the API.
+
+**The SQL editor is CodeMirror with the safety rails wired to the same code the
+server runs.** Schema-aware completion from the introspection cache, per-statement
+results, `EXPLAIN`, CSV export, and tabs that never leave the browser until you
+execute. The destructive-statement guard in the editor is not a copy of the API's
+— it is the same `@steadhold/sql-guard` module, so what the editor warns about
+and what the server refuses cannot drift apart. Saved queries and history are not
+built: they need a control-plane endpoint that does not exist yet, and history
+also needs an answer on redacting the literals people paste into a `WHERE`.
+
 **A session is shared between tabs; its CSRF token was not.** The token was
 issued by login and by signup and nowhere else, and the client keeps it in
 `sessionStorage`, which a new tab does not inherit — while the session cookie,

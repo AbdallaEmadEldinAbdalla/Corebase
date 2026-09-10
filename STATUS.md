@@ -5415,6 +5415,100 @@ dev server's 200s, not seen. This is the fifth consecutive step carrying that
 sentence, and this defect is what it costs: a bug that only a browser with two
 tabs can show reached a user's screen.
 
+## 4t. P7q — the SQL editor
+
+CodeMirror 6 at `/project/[ref]/sql`: schema-aware completion, the six D-134
+rails, per-statement results, `EXPLAIN`, CSV export, and localStorage tabs. The
+pure halves are `lib/sql-completions.ts` and `lib/sql-tabs.ts`, 28 tests, and
+they are pure because the interesting logic is not the editor.
+
+**Completions seed a bucket for every schema, including the empty ones.** The
+`auth` schema is the case: the console's `developer` role holds `USAGE` on it and
+no table privileges (D-315/D-189), so a naive build keyed off *visible tables*
+omits `auth` entirely and the editor silently refuses to complete a schema the
+user can legitimately reference. An empty bucket completes the schema name and
+nothing after it, which is the truth.
+
+**Four rails are the server's and two are the client's, and the split is not
+symmetry.** The destructive guard, the timeout, the row-limit append and the
+one-transaction-per-run are enforced by the API — the client runs the *same*
+`@steadhold/sql-guard` module rather than a copy of it, so instant feedback
+cannot drift from the decision. The role switcher and read-only mode are the
+client's because they are *inputs* to a run, not checks on it.
+
+**The role chip is toned as information, not accent.** The spec calls it "loud"
+and §5 rule 1 says the accent must stay rare; both are right because Run is an
+action and a role is a mode. `--sh-info` is unmissable and does not compete, and
+the warning colour would have implied a fault where there is none (D-475).
+
+**`Cmd+Enter` on a destructive buffer opens the confirmation rather than
+running.** The shortcut's promise is "do the thing", and for a `DROP TABLE` the
+thing is the ladder. A shortcut that refused and explained would be a shortcut
+that does nothing.
+
+Verified against staging: every rail exercised through `POST /db/query`, both
+roles, a syntax error's `position` landing on the offending token, the 501st row
+triggering the truncation banner with the server's rewritten SQL shown.
+
+**Not built, and recorded rather than faked:** saved queries and history need
+`GET/POST /v1/projects/:ref/queries`, which does not exist — so `/sql/[queryId]`
+is unbuilt and the linkable tier of §1's URL rule is missing (see §8). Per-project
+`statement_timeout` has no column; the 60s default and 10min cap are server-side
+only. `CREATE INDEX CONCURRENTLY` needs a non-transactional lane. Save-as-migration
+needs D-076's endpoint.
+
+## 4u. P7r — the redesign, and the three things it got wrong
+
+The table editor is now what the user asked for twice: a full-bleed grid, a
+toolbar that stays put, 26px rows, a pinned footer, and the rows as the only
+thing that scrolls. Getting there took one wrong turn in each of three
+directions, and the closing `ux-review` gate is what found all three.
+
+**A layout bug the user had already photographed.** `.deck__main` sized its
+children with `grid-template-rows: auto minmax(0, 1fr) auto` — three rows for
+what are actually five children, because `DataGrid` returns a fragment and its
+toolbar, scroller and footer become siblings of the page's own header. So the
+flexible row fell on the **toolbar**: a 40px control strip inside a row stretched
+to full height, then the rows at content height below it. That is the empty band
+between the toolbar and the data in the screenshot that opened this step. It
+needed no browser to find — only counting the children — and I had claimed to
+have "fixed the layout" without doing so. It is a flex column now, so the element
+that should absorb the slack says so itself and a new child cannot take it.
+
+**Two capabilities deleted on a reason that was never checked.** Structure and
+the index/constraint list were removed from the table page, justified in a code
+comment by "the reference puts schema detail under a Database section". True of
+Supabase; false of this product. Our IA says
+`/[schema]/[table] → grid + structure + RLS panel`, and our `/database` is
+connection info, roles, extensions and pooling — there is no schema page for them
+to move to. Both components stayed in the tree, unreferenced and reachable from
+nowhere, while the page's own docblock went on quoting the IA sentence correctly
+above code that contradicted it. They are disclosures now, one at a time, between
+the toolbar and the rows.
+
+**An RLS-disabled table stopped saying why that matters.** The spec's words are
+"Red banner across the table view: Row Level Security is disabled — anyone with
+the anon key can read and write every row of this table through the API." The
+redesign reduced that to a 70px toolbar button reading `RLS off`, which names the
+feature and not the risk, and moved the policy list behind a blocking modal. §3
+settles the modal on its own — "a panel that blocks the page to show read-only
+text is a dialog that forgot it had nothing to ask" — and the hand-rolled modal
+also had no Escape handler and no focus return, which is precisely the decay
+`ConfirmDialog`'s docblock predicts for anyone who re-implements it. The banner is
+restored in the spec's words; the policy list is a disclosure.
+
+**Four guards in `tokens.test.ts`, each proven by breaking it:** the row template
+cannot come back, the banner sentence cannot be reduced to the acronym, the three
+components cannot become unreferenced, and the RLS panel cannot become modal
+again. Two of my first attempts to break them were substring-safe mutations that
+passed — `<StructureGONE` still contains `<Structure` — which is worth recording
+as a limit of source-reading guards rather than a fault in them.
+
+Also fixed: the SQL editor's read-only checkbox had its visible label *outside*
+its `<label>`, so clicking the word did nothing and the accessible name came only
+from an `aria-label` that had to be kept in step with it (design system §5 rule 5
+asks for a 40px hit area). And `.sqled { }` was an empty rule.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -5967,8 +6061,8 @@ mechanisms and a product needs both.
 
 ## 6. Decisions made while building (not from the plan)
 
-The [decision log](docs/00-foundation/05-decision-log.md) holds **463 decisions**,
-numbered D-001…D-474 — D-041…D-049 and D-158…D-159 were never allocated. It is
+The [decision log](docs/00-foundation/05-decision-log.md) holds **465 decisions**,
+numbered D-001…D-476 — D-041…D-049 and D-158…D-159 were never allocated. It is
 binding when two documents disagree, and it is the authority; this section is not.
 
 **The table below is a historical extract, not a current index.** It covers
@@ -6179,6 +6273,32 @@ PostgREST. Neither licenses raising the planned density (D-091's 150 projects/no
   activation behaviour. The `DdlDialog` adds an `Escape` handler and a
   capture-then-focus effect matching `ConfirmDialog`'s contract, both read rather
   than exercised.
+- **Q6 — the SQL editor's own actions are not in the command palette.** `go-sql`
+  navigates to it and `g q` reaches it, but Run, Explain, New tab, the role
+  switcher and read-only mode are not palette commands. D-226 is explicit that
+  "every capability a menu exposes must also be in the palette", and the role
+  switcher *is* a `Menu`, so this is a failure by the letter and not only the
+  spirit. Recorded rather than fixed because the mechanism to fix it already
+  exists and is cheap: the table editor dispatches a `sh:table-op` event that the
+  page listens for, and the same pattern would carry these five. It is the first
+  thing to do on this surface, not a redesign.
+- **Q3 — which SQL tab is open cannot be sent to a colleague.** §1 says the URL
+  is the state "including which tab is open"; D-134 says tabs are
+  localStorage-only, and the decision log wins, so the *scratch* tier is
+  deliberately device-local. The linkable tier is saved queries at
+  `/sql/[queryId]`, and that is unbuilt because `GET/POST /v1/projects/:ref/queries`
+  does not exist. So the rule is not broken so much as half-implemented: the half
+  that makes it acceptable is missing. History is blocked separately on OQ-134's
+  redaction question, since it stores verbatim SQL including any literal pasted
+  into a `WHERE`.
+- **The CodeMirror theme guard catches deletion, not mistyping.** `MUST_THEME` in
+  `tokens.test.ts` asserts that `SqlEditor.tsx` names each surface CM6 would
+  otherwise colour itself, and it was proven by deleting the selection theming and
+  watching it fail. Two limits are worth stating rather than defending: it matches
+  by substring, so a selector renamed to a superstring of the right one passes;
+  and the list is the author's memory, so it can only catch what was remembered.
+  A complete list would mean enumerating CM6's own default theme, which changes
+  per version. The guard is a floor, not a proof.
 - **The pixels are unverified in this session, and it has now cost a defect.**
   Both browser surfaces were unavailable across every step from P7n to P7r — the
   in-app pane's policy check never cleared for `localhost:3000`, and the Chrome
