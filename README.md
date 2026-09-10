@@ -337,9 +337,11 @@ policy that was correct. Five green steps, one whole class of caller untested.
 
 ## Phase 7 — the dashboard (in progress)
 
-The shell, the project surfaces, the members and account pages, and the table
-editor's read path are built; the table editor's write half and the SQL editor
-are not. [STATUS.md](STATUS.md) §4j–§4o has the per-step detail and §8 the gaps.
+The shell, the project surfaces, the members and account pages, the table editor
+(read and write) and the SQL editor are built. Roughly half of the dashboard the
+[IA](docs/09-dashboard/01-dashboard-ia.md) specifies for V1 exists: the auth,
+storage, logs and backups pages are not written yet, though the services behind
+them are. [STATUS.md](STATUS.md) §4j–§4s has the per-step detail and §8 the gaps.
 
 Two things from it are worth stating here because they are decisions rather than
 progress.
@@ -354,6 +356,20 @@ did not consider: a table created while running as a platform role would be
 *owned* by a platform role, so the customer could not drop their own table and
 `steadhold export` would emit objects owned by a role that does not exist in
 vanilla Postgres.
+
+**A session is shared between tabs; its CSRF token was not.** The token was
+issued by login and by signup and nowhere else, and the client keeps it in
+`sessionStorage`, which a new tab does not inherit — while the session cookie,
+being a cookie, is shared by every tab on the origin. So a tab that did not itself
+log in was authenticated for every read and refused on every write. The table
+editor turned that from a curiosity into a wall, because a dashboard *read* is a
+`POST /db/query` (D-132), so a second tab could not display one row. `GET
+/v1/auth/me` now re-issues the token, the client fetches it before its first
+mutation and retries a `CSRF_REQUIRED` rejection once with a fresh one (D-473).
+The mechanism had been right since Phase 1 and the comment explaining it was
+wrong, which is why the bug outlived six phases: it claimed a double-submit token
+"also in a readable cookie", and the dashboard is a different origin, so no cookie
+the API sets can be read by the script that would echo it.
 
 **The destructive guard reads structure, not text.** Writing the write half
 started by running the classifier over the operation catalog in the

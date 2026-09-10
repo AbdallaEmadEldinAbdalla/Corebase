@@ -12,7 +12,7 @@ Two principals, one permission model:
 
 | Client | Mechanism | Notes |
 |---|---|---|
-| Dashboard (browser) | **Session cookie** — httpOnly, Secure, SameSite=Lax, opaque session id backed by Redis; CSRF via double-submit token on mutating requests | Sessions expire after 7 days idle, 30 days absolute |
+| Dashboard (browser) | **Session cookie** — httpOnly, Secure, SameSite=Lax, opaque session id backed by Redis; a CSRF token echoed in `x-csrf-token` on mutating requests, issued by login, signup and `GET /v1/auth/me` (D-473) | Sessions expire after 7 days idle, 30 days absolute |
 | CLI / CI / scripts | **Personal Access Token (PAT)** — `Authorization: Bearer shp_<40 chars>`; created in dashboard or via `steadhold login` device flow | Stored hash-only per D-060; optional expiry; scoped (see D-062) |
 
 Both resolve to a `user_id`; every request is then authorized against `organization_members.role`. Rules the API enforces (not the schema — see [data model](01-data-model.md)):
@@ -43,6 +43,7 @@ Operator (staff) access is a separate surface — see [audit & admin access](05-
 | 400 | `VALIDATION_FAILED` | Body/query failed schema validation; `details[]` lists field errors |
 | 401 | `UNAUTHENTICATED` | Missing/expired session or PAT |
 | 403 | `FORBIDDEN` | Authenticated but role insufficient |
+| 403 | `CSRF_REQUIRED` | Session cookie present, `x-csrf-token` missing or stale. Recoverable without the user: `GET /v1/auth/me` re-issues the token (D-473) |
 | 403 | `PROJECT_SUSPENDED` | Project suspended for abuse/billing ([abuse prevention](../12-business/03-abuse-prevention.md)) |
 | 404 | `PROJECT_NOT_FOUND` / `ORG_NOT_FOUND` / `RESOURCE_NOT_FOUND` | Also returned instead of 403 for resources in orgs the caller cannot see (no existence oracle) |
 | 409 | `PROJECT_NOT_READY` | Lifecycle action invalid in current state (e.g. pause while `provisioning`) |
@@ -65,7 +66,7 @@ Operator (staff) access is a separate surface — see [audit & admin access](05-
 | `POST /v1/auth/logout` | Destroy session | |
 | `POST /v1/auth/verify-email` | Consume verification token | |
 | `POST /v1/auth/password-reset` / `POST /v1/auth/password-reset/confirm` | Reset flow | Enumeration-resistant (always 202) |
-| `GET /v1/auth/me` | Current user + org memberships | |
+| `GET /v1/auth/me` | Current user + org memberships | Also returns `csrf_token` for a cookie session, so a tab that did not itself log in can mutate (D-473); absent for a PAT |
 | `GET/POST/DELETE /v1/auth/tokens` | List / create / revoke PATs | Create returns the token **once** |
 
 #### Organizations & members

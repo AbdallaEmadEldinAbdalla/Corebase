@@ -5342,6 +5342,79 @@ unavailable, so the selection bar, the editing row's layout, the drawn checkbox'
 three states and both themes are read but not seen. Every claim above is
 API-level.
 
+## 4s. P7r — the tab that could not read a row
+
+A reported defect, and the two bugs behind it. The screenshot: a table editor with
+its shell, its sidebar and its footer all rendered, and in place of rows an error
+card reading *"This request needs a x-csrf-token header matching the session's
+CSRF token."*
+
+**The CSRF token was obtainable only at login, and `sessionStorage` is per tab.**
+The session cookie is per *origin* — every tab has it. The token was returned by
+`POST /v1/auth/login` and `POST /v1/auth/signup` and by nothing else, and the
+client keeps it in `sessionStorage`, which a new tab does not inherit. So a tab
+that did not itself log in was authenticated for every `GET` and refused on every
+mutation, and the only cure was logging in again in that tab.
+
+That had been true since P1c. The table editor is what made it total rather than
+occasional: D-132 executes even a *read* as `POST /db/query`, so a second tab
+could not display a single row. Six phases of dashboard work never hit it because
+a session that logs in and stays in one tab never sees it.
+
+`GET /v1/auth/me` now re-issues the token for a cookie session, the client seeds
+it lazily before the first mutation, and a `CSRF_REQUIRED` rejection is retried
+exactly once with a fresh one — which covers the other half, a *stale* token from
+a session that was replaced elsewhere, where reloading does not help because
+`sessionStorage` survives a reload. Returning it there is safe because
+`kernel/cors.ts` echoes no wildcard and sends `Vary: Origin`: a hostile page can
+no more read this than the memberships beside it. See D-473.
+
+**A regression I nearly shipped with it.** Seeding fired on every mutation, and
+`POST /v1/auth/login` is a mutation — so a browser with no session would probe
+`/me`, get a 401, and the central 401 handling would clear the token and redirect
+to `/login` from inside the login request, which never left. Logging in would have
+been impossible, and only in a browser that had never signed in: the one state a
+signed-in developer never tests. Found by reading the call sites of what I had
+just changed. `NO_SESSION_YET` exempts login and signup, and two tests hold it.
+
+**Two comments were wrong, and the wrong ones were the reason.** `SessionRecord`
+described a double-submit token "also in a readable cookie" — there is no such
+cookie and there cannot be one, because the dashboard is a different origin, so a
+cookie the API sets is unreadable by the script that would have to echo it.
+`api.ts` explained the choice as "a cookie readable by script defeats the point of
+a double-submit token", which is the wrong way round: same-origin readability is
+exactly how double-submit works. Both are corrected. The mechanism was right and
+the *stated reason* was wrong, which is what kept the real fix — the server
+re-issuing what only the server knows — out of sight.
+
+**Found while proving it: an existence oracle on both console routes.** The old
+`requireMember(deps, req, organizationId)` needed an organization id, which only
+`consoleContext` knows, so `/db/query` and `/db/introspect` resolved the *project*
+before the *caller*. A request with no credentials at all got `UNAUTHORIZED` for a
+ref that exists and `PROJECT_NOT_FOUND` for one that does not — while the
+function's own comment insisted "a non-member must get the same answer as a
+stranger" and the platform API's error table says the 404 is there so there is "no
+existence oracle". The careful part was written and then bypassed by the order it
+ran in. Split into `requirePerson` and `requireMemberRole`, the first called
+before the ref is read and before the body is validated. A ref is 24 characters,
+so this was a leak and not an emergency; it was still an invariant the code
+claimed. See D-474.
+
+**Verification.** Against the running staging stack: a session cookie with no
+token returns 403 `CSRF_REQUIRED`; `GET /v1/auth/me` hands back the session's
+token; the same `select id, title from public.articles` then returns rows. An
+unauthenticated `POST /db/query` now answers 401 `UNAUTHORIZED` for a real ref and
+for an invented one alike. 10 new client tests, 4 new API tests, and each guard was
+proven by breaking the fix and watching the right tests fail — 6 of 10 client
+tests fail without the seeding, 2 of them without the login exemption, and 2
+console tests fail if the caller is resolved after the ref.
+
+**The pixels are unverified for this step too.** Both browser surfaces stayed
+unavailable, so the error card's disappearance was confirmed at the API and in the
+dev server's 200s, not seen. This is the fifth consecutive step carrying that
+sentence, and this defect is what it costs: a bug that only a browser with two
+tabs can show reached a user's screen.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -5894,8 +5967,8 @@ mechanisms and a product needs both.
 
 ## 6. Decisions made while building (not from the plan)
 
-The [decision log](docs/00-foundation/05-decision-log.md) holds **424 decisions**,
-numbered D-001…D-435 — D-041…D-049 and D-158…D-159 were never allocated. It is
+The [decision log](docs/00-foundation/05-decision-log.md) holds **463 decisions**,
+numbered D-001…D-474 — D-041…D-049 and D-158…D-159 were never allocated. It is
 binding when two documents disagree, and it is the authority; this section is not.
 
 **The table below is a historical extract, not a current index.** It covers
@@ -6106,14 +6179,21 @@ PostgREST. Neither licenses raising the planned density (D-091's 150 projects/no
   activation behaviour. The `DdlDialog` adds an `Escape` handler and a
   capture-then-focus effect matching `ConfirmDialog`'s contract, both read rather
   than exercised.
-- **The pixels are unverified in this session.** Both browser surfaces were
-  unavailable — the in-app pane's policy check never cleared for
-  `localhost:3000`, and the Chrome extension was not connected — so the dialog's
-  layout, both themes, the 375px stack, the focus ring and the `Escape` return
-  are read but not seen. Everything in §4p's verification table is an API-level
-  claim. The gate's own instruction is to drive the running app *where a browser
-  is available*; it was not, and this is the honest record of that rather than a
-  claim of a visual pass.
+- **The pixels are unverified in this session, and it has now cost a defect.**
+  Both browser surfaces were unavailable across every step from P7n to P7r — the
+  in-app pane's policy check never cleared for `localhost:3000`, and the Chrome
+  extension was not connected — so layouts, both themes, the 375px stack, focus
+  rings and `Escape` returns are read but not seen, and every verification table
+  in §4p through §4s is an API-level claim. The gate's own instruction is to drive
+  the running app *where a browser is available*; it was not, and this is the
+  honest record of that rather than a claim of a visual pass.
+
+  What it cost is now concrete rather than hypothetical. Two defects reached the
+  user's screen that only a browser could have shown: a `max-width` on an inline
+  `<code>` that had never truncated anything (§4q), and a CSRF token that made a
+  second tab unable to read a row (§4s). Both were reported by screenshot. Until
+  a browser surface works here, the user's screenshots are the only thing closing
+  this loop, and steps should be handed over expecting one.
 - **Anonymous access is two verbs, not the toggle D-108 describes.** A toggle has
   to render its current state and introspection does not report grants, so a
   switch would have to claim something it cannot know. Closing this needs
