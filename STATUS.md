@@ -4561,7 +4561,7 @@ The scope is ~30 routes. What is missing is mostly **API, not UI**:
 
 | Surface | Blocker |
 |---|---|
-| ~~Table editor~~ (read path, and DDL) | **Built — P7m and P7n.** Table list, grid with sort and paging, the Structure section, the per-table RLS panel, and thirteen DDL operations through one preview→confirm loop. Three things remain. **Row-level DML** — inline edit, insert, delete — is unblocked and simply not built; the grid already refuses to edit a keyless table and offers to add the key. **`CREATE INDEX CONCURRENTLY`** is blocked, and not by OQ-132 being undecided: it cannot run inside a transaction block and the console runs every script in one (D-464), so it needs a non-transactional lane in the execution path. **Save-as-migration** needs D-076's endpoint. Everything else in the operation catalog ships: P7n added the fifteen column- and table-level operations plus the five adds, and P7o added drop-index, drop-constraint, the foreign-key fan-in condition and anonymous access — the last as a status line with a verb rather than the toggle D-108 describes, because a switch that opens a confirmation dialog lies about when the change happens (D-471). **Row-level DML** — inline edit, insert, delete — is unblocked and simply not built; the grid already refuses to edit a keyless table and now offers to add the key. **Save-as-migration** is genuinely API-blocked: D-076 wants a server-side `schema_migrations` row plus a written file and there is no endpoint, so the loop offers a correctly-named `.sql` download and says it is not recorded |
+| ~~Table editor~~ | **Built — P7m, P7n, P7o, P7p.** Table list, grid with sort and paging, the Structure section, the Indexes-and-constraints section, the per-table RLS panel with anonymous access, the whole DDL catalog through one preview→confirm loop, and row-level DML: per-row editing, insert and multi-row delete, all PK-guarded and parameterised. **Two things remain.** `CREATE INDEX CONCURRENTLY` cannot run inside a transaction block and the console runs every script in one (D-464), so it needs a non-transactional lane in the execution path — not a decision, a server change; V1 emits the plain form and says so. **Save-as-migration** is genuinely API-blocked: D-076 wants a server-side `schema_migrations` row plus a written file and there is no endpoint, so the loop offers a correctly-named `.sql` download and says plainly that it is not recorded as applied |
 | SQL editor | **Endpoint built — P7l**: `POST /v1/projects/:ref/db/query` with all six D-134 rails, and `GET …/db/introspect` for the completion source. Two things still stand in the way: saved queries and history (blocked on OQ-134, since history stores verbatim SQL and therefore any literal typed into a `WHERE`), and rail 3's per-project timeout, which has no column — the default and cap are enforced, the persistence is not |
 | Auth users, storage browser | Data-plane only (`/auth/v1/admin/*`, `/storage/v1/*`), which needs a `service_role` key — and a session-cookie dashboard (D-062) must never hold one in the browser. Needs a control-plane proxy, which is an architectural decision, not a screen |
 | Logs, metrics, backups list, audit | No endpoints |
@@ -5249,6 +5249,99 @@ and would genuinely serve a foreign key on it. The code was right.
 this step too. Every claim above is API-level; the new section's layout, the
 status line's wrap at 375px, and both themes are read but not seen.
 
+## 4r. P7p — row editing, and the checkbox this product draws
+
+`lib/dml.ts` compiles `UPDATE`, `INSERT` and `DELETE`; the grid gained selection,
+per-row editing and an insert form. The three differences from the DDL half are
+each a decision:
+
+**Values are bound, never written into the statement.** A DDL `DEFAULT` is an
+expression the user authored and has to appear verbatim to be honest; a row's
+value is *data*, and data in a statement is how injection happens. `RowPlan`
+carries a `bindings` list so the preview shows `set "title" = $1` **and** what
+`$1` holds — the spec's "values as placeholders" is about not interpolating, not
+about hiding, and a statement the user cannot check defeats the whole loop.
+
+**One statement per run, so editing is per row.** The doc describes editing a
+cell and confirming it, which is one dialog per cell — unusable for a row where
+three fields changed. Clicking a cell puts the *row* into edit mode and Save
+sends one `UPDATE` for every changed column. That is also the only
+single-statement shape available: the server refuses bound params against a
+multi-statement script, because `client.query` takes one `values` array and would
+hand the same one to every statement. The constraint and the better interaction
+point the same way.
+
+**Nothing here is offered as a migration.** A `RowPlan` has no `filename`, and
+the dialog offers the download when a plan has one — so "row edits are never
+offered as migrations" is enforced by the shape of the data rather than by a prop
+somebody has to remember.
+
+### Three values a text field cannot tell apart
+
+`null`, `''` and "use the column default" are three `CellValue` kinds, because
+they are three outcomes. A defaulted column is **omitted from the INSERT
+entirely** rather than sent as null: every Steadhold table has `created_at
+timestamptz not null default now()`, so sending null fails and omitting it gets
+`now()`. Verified live — an omitted `status` came back `'draft'` and an explicit
+null came back null, in the same insert.
+
+### The checkbox, which the design system had already asked for
+
+Row selection needs one, and `.sh-check` sets `accent-color` on a native input,
+so the box is the operating system's — exactly what D-429 forbids. The
+alternative was a switch, which satisfies the rule by misusing a control that
+means "a setting is on" to mean "this row is selected".
+
+`.sh-checkbox` is built the way `.sh-switch` is: the real input hidden and kept,
+so every keyboard and screen-reader behaviour is the browser's and only the
+pixels are ours. It is also what finally makes the design system's own inventory
+row implementable — **"Checkbox — off, on, indeterminate, disabled"**, where
+`accent-color` cannot draw an indeterminate state at all, so the select-all
+header's third state had never existed in this app.
+
+The D-429 guard was **narrowed** rather than loosened while sanctioning it: it
+now also asserts that `.sh-check` and `.sh-radio` appear in no component. That
+was already true and was not checked — without it the next person who wants a
+checkbox finds them in `components.css`, uses one, and nothing objects. Both
+halves fail when broken.
+
+### What the grid refuses to edit, and why each
+
+A **primary key or identity column** is shown, not typed. An identity value is
+the database's to choose; a key *can* be updated in SQL and doing it from a grid
+is a trap, because the statement's own `WHERE` targets the old value — the row it
+renamed is no longer the row it was told to change, and a second save would edit
+nothing. **A table with no key** has no row editing at all, which is D-133's
+PK-guarded rule: matching on the values it happens to know hits every duplicate,
+so the user would see one row highlighted and several rewritten.
+
+### Verification
+
+Live, against a real project:
+
+| | result |
+|---|---|
+| insert with defaults omitted | `status` came back `'draft'` from its `DEFAULT`; an explicit `null` came back null |
+| update three columns | one statement, all three written, `''` stored as an empty string and not as null |
+| set a column back to null | `notes is null` — so null is reachable and distinct from empty |
+| **the PK guard** | eleven rows had `status='published'`; after updating one, ten did. Exactly one row changed |
+| delete a selection | 21 rows before, 18 after — exactly the three selected |
+| **injection** | `'; drop table public.articles; --` stored verbatim as a title, and the table still exists |
+
+The last two are the ones worth having. A value that is a statement stayed a
+value, and an `UPDATE` reached exactly one of eleven matching rows.
+
+A typecheck error the 29 compiler tests did not catch: `bind` and `shown` took a
+`CellValue` and narrowed on `'null'`, and `'default'` has no `text` either. Every
+caller already filtered it out, so the convention was right and only the types
+did not know — the version that survives until a new call site forgets. They take
+a `BoundValue` now and the filters are type predicates.
+
+**The pixels are unverified for this step too.** Both browser surfaces stayed
+unavailable, so the selection bar, the editing row's layout, the drawn checkbox's
+three states and both themes are read but not seen. Every claim above is
+API-level.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -5648,6 +5741,14 @@ differ in everything that matters. A guard that greps for `DROP` demands a typed
 name for a reversible one-line change, which teaches people to type through
 confirmations and so makes the dangerous case *less* safe than before the guard
 existed. Splitting the action list is what separates them (**D-468**).
+
+**Sanctioning a new case is the moment to narrow a guard, not to loosen it.**
+Row selection needed a drawn checkbox, which the D-429 guard rejected because it
+only knew about `.sh-switch`. The temptation is to widen the pattern and move on.
+What went in instead was the wider pattern *plus* a new assertion that
+`.sh-check` and `.sh-radio` appear in no component — already true, never checked,
+and the thing that stops the next person finding them in `components.css` and
+using one. A guard that grows a case should come out stronger than it went in.
 
 **A pure function in a `.tsx` file is unreachable from anything but React.**
 Node's type stripping does not handle JSX, so a live verification script could

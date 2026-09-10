@@ -400,6 +400,28 @@ verb rather than a switch: every mutation here goes through a preview and a
 confirmation, so a toggle that opens a dialog would lie about when the change
 happens (D-471).
 
+**Rows are editable, and the loop is the same one.** Clicking a cell puts the
+row into edit mode; Save sends one `UPDATE` for every changed column, guarded by
+the primary key. That last part is D-133 rather than convenience: matching on the
+values the grid happens to know hits every duplicate row, so the user would see
+one row highlighted and several rewritten. A table with no key is read-only in
+the grid and offers to add one.
+
+Values are always bound, never written into the statement — verified by storing
+`'; drop table public.articles; --` as a post's title and finding the table
+still there and the title stored verbatim. `null`, an empty string and "use the
+column default" stay three separate things, because they are three outcomes: a
+defaulted column is omitted from the `INSERT` entirely, which is the difference
+between getting `now()` for a `created_at not null default now()` and failing on
+a not-null violation.
+
+Selection needed a checkbox, and the one in `components.css` set `accent-color`
+on a native input — so the box was the operating system's, which D-429 forbids.
+The replacement is drawn the way the switch is, and it is what finally makes the
+design system's own inventory row real: `accent-color` cannot draw an
+*indeterminate* state, so the select-all header's third state had never existed
+here (D-472).
+
 There is no "Save as migration" button, because that promise is a
 `schema_migrations` row plus a written file (D-076) and there is no endpoint yet.
 There is a **"Download .sql"** button, correctly named per D-028, next to one
