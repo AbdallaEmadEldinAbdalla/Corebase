@@ -56,11 +56,11 @@ import type { CompletionSchema } from '../lib/sql-completions.ts';
  * the content.
  */
 const highlight = HighlightStyle.define([
-  { tag: t.keyword, color: 'var(--sh-code-keyword)' },
-  { tag: [t.string, t.special(t.string)], color: 'var(--sh-code-string)' },
-  { tag: [t.comment, t.lineComment, t.blockComment], color: 'var(--sh-code-comment)', fontStyle: 'italic' },
-  { tag: [t.number, t.bool, t.null], color: 'var(--sh-code-string)' },
-  { tag: t.operator, color: 'var(--sh-code-text)' },
+  { tag: t.keyword, color: 'var(--sh-editor-keyword)' },
+  { tag: [t.string, t.special(t.string)], color: 'var(--sh-editor-string)' },
+  { tag: [t.comment, t.lineComment, t.blockComment], color: 'var(--sh-editor-comment)', fontStyle: 'italic' },
+  { tag: [t.number, t.bool, t.null], color: 'var(--sh-editor-string)' },
+  { tag: t.operator, color: 'var(--sh-editor-text)' },
   { tag: t.invalid, color: 'var(--sh-error)' },
 ]);
 
@@ -74,8 +74,8 @@ const highlight = HighlightStyle.define([
  */
 const theme = EditorView.theme({
   '&': {
-    backgroundColor: 'var(--sh-code-bg)',
-    color: 'var(--sh-code-text)',
+    backgroundColor: 'var(--sh-editor-bg)',
+    color: 'var(--sh-editor-text)',
     borderRadius: 'var(--sh-radius-md)',
     border: '1px solid var(--sh-border)',
     fontSize: '13px',
@@ -86,25 +86,25 @@ const theme = EditorView.theme({
   },
   '.cm-content': {
     fontFamily: 'var(--sh-font-mono)',
-    caretColor: 'var(--sh-code-text)',
+    caretColor: 'var(--sh-editor-text)',
     padding: '10px 0',
   },
   '.cm-scroller': { fontFamily: 'var(--sh-font-mono)', lineHeight: '1.6' },
   // The caret. Two selectors because a drop cursor (drag-and-drop) is a separate
   // element and defaults to black.
-  '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--sh-code-text)' },
+  '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--sh-editor-text)' },
   // Selection. CM6 draws its own (`drawSelection`), *and* the native one shows
   // through on unfocused content — both need saying or one of them is blue.
   '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
     backgroundColor: 'var(--sh-accent-subtle)',
   },
   '.cm-gutters': {
-    backgroundColor: 'var(--sh-code-header)',
-    color: 'var(--sh-code-comment)',
+    backgroundColor: 'var(--sh-editor-gutter)',
+    color: 'var(--sh-editor-comment)',
     borderRight: '1px solid var(--sh-border)',
   },
-  '.cm-activeLine': { backgroundColor: 'var(--sh-surface-alt)' },
-  '.cm-activeLineGutter': { backgroundColor: 'var(--sh-surface-alt)', color: 'var(--sh-code-text)' },
+  '.cm-activeLine': { backgroundColor: 'var(--sh-editor-line)' },
+  '.cm-activeLineGutter': { backgroundColor: 'var(--sh-editor-line)', color: 'var(--sh-editor-text)' },
   '.cm-matchingBracket, .cm-nonmatchingBracket': {
     backgroundColor: 'var(--sh-accent-subtle)',
     outline: '1px solid var(--sh-accent-border)',

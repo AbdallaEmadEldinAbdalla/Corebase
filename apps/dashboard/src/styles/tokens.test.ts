@@ -469,13 +469,27 @@ describe('the CodeMirror theme (D-178 reaches code CodeMirror draws)', () => {
     }
   });
 
-  it('themes the syntax tags from the four code role tokens', () => {
-    // Four, not twelve: colour is how the eye finds the exception, so the
-    // exception has to stay rare. The same argument `sql-highlight.ts` makes.
+  it('themes the syntax tags from the four **editor** role tokens', () => {
+    /**
+     * Four, not twelve: colour is how the eye finds the exception, so the
+     * exception has to stay rare. The same argument `sql-highlight.ts` makes.
+     *
+     * `editor-*`, not `code-*`, and the difference is the point. The `code`
+     * tokens are dark in both themes by design (§5 rule 7) because a snippet
+     * reads as code by being a dark block. A full-height editor pane on the same
+     * value is a black slab over a light interface — which is what shipped. The
+     * editor tokens follow the theme; the code tokens still do not, and a
+     * component reaching for the wrong set is the bug this asserts against.
+     */
     const src = editor();
     for (const token of [
-      '--sh-code-keyword', '--sh-code-string', '--sh-code-comment', '--sh-code-text',
+      '--sh-editor-keyword', '--sh-editor-string',
+      '--sh-editor-comment', '--sh-editor-text', '--sh-editor-bg',
     ]) expect(src, token).toContain(token);
+    // And it must not reach back for the permanently-dark set.
+    expect(src.replace(/\/\*[\s\S]*?\*\//g, ''),
+      'the editor is themed from --sh-code-*, which is dark in both themes')
+      .not.toMatch(/--sh-code-(bg|text|keyword|string|comment|header)/);
   });
 
   it('BYPASS: does not bind Tab to indent, which would trap a keyboard user', () => {

@@ -55,6 +55,13 @@
   --sh-focus-ring:        #B4502E;
   --sh-focus-halo:        #F8EAE3;
   --sh-scrim:             rgb(23 19 16 / 32%);
+  --sh-editor-bg:         #FFFDFA;
+  --sh-editor-text:       #171310;
+  --sh-editor-gutter:     #F3EDE4;
+  --sh-editor-line:       #FBF6EF;
+  --sh-editor-keyword:    #9A4222;
+  --sh-editor-string:     #1F6B45;
+  --sh-editor-comment:    #4A3F33;
 
   /* ── type ── three families; Zilla Slab is confined to display/h1/h2 (D-419) */
   --sh-font-display: "Zilla Slab", Georgia, serif;
@@ -171,6 +178,13 @@
   --sh-focus-ring:        #E07A52;
   --sh-focus-halo:        #2F1A12;
   --sh-scrim:             rgb(0 0 0 / 58%);
+  --sh-editor-bg:         #171310;
+  --sh-editor-text:       #FAF6F0;
+  --sh-editor-gutter:     #201A15;
+  --sh-editor-line:       #221C16;
+  --sh-editor-keyword:    #E9A17E;
+  --sh-editor-string:     #7FD8A6;
+  --sh-editor-comment:    #9C8E7C;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -220,5 +234,12 @@
     --sh-focus-ring:        #E07A52;
     --sh-focus-halo:        #2F1A12;
     --sh-scrim:             rgb(0 0 0 / 58%);
+    --sh-editor-bg:         #171310;
+    --sh-editor-text:       #FAF6F0;
+    --sh-editor-gutter:     #201A15;
+    --sh-editor-line:       #221C16;
+    --sh-editor-keyword:    #E9A17E;
+    --sh-editor-string:     #7FD8A6;
+    --sh-editor-comment:    #9C8E7C;
   }
 }

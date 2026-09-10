@@ -237,6 +237,36 @@ export const roles = (mode) => {
     'focus-ring':   light ? accent.base : accent.bright,
     'focus-halo':   a.subtle,
     scrim:          light ? 'rgb(23 19 16 / 32%)' : 'rgb(0 0 0 / 58%)',
+    /**
+     * The **editor's** surfaces, which follow the theme — unlike `code` above,
+     * which is dark in both by design.
+     *
+     * §5 rule 7 ("code is always mono on ink/900, in both themes") is right for
+     * a *snippet*: a dark block in a light page reads as code at a glance and
+     * needs no border to say so. It is wrong for a workspace. The SQL editor is
+     * a full-height pane, and ink/900 there is a black slab over two thirds of a
+     * light interface — which is what shipped, and what the first screenshot of
+     * it asked about in four question marks.
+     *
+     * Declared here rather than in `code` so both dark blocks get them by
+     * construction: the guard that the two must be byte-identical is exactly
+     * what caught the first attempt, where I hand-edited the generated file and
+     * indented the two copies differently.
+     *
+     * Four syntax roles, not twelve — the same four `sql-highlight.ts` uses,
+     * because colour is how the eye finds the exception and the exception has to
+     * stay rare. The light values are the dark ones' counterparts on paper:
+     * clay-900 ink, a burnt-sienna keyword and a deep green string, both taken
+     * dark enough to clear AA on the editor's own background rather than being
+     * lightened versions of the dark theme's pastels.
+     */
+    'editor-bg':      light ? '#FFFDFA' : '#171310',
+    'editor-text':    light ? c[900] : '#FAF6F0',
+    'editor-gutter':  light ? c[100] : '#201A15',
+    'editor-line':    light ? '#FBF6EF' : '#221C16',
+    'editor-keyword': light ? '#9A4222' : '#E9A17E',
+    'editor-string':  light ? '#1F6B45' : '#7FD8A6',
+    'editor-comment': light ? c[600] : '#9C8E7C',
   };
 };
 
