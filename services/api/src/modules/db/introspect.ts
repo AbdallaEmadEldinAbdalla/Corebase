@@ -21,7 +21,7 @@ import type { Client } from 'pg';
  * The trade is that `pg_catalog` does **not** filter itself by privilege, so
  * every query here carries an explicit `has_*_privilege` check.
  *
-And they **do** narrow, which a first version of this comment claimed they did
+ * And they **do** narrow, which a first version of this comment claimed they did
  * not. Running as the owner is not the same as running as a superuser: `developer`
  * has `USAGE` on the `auth` schema — it needs it to write policies that call
  * `auth.uid()` (D-189) — and **no table privileges in it at all**, because
@@ -57,7 +57,17 @@ const HIDDEN_SCHEMAS = ['pg_catalog', 'information_schema', 'pg_toast'];
  * generous enough that no ordinary project meets them and small enough that one
  * pathological schema cannot hand the browser 40MB.
  */
-export const LIMITS = { tables: 2_000, columns: 20_000, functions: 2_000, policies: 2_000 };
+export const LIMITS = {
+  tables: 2_000, columns: 20_000, functions: 2_000, policies: 2_000,
+  /**
+   * Indexes and constraints are capped lower than columns and for a different
+   * reason: a table has as many columns as its author wrote, and an *index* count
+   * is a property of how the schema has been tuned. Two thousand of either is
+   * already a schema in trouble, and the cap exists so one pathological database
+   * cannot hand the browser a payload it will not render.
+   */
+  indexes: 2_000, constraints: 2_000,
+};
 
 export interface IntrospectionTable {
   schema: string;
@@ -69,6 +79,28 @@ export interface IntrospectionTable {
   /** `reltuples`, which is an estimate — see the note on why it is not a count. */
   rows_estimate: number;
   comment: string | null;
+  /**
+   * Whether `anon` can read this table — and `null` when there is no `anon` role.
+   *
+   * A tri-state rather than a boolean, because the third state is real and
+   * meaningful: `steadhold export` (D-004) restores into vanilla Postgres, which
+   * has no `anon`, and a database opened there should not be told that anonymous
+   * access is *off* as though it were a setting someone could turn on.
+   *
+   * This is here rather than in a list of its own because it is the fact the
+   * anonymous-access control needs, and it is a property of a table. D-108 makes
+   * `anon` opt-in per table — it holds no default grant — so a `CREATE POLICY …
+   * TO anon` does nothing until this is true, which is the single most
+   * misleading thing about a new table and was previously invisible to the
+   * dashboard.
+   */
+  anon_can_select: boolean | null;
+  /**
+   * Whether `anon` can also write. Separate from reading because they are very
+   * different things to have granted by accident, and a surface that collapses
+   * them cannot warn about the worse one.
+   */
+  anon_can_write: boolean | null;
 }
 
 export interface IntrospectionColumn {
@@ -117,12 +149,74 @@ export interface IntrospectionPolicy {
   check: string | null;
 }
 
+/**
+ * An index, with both its parsed key columns and its verbatim definition.
+ *
+ * Both, because neither is sufficient. `definition` is `pg_get_indexdef`, which
+ * is the truth and is what a person reads — but it is a string, so nothing can
+ * ask it "is `author_id` the leading column", which is exactly the question the
+ * foreign-key fan-in warning has to answer. `columns` answers that and cannot
+ * express an expression index, which is why the definition stays.
+ */
+export interface IntrospectionIndex {
+  schema: string;
+  table: string;
+  name: string;
+  /**
+   * The **key** columns, in index order, with `null` for anything that is not a
+   * plain column.
+   *
+   * Two subtleties, both of which make the difference between a correct fan-in
+   * check and a falsely reassuring one:
+   *
+   * - An expression index (`create index on t (lower(name))`) has attnum 0 in
+   *   `indkey`, and there is no `pg_attribute` row for it. A `JOIN` would drop
+   *   that entry and *shift the rest up*, so an index on `(lower(a), b)` would
+   *   report `b` as its leading column — the unsafe direction, since it claims
+   *   an index that cannot serve the lookup. A `LEFT JOIN` keeps the position and
+   *   puts `null` there.
+   * - `INCLUDE`d columns are in `indkey` and are **not** key columns; they
+   *   cannot serve a lookup at all. Only the first `indnkeyatts` entries are
+   *   here.
+   */
+  columns: (string | null)[];
+  is_unique: boolean;
+  is_primary: boolean;
+  /**
+   * `indisvalid`. False means a `CREATE INDEX CONCURRENTLY` failed part-way and
+   * left an index Postgres will not use and will not drop for you — worth
+   * surfacing rather than showing it beside working ones.
+   */
+  is_valid: boolean;
+  /** `pg_get_indexdef`, verbatim, so an expression index reads correctly. */
+  definition: string;
+}
+
+/**
+ * A constraint. `definition` is `pg_get_constraintdef`, which is what `\d`
+ * prints and the only representation that is right for every kind.
+ */
+export interface IntrospectionConstraint {
+  schema: string;
+  table: string;
+  name: string;
+  /** `primary_key`, `foreign_key`, `unique`, `check` or `exclusion`. */
+  kind: string;
+  columns: (string | null)[];
+  /** For a foreign key, what it points at. Null for every other kind. */
+  references_schema: string | null;
+  references_table: string | null;
+  definition: string;
+}
+
 export interface Introspection {
   schemas: string[];
   tables: IntrospectionTable[];
   columns: IntrospectionColumn[];
   functions: IntrospectionFunction[];
   policies: IntrospectionPolicy[];
+  indexes: IntrospectionIndex[];
+  constraints: IntrospectionConstraint[];
   /** Names only, for the policy editor's role picker and the role switcher. */
   roles: string[];
   /** Which lists hit their cap, so the UI can say so rather than look complete. */
@@ -132,7 +226,7 @@ export interface Introspection {
 /**
  * Read the whole schema.
  *
- * Six queries rather than one join, deliberately. A single query would need
+ * Eight queries rather than one join, deliberately. A single query would need
  * `left join`s from tables to columns to policies and would return the table row
  * once per column — megabytes of repetition for the client to group. Six flat
  * lists is what the editor actually indexes, and they run inside one transaction
@@ -168,7 +262,18 @@ export async function introspect(client: Client): Promise<Introspection> {
             -- never-analysed table reports -1, which the client shows as unknown
             -- rather than as zero.
             c.reltuples::bigint AS rows_estimate,
-            pg_catalog.obj_description(c.oid, 'pg_class') AS comment
+            pg_catalog.obj_description(c.oid, 'pg_class') AS comment,
+            -- Guarded by the role's existence rather than assumed: a database
+            -- restored from \`steadhold export\` (D-004) into vanilla Postgres has
+            -- no \`anon\`, and \`has_table_privilege\` on a role that does not exist
+            -- raises rather than returning false. NULL there is the honest
+            -- answer and the client renders it as "there is no anon role here".
+            CASE WHEN EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'anon')
+                 THEN pg_catalog.has_table_privilege('anon', c.oid, 'SELECT')
+            END AS anon_can_select,
+            CASE WHEN EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'anon')
+                 THEN pg_catalog.has_table_privilege('anon', c.oid, 'INSERT,UPDATE,DELETE')
+            END AS anon_can_write
        FROM pg_catalog.pg_class c
        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
       WHERE c.relkind = ANY(ARRAY['r','v','m','p','f']::"char"[])
@@ -266,6 +371,86 @@ export async function introspect(client: Client): Promise<Introspection> {
       LIMIT $2`,
     [HIDDEN_SCHEMAS, LIMITS.policies + 1]);
 
+  const indexes = await client.query<IntrospectionIndex>(
+    `SELECT n.nspname AS schema,
+            c.relname AS table,
+            ic.relname AS name,
+            i.indisunique AS is_unique,
+            i.indisprimary AS is_primary,
+            i.indisvalid AS is_valid,
+            pg_catalog.pg_get_indexdef(i.indexrelid) AS definition,
+            COALESCE((
+              SELECT array_agg(a.attname::text ORDER BY k.ord)
+                FROM unnest(i.indkey::int2[]) WITH ORDINALITY AS k(attnum, ord)
+                -- LEFT, not inner: an expression has attnum 0 and no
+                -- pg_attribute row, and dropping the entry would shift the rest
+                -- up so \`(lower(a), b)\` reported \`b\` as its leading column —
+                -- claiming an index that cannot serve the lookup, which is the
+                -- unsafe direction for the fan-in check to be wrong in.
+                LEFT JOIN pg_catalog.pg_attribute a
+                       ON a.attrelid = c.oid AND a.attnum = k.attnum
+                       AND NOT a.attisdropped
+               -- Key columns only. INCLUDEd columns are in indkey and cannot
+               -- serve a lookup, so counting them would be the same false
+               -- reassurance by a different route.
+               WHERE k.ord <= i.indnkeyatts),
+              ARRAY[]::text[])::text[] AS columns
+       FROM pg_catalog.pg_index i
+       JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid
+       JOIN pg_catalog.pg_class c ON c.oid = i.indrelid
+       JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname <> ALL($1::text[])
+        AND n.nspname NOT LIKE 'pg_temp%'
+        AND pg_catalog.has_schema_privilege(n.oid, 'USAGE')
+        -- The privilege test is on the **table**, not the index: an index has no
+        -- privileges of its own, and what decides whether you may know about one
+        -- is whether you may see the table it is on.
+        AND pg_catalog.has_table_privilege(
+              c.oid, 'SELECT,INSERT,UPDATE,DELETE,REFERENCES,TRIGGER')
+      ORDER BY n.nspname, c.relname, ic.relname
+      LIMIT $2`,
+    [HIDDEN_SCHEMAS, LIMITS.indexes + 1]);
+
+  const constraints = await client.query<IntrospectionConstraint>(
+    `SELECT n.nspname AS schema,
+            c.relname AS table,
+            con.conname AS name,
+            CASE con.contype WHEN 'p' THEN 'primary_key'
+                             WHEN 'f' THEN 'foreign_key'
+                             WHEN 'u' THEN 'unique'
+                             WHEN 'c' THEN 'check'
+                             WHEN 'x' THEN 'exclusion' END AS kind,
+            pg_catalog.pg_get_constraintdef(con.oid) AS definition,
+            COALESCE((
+              SELECT array_agg(a.attname::text ORDER BY k.ord)
+                FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+                LEFT JOIN pg_catalog.pg_attribute a
+                       ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+                       AND NOT a.attisdropped),
+              -- A table-level CHECK over no single column has a null conkey, and
+              -- an empty list is the truthful answer rather than a missing row.
+              ARRAY[]::text[])::text[] AS columns,
+            fn.nspname AS references_schema,
+            fc.relname AS references_table
+       FROM pg_catalog.pg_constraint con
+       JOIN pg_catalog.pg_class c ON c.oid = con.conrelid
+       JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+       LEFT JOIN pg_catalog.pg_class fc ON fc.oid = con.confrelid
+       LEFT JOIN pg_catalog.pg_namespace fn ON fn.oid = fc.relnamespace
+      -- The five kinds a person can act on. Postgres 17 also catalogues NOT NULL
+      -- as a constraint (contype 'n'), and listing those would put a row here for
+      -- every non-nullable column in the database — the structure table already
+      -- shows nullability, so they would be noise measured in thousands.
+      WHERE con.contype = ANY(ARRAY['p','f','u','c','x']::"char"[])
+        AND n.nspname <> ALL($1::text[])
+        AND n.nspname NOT LIKE 'pg_temp%'
+        AND pg_catalog.has_schema_privilege(n.oid, 'USAGE')
+        AND pg_catalog.has_table_privilege(
+              c.oid, 'SELECT,INSERT,UPDATE,DELETE,REFERENCES,TRIGGER')
+      ORDER BY n.nspname, c.relname, con.conname
+      LIMIT $2`,
+    [HIDDEN_SCHEMAS, LIMITS.constraints + 1]);
+
   const roles = await client.query<{ name: string }>(
     // Names only. The policy editor needs to offer `anon` and `authenticated`,
     // and a `CREATE POLICY ... TO <role>` needs the name to be real — nothing
@@ -282,6 +467,8 @@ export async function introspect(client: Client): Promise<Introspection> {
   const [columnRows, columnsCut] = cut(columns.rows, LIMITS.columns);
   const [functionRows, functionsCut] = cut(functions.rows, LIMITS.functions);
   const [policyRows, policiesCut] = cut(policies.rows, LIMITS.policies);
+  const [indexRows, indexesCut] = cut(indexes.rows, LIMITS.indexes);
+  const [constraintRows, constraintsCut] = cut(constraints.rows, LIMITS.constraints);
 
   return {
     schemas: schemas.rows.map((r) => r.name),
@@ -289,10 +476,13 @@ export async function introspect(client: Client): Promise<Introspection> {
     columns: columnRows,
     functions: functionRows,
     policies: policyRows,
+    indexes: indexRows,
+    constraints: constraintRows,
     roles: roles.rows.map((r) => r.name),
     truncated: {
       tables: tablesCut, columns: columnsCut,
       functions: functionsCut, policies: policiesCut,
+      indexes: indexesCut, constraints: constraintsCut,
     },
   };
 }

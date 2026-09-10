@@ -106,3 +106,111 @@ describe('the introspection queries', () => {
     expect(LIMITS.columns).toBeGreaterThanOrEqual(10_000);
   });
 });
+
+describe('indexes and constraints (P7o)', () => {
+  it('BYPASS: reads index key columns with a LEFT join, not an inner one', async () => {
+    /**
+     * The subtlety that decides whether the foreign-key fan-in warning is
+     * correct or falsely reassuring.
+     *
+     * An expression index has attnum 0 in `indkey` and there is no
+     * `pg_attribute` row for it. An inner join drops that entry and **shifts the
+     * rest up**, so `create index on t (lower(a), b)` would report `b` as its
+     * leading column — claiming an index that cannot serve a lookup on `b`,
+     * which is the unsafe direction. The LEFT join keeps the position and puts
+     * `null` there.
+     *
+     * Verified live: `idx_expr` on `(lower(title), status)` comes back as
+     * `[null, "status"]`, and with an inner join it came back as `["status"]`.
+     */
+    const sql = await source();
+    expect(sql).toContain('LEFT JOIN pg_catalog.pg_attribute a\n                       ON a.attrelid = c.oid AND a.attnum = k.attnum');
+    expect(sql).toContain('unnest(i.indkey::int2[]) WITH ORDINALITY');
+  });
+
+  it('BYPASS: counts only key columns, so an INCLUDEd column is not one', async () => {
+    // `INCLUDE`d columns are in `indkey` and cannot serve a lookup at all, so
+    // counting them would be the same false reassurance by a different route.
+    // Verified live: `idx_incl` on `(status) include (title)` reports `["status"]`.
+    const sql = await source();
+    expect(sql).toContain('k.ord <= i.indnkeyatts');
+  });
+
+  it('casts both column lists to text[], because name[] is not a JS array', async () => {
+    // The D-465 lesson, applied where it would bite next: `attname` is `name`,
+    // so `array_agg` of it is `name[]` (OID 1003) and node-pg hands back the
+    // Postgres literal as a string while the type says an array.
+    const sql = await source();
+    expect((sql.match(/ARRAY\[\]::text\[\]\)::text\[\] AS columns/g) ?? []).length).toBe(2);
+    expect(sql).toContain('a.attname::text ORDER BY k.ord');
+  });
+
+  it('reports an index definition as well as its parsed columns', async () => {
+    // Neither is sufficient: the definition is the truth a person reads and
+    // cannot be queried; the column list answers "is this the leading column"
+    // and cannot express an expression.
+    const sql = await source();
+    expect(sql).toContain('pg_get_indexdef(i.indexrelid) AS definition');
+    expect(sql).toContain('pg_get_constraintdef(con.oid) AS definition');
+  });
+
+  it('surfaces indisvalid, because a failed CONCURRENTLY build leaves one behind', async () => {
+    const sql = await source();
+    expect(sql).toContain('i.indisvalid AS is_valid');
+  });
+
+  it('BYPASS: excludes NOT NULL from the constraint list (contype n)', async () => {
+    /**
+     * Postgres 17 catalogues NOT NULL as a constraint. Listing those would put a
+     * row here for every non-nullable column in the database — noise measured in
+     * thousands, on a list whose cap is 2,000, so it would also make the
+     * truncation notice fire on an ordinary schema. The structure table already
+     * shows nullability.
+     */
+    const sql = await source();
+    expect(sql).toContain(`con.contype = ANY(ARRAY['p','f','u','c','x']::"char"[])`);
+    expect(sql).not.toMatch(/contype = ANY\(ARRAY\['[^']*'[^)]*'n'/);
+  });
+
+  it('tests privilege on the table, because an index has none of its own', async () => {
+    // What decides whether you may know an index exists is whether you may see
+    // the table it is on.
+    const sql = await source();
+    const idx = sql.slice(sql.indexOf('pg_get_indexdef'));
+    expect(idx).toContain('has_table_privilege(\n              c.oid');
+  });
+
+  it('caps both lists and asks for one more than it keeps', async () => {
+    const sql = await source();
+    for (const name of ['indexes', 'constraints']) {
+      expect(sql, name).toContain(`LIMITS.${name} + 1`);
+    }
+    expect(LIMITS.indexes).toBeGreaterThanOrEqual(1_000);
+    expect(LIMITS.constraints).toBeGreaterThanOrEqual(1_000);
+  });
+});
+
+describe("anon's table privilege, which D-108 makes the whole question", () => {
+  it('BYPASS: guards on the role existing, because the function raises otherwise', async () => {
+    /**
+     * `has_table_privilege('anon', …)` does not return false for a role that
+     * does not exist — it raises. And a database restored from `steadhold
+     * export` (D-004) into vanilla Postgres has no `anon`, so the unguarded
+     * version would make introspection fail outright on exactly the portability
+     * case the product is built to promise.
+     *
+     * The `CASE` yields NULL there, which is a third state the client renders as
+     * "there is no anon role here" rather than as "anonymous access is off".
+     */
+    const sql = await source();
+    expect(sql).toContain("EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'anon')");
+    // Both of them, not just the read.
+    expect((sql.match(/rolname = 'anon'/g) ?? []).length).toBe(2);
+  });
+
+  it('separates reading from writing, which are different accidents', async () => {
+    const sql = await source();
+    expect(sql).toContain("has_table_privilege('anon', c.oid, 'SELECT')");
+    expect(sql).toContain("has_table_privilege('anon', c.oid, 'INSERT,UPDATE,DELETE')");
+  });
+});
