@@ -429,6 +429,43 @@ describe('P7l — the console execution path', () => {
       expect(res.statusCode).toBe(401);
     });
 
+    t('no session cannot tell a real ref from an invented one', async () => {
+      /**
+       * The existence oracle the 404s in this block exist to prevent, and it was
+       * open until D-474: the caller was authenticated *after* the ref was
+       * resolved, so a stranger with no credentials at all got `UNAUTHORIZED`
+       * for a project that exists and `PROJECT_NOT_FOUND` for one that does not.
+       *
+       * The test that already sat above this one asserted only the real ref, and
+       * an oracle needs both halves to be visible.
+       */
+      const owner = await account();
+      const p = await readyProject(owner);
+      const anon = (ref: string) => app.inject({
+        method: 'POST', url: `/v1/projects/${ref}/db/query`, payload: { sql: 'SELECT 1' } });
+
+      const real = await anon(p.ref);
+      const fake = await anon('nosuchprojectref0000');
+      expect(real.statusCode).toBe(fake.statusCode);
+      expect((real.json() as { error: { code: string } }).error.code)
+        .toBe((fake.json() as { error: { code: string } }).error.code);
+
+      // Same for the read side, which resolved the ref first for the same reason.
+      const introspect = (ref: string) =>
+        app.inject({ method: 'GET', url: `/v1/projects/${ref}/db/introspect` });
+      expect((await introspect(p.ref)).statusCode)
+        .toBe((await introspect('nosuchprojectref0000')).statusCode);
+    });
+
+    t('a malformed body reveals nothing to a caller with no session', async () => {
+      // Authentication now runs before the schema does, so an anonymous caller
+      // cannot use validation messages to read the request contract back.
+      const res = await app.inject({
+        method: 'POST', url: '/v1/projects/nosuchprojectref0000/db/query',
+        payload: { sql: '', role: 'root' } });
+      expect(res.statusCode).toBe(401);
+    });
+
     t('EXIT CRITERION: a member may run SQL — it is a member capability', async () => {
       const owner = await account();
       const p = await readyProject(owner);

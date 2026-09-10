@@ -82,31 +82,55 @@ function pgDetail(err: unknown): Record<string, unknown> | undefined {
 }
 
 /**
- * The membership check both routes need.
+ * Who is calling — resolved **before the ref is looked up**, and the order is
+ * the point (D-474).
  *
- * Extracted rather than repeated: it decides a 404-not-403, which is the sort of
- * thing that gets one route right and the second one subtly wrong. A ref is
- * guessable in principle, so a non-member must get the same answer as a stranger
- * rather than a 403 that confirms the project exists.
+ * These two halves used to be one `requireMember(deps, req, organizationId)`,
+ * which needs an organization id, which only `consoleContext` knows. So both
+ * routes resolved the *project* first and the *caller* second — a database
+ * lookup keyed on an attacker-supplied ref, ahead of every authentication
+ * check, that then handed back the answer: a caller with no credentials at all
+ * got `UNAUTHORIZED` for a ref that exists and `PROJECT_NOT_FOUND` for one that
+ * does not.
+ *
+ * The old function's own comment insisted "a non-member must get the same
+ * answer as a stranger", and the platform API's error table says the 404 is
+ * there so that there is "no existence oracle". The careful part was written and
+ * then bypassed by the sequence it ran in — which is the kind of bug that
+ * survives review, because every line of it is right. A ref is 24 characters and
+ * not worth brute-forcing, so this is a leak rather than an emergency; it is
+ * still the invariant the code claims.
+ *
+ * Splitting it also puts the CSRF check — which lives inside `resolvePrincipal`
+ * — ahead of the pool, instead of after a connection has been taken from it.
  */
-async function requireMember(
-  deps: DbDeps, req: unknown, organizationId: string,
-): Promise<{ userId: string; role: Role }> {
+async function requirePerson(deps: DbDeps, req: unknown): Promise<string> {
   const principal = await resolvePrincipal(req as never, deps.principals);
   if (!principal.userId) {
     throw new ApiError(403, ERROR_CODES.UNAUTHORIZED,
       'This endpoint runs SQL as a person and the static token is not a user.');
   }
-  const role = await deps.orgs.roleOf(principal.userId, organizationId);
+  return principal.userId;
+}
+
+/** The caller's role in the project's organization, or the stranger's 404. */
+async function requireMemberRole(
+  deps: DbDeps, userId: string, organizationId: string,
+): Promise<Role> {
+  const role = await deps.orgs.roleOf(userId, organizationId);
   if (!role) throw ApiError.notFound('Project');
   require_(role, 'db.query');
-  return { userId: principal.userId, role };
+  return role;
 }
 
 export function registerDbRoutes(app: FastifyInstance, deps: DbDeps): void {
   app.post('/v1/projects/:ref/db/query', async (req, reply) => {
     const { ref } = req.params as { ref: string };
     const requestId = String(reply.getHeader('x-request-id') ?? req.id);
+
+    // First, so that nothing at all — not the schema, not whether the ref names
+    // a real project — is learnable without credentials. See `requirePerson`.
+    const userId = await requirePerson(deps, req);
 
     const parsed = RunBody.safeParse(req.body);
     if (!parsed.success) {
@@ -132,7 +156,7 @@ export function registerDbRoutes(app: FastifyInstance, deps: DbDeps): void {
      * `db.query` is a member capability for the reason recorded on it: a member
      * can already reveal the connection string and run the same SQL from psql.
      */
-    const { userId } = await requireMember(deps, req, ctx.organizationId);
+    await requireMemberRole(deps, userId, ctx.organizationId);
     const actor: Actor = { type: 'user', userId, ip: req.ip ?? null, requestId };
 
     /**
@@ -302,8 +326,9 @@ export function registerDbRoutes(app: FastifyInstance, deps: DbDeps): void {
    */
   app.get('/v1/projects/:ref/db/introspect', async (req, reply) => {
     const { ref } = req.params as { ref: string };
+    const userId = await requirePerson(deps, req);
     const ctx = await consoleContext(deps, ref);
-    await requireMember(deps, req, ctx.organizationId);
+    await requireMemberRole(deps, userId, ctx.organizationId);
 
     try {
       const data = await withConsoleDb(ctx, async (client) => {
