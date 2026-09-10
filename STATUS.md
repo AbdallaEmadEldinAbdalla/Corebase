@@ -5531,6 +5531,18 @@ timeout, blaming backups for a networking failure. And `next build` run while
 `next dev` is up clobbers the dev server's `.next`, so every page 500s until it
 is restarted; that one cost two rounds of confusion in this session alone.
 
+**A Docker Desktop restart reshuffles container IPs, and staging pins one.**
+`backup-store.env` records the object store's address as a literal — it was
+`172.18.0.2` and came back as `172.18.0.6` — and `staging.sh up` does not
+rewrite it, because the bucket already exists and the step reports success. The
+egress allowlist is generated from that same file, so both the endpoint and the
+firewall rule stay pinned to an address nothing answers on. Every project then
+fails at `configure_backups` with a pgBackRest lock timeout, which names the
+wrong subsystem. The cure is `./scripts/staging.sh backup-store && ./scripts/staging.sh
+harden-egress`, then restart `dev.sh` so the worker re-reads the file. Worth
+fixing properly: the endpoint should be resolved at use rather than recorded, or
+the store should have a stable alias.
+
 **Check-then-act, every saga step.** A step asks "is this already true?" before doing
 anything, so re-running it is harmless. This is what makes crash-resume possible.
 
