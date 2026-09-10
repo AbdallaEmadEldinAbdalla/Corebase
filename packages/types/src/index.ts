@@ -106,6 +106,17 @@ export const ERROR_CODES = {
    * prose that gets reworded.
    */
   CSRF_REQUIRED: 'CSRF_REQUIRED',
+  /**
+   * A 404 for something that is not a project or an organization (P7s).
+   *
+   * Named in the platform API's error table from the start and missing from
+   * this list, so every other 404 borrowed `PROJECT_NOT_FOUND` — which read
+   * correctly for years because everything 404-able *was* a project. The
+   * end-users page broke that: deleting an already-deleted end user answered
+   * "PROJECT_NOT_FOUND", which points a client at the wrong resource entirely
+   * and would send a developer to check whether their project still exists.
+   */
+  RESOURCE_NOT_FOUND: 'RESOURCE_NOT_FOUND',
   INTERNAL: 'INTERNAL',
 } as const;
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];

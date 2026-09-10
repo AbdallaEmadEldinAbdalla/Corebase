@@ -68,6 +68,31 @@ export const CAPABILITIES = [
    * audited with an actor, which psql is not (D-463).
    */
   'db.query',
+  /**
+   * Reading the project's **end users** — the customer's own users, in
+   * `auth.users` (D-478).
+   *
+   * Admin and above, and this is the one place where `db.query`'s argument does
+   * *not* transfer. That capability is a member's because a member can already
+   * reveal the `developer` connection string and run the same SQL from psql, so
+   * gating it would protect nothing. Neither half holds here: `developer` has no
+   * privilege at all on `auth.users` — checked, not assumed — and revealing the
+   * `service_role` key that *would* reach it requires `key.manage`, which is
+   * admin-only. So this page grants a member something they genuinely cannot
+   * obtain today, and what it grants is other people's email addresses.
+   */
+  'authuser.read',
+  /**
+   * Banning, unbanning, confirming an address, signing out every session, and
+   * soft-deleting an end user.
+   *
+   * Held by exactly the same roles as `authuser.read` today, and separate
+   * anyway: the reason the two differ is real — reading someone's address versus
+   * destroying their account — so a later decision to let members *see* the
+   * user list must not silently also let them delete from it. The same
+   * separation `member.role.change` and `member.role.grant_owner` make.
+   */
+  'authuser.manage',
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
@@ -81,6 +106,9 @@ const ADMIN: Capability[] = [
   ...MEMBER,
   'org.update', 'member.invite', 'member.role.change', 'member.remove',
   'project.delete', 'key.manage', 'secret.manage',
+  // Admin, for the reason recorded on the capabilities themselves: this is the
+  // same PII the `service_role` key reaches, and that key is `key.manage`.
+  'authuser.read', 'authuser.manage',
 ];
 
 const OWNER: Capability[] = [

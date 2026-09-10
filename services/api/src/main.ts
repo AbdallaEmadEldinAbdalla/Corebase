@@ -499,6 +499,29 @@ const app = buildApp({
             ? createRateLimiter(createRedis(redisUrl), { limit: 60, windowSeconds: 60 })
             : createMemoryRateLimiter({ limit: 60, windowSeconds: 60 }),
         },
+        /**
+         * The end-users page (P7s). Same four prerequisites as the console and
+         * absent for the same reason, but a separate option because it connects
+         * as `steadhold_auth` rather than `steadhold_admin` — the console's role
+         * has no privilege on `auth.users` at all, which is why this is not a
+         * page over `POST /db/query`.
+         *
+         * No rate limiter. The console's exists because arbitrary SQL is a way
+         * to spend the node's CPU; these are three indexed statements and one
+         * bounded search, and a limiter on a list a person is paging through
+         * would be a budget for reading.
+         */
+        projectUsers: {
+          pool: poolForApi,
+          secrets: secretsForApi,
+          orgs: { roleOf: orgs.orgs.roleOf.bind(orgs.orgs) },
+          principals: {
+            sessions: auth.sessions,
+            tokens: auth.tokens,
+            ...(auth.staticToken ? { staticToken: auth.staticToken } : {}),
+            ...(auth.staticUserId ? { staticUserId: auth.staticUserId } : {}),
+          },
+        },
       }
     : {}),
 });

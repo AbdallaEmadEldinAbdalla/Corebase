@@ -10,6 +10,9 @@ import { registerProjectAuth, type ProjectAuthDeps } from './modules/project-aut
 import { registerGateway, type GatewayDeps } from './modules/gateway/routes.ts';
 import { registerStorage, type StorageDeps } from './modules/storage/routes.ts';
 import { registerDbRoutes, type DbDeps } from './modules/db/routes.ts';
+import {
+  registerProjectUsers, type ProjectUsersDeps,
+} from './modules/project-users/routes.ts';
 import type { PrincipalDeps } from './kernel/principal.ts';
 
 export interface BuildOptions {
@@ -45,6 +48,12 @@ export interface BuildOptions {
    * database is worse than one that is honestly missing.
    */
   db?: DbDeps;
+  /**
+   * The dashboard's view of a project's end users (P7s). Separate from `db`
+   * because it connects as a different role for a different schema, and absent
+   * means the routes do not exist rather than existing and failing.
+   */
+  projectUsers?: ProjectUsersDeps;
   /**
    * Org scoping for the project endpoints (P1d). Absent keeps Milestone 0's
    * behaviour — one implicit org, no permission checks — which is what the
@@ -126,6 +135,9 @@ export function buildApp(opts: BuildOptions = {}): FastifyInstance {
   // but the console's route lives under a path the control plane also serves and
   // registering it first keeps that visible.
   if (opts.db) registerDbRoutes(app, opts.db);
+  // Same reason as the console: it lives under a path the control plane also
+  // serves, so it is registered before the control plane rather than after.
+  if (opts.projectUsers) registerProjectUsers(app, opts.projectUsers);
 
   registerControlPlane(app, {
     store: opts.store ?? createMemoryStore(),

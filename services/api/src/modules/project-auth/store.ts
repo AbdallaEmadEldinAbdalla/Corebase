@@ -712,6 +712,60 @@ export async function listUsers(
   return rows;
 }
 
+/**
+ * The same page as `listUsers`, narrowed by an email substring (P7s).
+ *
+ * `ILIKE '%q%'` rather than a prefix match or full-text, and the reason is what
+ * the search is *for*: a developer with a support ticket has an address, or a
+ * fragment of one, and wants that row. A prefix match fails the commonest case —
+ * being given the domain half — and full-text would need an index nobody asked
+ * for on a table whose useful search is one column.
+ *
+ * It seq-scans, and that is stated rather than hidden: the caller bounds it with
+ * `limit`, and the surface says the list is a page rather than a count. When a
+ * project has enough users for this to hurt, the fix is a `pg_trgm` index on
+ * `lower(email)`, which is a decision to make with a slow query in hand.
+ *
+ * The keyset cursor is dropped for a search deliberately. Paging *and* filtering
+ * with `(created_at, id) <` means a cursor that is only valid for one query
+ * string, and a cursor that silently means nothing after the user edits the box
+ * is worse than a search that returns its first page and says so.
+ */
+export async function searchUsers(
+  client: Client, a: { q: string; limit: number },
+): Promise<AuthUser[]> {
+  const { rows } = await client.query<AuthUser>(
+    `SELECT ${USER_COLUMNS} FROM auth.users
+      WHERE deleted_at IS NULL
+        AND email ILIKE '%' || $2 || '%'
+      ORDER BY created_at DESC, id DESC LIMIT $1`,
+    [a.limit + 1, a.q]);
+  return rows;
+}
+
+/**
+ * How many end users there are, as an estimate that costs nothing.
+ *
+ * `pg_class.reltuples`, exactly as the table editor's grid does it (D-466), and
+ * for the same reason: `count(*)` on `auth.users` is a sequential scan a
+ * customer's own success makes slower, and a page that offers no denominator at
+ * all is the "twenty rows and no count" the UX standard calls a lie of
+ * omission. `-1` is Postgres's "never analyzed", which the caller renders as
+ * "not counted yet" rather than as zero — a fresh project reporting 0 users
+ * while listing three would be worse than saying nothing.
+ *
+ * `pg_class` is world-readable, so this needs no privilege the caller does not
+ * already have to list the rows.
+ */
+export async function estimateUsers(client: Client): Promise<number> {
+  const { rows } = await client.query<{ estimate: string }>(
+    `SELECT reltuples::bigint::text AS estimate
+       FROM pg_catalog.pg_class c
+       JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'auth' AND c.relname = 'users'`);
+  return rows[0] ? Number(rows[0].estimate) : -1;
+}
+
 export interface AdminUpdate {
   /** Set or clear a ban. `null` unbans. */
   bannedUntil?: Date | null | undefined;

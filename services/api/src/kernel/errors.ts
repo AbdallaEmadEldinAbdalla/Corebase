@@ -38,8 +38,22 @@ export class ApiError extends Error {
     this.code = code;
     if (details !== undefined) this.details = details;
   }
+  /**
+   * A project (or organization) that does not exist, or that the caller cannot
+   * see — the two are deliberately indistinguishable, which is why so many
+   * routes reach for this.
+   *
+   * The `PROJECT_NOT_FOUND` code is not a default so much as this helper's
+   * subject. Anything else that can 404 uses `resourceNotFound`, because a
+   * missing *end user* answering "PROJECT_NOT_FOUND" sends a developer to check
+   * whether their project still exists (P7s).
+   */
   static notFound(what: string) {
     return new ApiError(404, ERROR_CODES.PROJECT_NOT_FOUND, `${what} does not exist.`);
+  }
+  /** A 404 for something that is neither a project nor an organization. */
+  static resourceNotFound(what: string) {
+    return new ApiError(404, ERROR_CODES.RESOURCE_NOT_FOUND, `${what} does not exist.`);
   }
   static validation(message: string) {
     return new ApiError(400, ERROR_CODES.VALIDATION_FAILED, message);
