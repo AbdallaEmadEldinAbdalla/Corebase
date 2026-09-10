@@ -13,6 +13,9 @@ import { registerDbRoutes, type DbDeps } from './modules/db/routes.ts';
 import {
   registerProjectUsers, type ProjectUsersDeps,
 } from './modules/project-users/routes.ts';
+import {
+  registerProjectStorage, type ProjectStorageDeps,
+} from './modules/project-storage/routes.ts';
 import type { PrincipalDeps } from './kernel/principal.ts';
 
 export interface BuildOptions {
@@ -54,6 +57,8 @@ export interface BuildOptions {
    * means the routes do not exist rather than existing and failing.
    */
   projectUsers?: ProjectUsersDeps;
+  /** The dashboard's file browser (P7u). Absent means the routes do not exist. */
+  projectStorage?: ProjectStorageDeps;
   /**
    * Org scoping for the project endpoints (P1d). Absent keeps Milestone 0's
    * behaviour — one implicit org, no permission checks — which is what the
@@ -138,6 +143,7 @@ export function buildApp(opts: BuildOptions = {}): FastifyInstance {
   // Same reason as the console: it lives under a path the control plane also
   // serves, so it is registered before the control plane rather than after.
   if (opts.projectUsers) registerProjectUsers(app, opts.projectUsers);
+  if (opts.projectStorage) registerProjectStorage(app, opts.projectStorage);
 
   registerControlPlane(app, {
     store: opts.store ?? createMemoryStore(),

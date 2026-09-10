@@ -522,6 +522,28 @@ const app = buildApp({
             ...(auth.staticUserId ? { staticUserId: auth.staticUserId } : {}),
           },
         },
+        /**
+         * The file browser (P7u). Listing and signing work without an object
+         * store — the metadata is in Postgres — so the routes are registered
+         * either way and only *delete* refuses, by name, when there is nowhere
+         * to remove the bytes from. Half-deleting is the orphan the storage
+         * architecture treats as its central consistency problem.
+         */
+        projectStorage: {
+          pool: poolForApi,
+          secrets: secretsForApi,
+          orgs: { roleOf: orgs.orgs.roleOf.bind(orgs.orgs) },
+          principals: {
+            sessions: auth.sessions,
+            tokens: auth.tokens,
+            ...(auth.staticToken ? { staticToken: auth.staticToken } : {}),
+            ...(auth.staticUserId ? { staticUserId: auth.staticUserId } : {}),
+          },
+          ...(objectStore ? { s3: objectStore } : {}),
+          onError: (err: Error, at: Record<string, unknown>) => console.error(
+            JSON.stringify({ level: 'error', service: 'api',
+              msg: 'dashboard storage operation failed', error: err.message, ...at })),
+        },
       }
     : {}),
 });
