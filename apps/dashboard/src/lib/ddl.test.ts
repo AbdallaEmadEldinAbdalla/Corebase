@@ -4,8 +4,8 @@ import {
   Impossible, addColumn, addPrimaryKey, changeType, createTable, dropColumn, dropDefault,
   dropNotNull, dropTable, enableRls, migrationName, renameColumn, renameTable,
   Incomplete, addCheck, addForeignKey, addUnique, createIndex, describeFailure,
-  grantAnonRead, indexName, revokeAnonAccess, rowsPhrase, setDefault, setNotNull,
-  type TableFacts,
+  dropConstraint, dropIndex, grantAnonRead, indexName, revokeAnonAccess,
+  rowsPhrase, setDefault, setNotNull, type TableFacts,
 } from './ddl.ts';
 
 /**
@@ -568,7 +568,7 @@ describe('indexes and constraints — the half that needed no new API', () => {
        */
       const text = noticeText(addForeignKey(posts, fk));
       expect(text).toContain('has to scan');
-      expect(text).toContain('cannot see your indexes yet');
+      expect(text).toContain('cannot tell');
     });
 
     it('appends the index when asked, and then drops the uncertainty notice', () => {
@@ -611,6 +611,102 @@ describe('indexes and constraints — the half that needed no new API', () => {
       expect(p.sql.trimEnd().endsWith(';'), p.sql).toBe(true);
       expect(p.sql, p.sql).toContain('"public"."posts"');
       expect(p.filename).toMatch(/^\d{14}_[a-z0-9_]+\.sql$/);
+    }
+  });
+});
+
+describe('dropping an index or a constraint (P7o)', () => {
+  it('qualifies the index, because an unqualified name resolves against search_path', () => {
+    expect(dropIndex('public', 'idx_posts_status').sql)
+      .toBe('drop index "public"."idx_posts_status";');
+  });
+
+  it('BYPASS: says something different about an invalid index', () => {
+    // "Queries relying on this index will get slower" is a warning about
+    // something that cannot happen: Postgres refuses to use an invalid index at
+    // all. It is costing writes and serving nothing, so there is no downside to
+    // warn about — and saying there is would train the reader to discount the
+    // notices that matter.
+    const bad = noticeText(dropIndex('public', 'idx_bad', { invalid: true }));
+    expect(bad).toContain('will not use it');
+    expect(bad).not.toContain('get slower');
+    expect(noticeText(dropIndex('public', 'idx_ok'))).toContain('get slower');
+  });
+
+  it('BYPASS: dropping a primary key names the product consequence', () => {
+    /**
+     * The consequence no Postgres message mentions and no SQL warning covers:
+     * the grid becomes read-only, because PK-guarded DML is the only UPDATE
+     * shape that cannot silently hit more rows than the user can see (D-133),
+     * and paging stops being stable. This is the only place it can be said.
+     */
+    const text = noticeText(dropConstraint(posts, 'posts_pkey', 'primary_key'));
+    expect(text).toContain('read-only');
+    expect(text).toContain('appear twice or not at all');
+    // And it is not blocked — it is the customer's database.
+    expect(dropConstraint(posts, 'posts_pkey', 'primary_key').sql)
+      .toBe('alter table "public"."posts" drop constraint "posts_pkey";');
+  });
+
+  it('says the index goes too, for a primary key or a unique constraint', () => {
+    expect(noticeText(dropConstraint(posts, 'posts_slug_key', 'unique')))
+      .toContain('index behind this constraint is dropped');
+    expect(noticeText(dropConstraint(posts, 'posts_pkey', 'primary_key')))
+      .toContain('index behind it goes too');
+  });
+
+  it('a foreign key drop is about dangling references, not about rejected writes', () => {
+    // Two genuinely different consequences, and the generic sentence is wrong
+    // for the FK: nothing was being *rejected* that now succeeds — rows start
+    // being able to point at nothing.
+    expect(noticeText(dropConstraint(posts, 'posts_author_fkey', 'foreign_key')))
+      .toContain('point at rows that do not exist');
+    expect(noticeText(dropConstraint(posts, 'posts_check', 'check')))
+      .toContain('would have been rejected');
+  });
+
+  it('never claims a drop checked or changed existing data', () => {
+    for (const kind of ['primary_key', 'unique', 'check', 'foreign_key']) {
+      expect(noticeText(dropConstraint(posts, 'c', kind)), kind)
+        .toContain('not checked or changed');
+    }
+  });
+});
+
+describe('the fan-in warning, now that the condition is answerable', () => {
+  const fk = {
+    column: 'author_id', targetSchema: 'public', targetTable: 'users',
+    targetColumn: 'id',
+  };
+
+  it('says nothing when the column is already indexed', () => {
+    expect(noticeText(addForeignKey(posts, { ...fk, indexed: true })))
+      .not.toContain('scan');
+  });
+
+  it('BYPASS: states it as fact when it knows there is no index', () => {
+    const text = noticeText(addForeignKey(posts, { ...fk, indexed: false }));
+    expect(text).toContain('has no index leading with it');
+    expect(text).toContain('will scan');
+    // Not hedged — the caller has the list, so hedging would be false modesty
+    // that makes a real warning sound optional.
+    expect(text).not.toContain('cannot tell you');
+  });
+
+  it('keeps the admitted-unknown wording when the caller has no list', () => {
+    // The branch stays rather than being deleted: a caller without the index
+    // list must say so instead of implying the reassuring answer, and *absent*
+    // is the only value that cannot be mistaken for "no".
+    const text = noticeText(addForeignKey(posts, fk));
+    expect(text).toContain('cannot tell');
+    expect(text).toContain('Unless');
+  });
+
+  it('ticking the index suppresses the warning whatever the condition says', () => {
+    for (const indexed of [undefined, false]) {
+      const p = addForeignKey(posts, { ...fk, alsoIndex: true, ...(indexed === undefined ? {} : { indexed }) });
+      expect(noticeText(p)).not.toContain('scan');
+      expect(p.sql).toContain('create index "idx_posts_author_id"');
     }
   });
 });

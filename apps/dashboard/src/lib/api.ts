@@ -394,6 +394,15 @@ export interface IntrospectionTable {
    */
   rows_estimate: number;
   comment: string | null;
+  /**
+   * Whether `anon` can read this table — `null` when there is no `anon` role,
+   * which is the case in a database restored from `steadhold export` (D-004).
+   *
+   * D-108 makes anonymous access opt-in per table, so this is what decides
+   * whether a `CREATE POLICY … TO anon` does anything at all.
+   */
+  anon_can_select: boolean | null;
+  anon_can_write: boolean | null;
 }
 
 export interface IntrospectionColumn {
@@ -408,6 +417,38 @@ export interface IntrospectionColumn {
   is_primary_key: boolean;
   is_identity: boolean;
   comment: string | null;
+}
+
+export interface IntrospectionIndex {
+  schema: string;
+  table: string;
+  name: string;
+  /**
+   * Key columns in index order, `null` for anything that is not a plain column.
+   *
+   * A `null` in the leading slot means an expression index, which cannot serve a
+   * lookup on a column — so `columns[0] === 'author_id'` is the correct test for
+   * "is `author_id` indexed for a foreign-key check", and it is correct *because*
+   * of the nulls. `INCLUDE`d columns are absent.
+   */
+  columns: (string | null)[];
+  is_unique: boolean;
+  is_primary: boolean;
+  /** False means a failed `CREATE INDEX CONCURRENTLY` left it behind. */
+  is_valid: boolean;
+  definition: string;
+}
+
+export interface IntrospectionConstraint {
+  schema: string;
+  table: string;
+  name: string;
+  /** `primary_key`, `foreign_key`, `unique`, `check` or `exclusion`. */
+  kind: string;
+  columns: (string | null)[];
+  references_schema: string | null;
+  references_table: string | null;
+  definition: string;
 }
 
 export interface IntrospectionPolicy {
@@ -427,6 +468,8 @@ export interface Introspection {
   columns: IntrospectionColumn[];
   functions: { schema: string; name: string; arguments: string; returns: string; kind: string }[];
   policies: IntrospectionPolicy[];
+  indexes: IntrospectionIndex[];
+  constraints: IntrospectionConstraint[];
   roles: string[];
   /** Which lists hit their server-side cap. A short list must say it is short. */
   truncated: Record<string, boolean>;

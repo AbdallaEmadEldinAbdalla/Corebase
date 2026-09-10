@@ -681,13 +681,17 @@ export function createIndex(
  * index, the preview carries an inline notice — deletes/updates on `users` will
  * seq-scan `posts` — with a one-click 'also create index'".
  *
- * The notice is here; the *condition* is not, and that is the honest shape given
- * what the platform reports. Introspection returns tables, columns, functions
- * and policies — no indexes — so this cannot tell whether `author_id` is already
- * indexed. Rather than guess, it says both the consequence and the uncertainty,
- * and the "also create the index" option is offered **off by default**: an index
- * covering the column under a different name is invisible from here, so
- * defaulting it on would quietly double some tables' write cost.
+ * The condition is now answerable — introspection reports indexes (P7o) — so
+ * `indexed` is a **three-way**: `true` suppresses the notice, `false` states it
+ * as fact, and *absent* keeps the earlier wording that admits it cannot tell.
+ * The unknown branch stays rather than being deleted, because a caller that does
+ * not have the index list should say so instead of implying the reassuring
+ * answer, and "absent" is the only value that cannot be confused with "no".
+ *
+ * The check the caller makes is `columns[0] === column`, and it is right *because*
+ * an expression index reports `null` in that slot: an index on `(lower(a), b)`
+ * cannot serve a lookup on either, and it would have claimed `b` if the
+ * introspection query had used an inner join.
  */
 export function addForeignKey(
   f: TableFacts,
@@ -700,6 +704,8 @@ export function addForeignKey(
     onDelete?: string;
     alsoIndex?: boolean;
     name?: string;
+    /** Whether the referencing column already has an index leading with it. */
+    indexed?: boolean;
   },
 ): Plan {
   if (!fk.column) throw new Incomplete('Choose the column that points at the other table.');
@@ -729,15 +735,18 @@ export function addForeignKey(
           + `${fk.targetSchema}.${fk.targetTable} stops the whole statement, and `
           + 'Postgres names it. Nothing is applied unless every row matches.',
       },
-      ...(fk.alsoIndex ? [] : [{
+      ...(fk.alsoIndex || fk.indexed === true ? [] : [{
         kind: 'api' as const,
-        // The doc's fan-in warning, with its condition stated as unknown rather
-        // than guessed — there is no index list in the schema payload.
-        text: `Unless ${fk.column} is indexed, every delete or update of a `
-          + `${fk.targetTable} row has to scan ${named(f)} to check this `
-          + 'constraint. This editor cannot see your indexes yet, so it cannot '
-          + 'tell you whether it is — tick the box to add one, or check first if '
-          + 'you would rather not risk a duplicate.',
+        // The doc's fan-in warning. Stated as fact when the index list says so,
+        // and as an admitted unknown when the caller has no list.
+        text: fk.indexed === false
+          ? `${fk.column} has no index leading with it, so every delete or update `
+            + `of a ${fk.targetTable} row will scan ${named(f)} to check this `
+            + 'constraint. Tick the box below to add one in the same statement.'
+          : `Unless ${fk.column} is indexed, every delete or update of a `
+            + `${fk.targetTable} row has to scan ${named(f)} to check this `
+            + 'constraint — and this caller has no index list, so it cannot tell '
+            + 'you whether it is.',
       }]),
     ],
     filename: migrationName(`add_${name}`),
@@ -794,6 +803,90 @@ export function addUnique(
       },
     ],
     filename: migrationName(`add_${constraint}`),
+  };
+}
+
+/**
+ * `DROP INDEX`.
+ *
+ * Schema-qualified, because an index lives in a schema and an unqualified name
+ * resolves against `search_path` — the same reason every other statement here is
+ * qualified.
+ *
+ * `invalid` changes the sentence rather than the statement. An index left behind
+ * by a failed `CREATE INDEX CONCURRENTLY` is costing writes and serving nothing,
+ * so dropping it has no downside worth warning about — and saying "queries that
+ * relied on it will get slower" about an index Postgres refuses to use would be
+ * a warning about something that cannot happen.
+ */
+export function dropIndex(
+  schema: string, name: string, opts: { invalid?: boolean } = {},
+): Plan {
+  return {
+    sql: `drop index ${qualified(schema, name)};`,
+    done: `Index ${name} dropped`,
+    notices: [opts.invalid ? {
+      kind: 'data',
+      text: 'This index is invalid — Postgres will not use it for any query, and '
+        + 'it still costs write time and disk on every insert. Dropping it is the '
+        + 'only way to be rid of it; rebuild it afterwards if you wanted it.',
+    } : {
+      kind: 'api',
+      text: 'Queries relying on this index fall back to whatever else is '
+        + 'available, usually a sequential scan. Nothing breaks and some things '
+        + 'get slower — and rebuilding it later takes the write lock again.',
+    }],
+    filename: migrationName(`drop_${name}`),
+  };
+}
+
+/**
+ * `ALTER TABLE … DROP CONSTRAINT`.
+ *
+ * The `kind` argument exists for one case: dropping a **primary key** has a
+ * consequence no Postgres message mentions and no SQL warning covers. It makes
+ * the grid read-only, because PK-guarded DML is the only `UPDATE` shape that
+ * cannot silently hit more rows than the user can see (D-133), and it makes
+ * paging unstable because there is no longer a stable order to page by. That is a
+ * *product* consequence, and the only place it can be said is here.
+ *
+ * Not blocked, though. It is the customer's database, the classifier already
+ * puts it on the `confirm` rung (D-468), and a table with a natural key the
+ * customer is about to replace is a perfectly ordinary reason to do this.
+ */
+export function dropConstraint(f: TableFacts, name: string, kind: string): Plan {
+  const consequence: Notice[] = kind === 'primary_key' ? [{
+    kind: 'data',
+    text: 'This is the table\u2019s primary key. Without one the grid becomes '
+      + 'read-only — row editing needs a key to target exactly one row — and '
+      + 'paging stops being stable, so a row can appear twice or not at all. '
+      + 'The index behind it goes too.',
+  }] : kind === 'unique' ? [{
+    kind: 'data',
+    text: 'The index behind this constraint is dropped with it, so queries that '
+      + 'were using it get slower as well.',
+  }] : [];
+
+  return {
+    sql: `${alter(f)} drop constraint ${quote(name)};`,
+    done: `Constraint ${name} dropped`,
+    notices: [
+      ...consequence,
+      {
+        kind: 'api',
+        // The same reassurance in the same words for every kind, because it is
+        // the same fact — a drop is a change to what is *allowed*, never to what
+        // is stored. Two phrasings of one fact was caught by a test asserting it
+        // across all four kinds, which is the reason to assert across all four.
+        text: (kind === 'foreign_key'
+          ? `Rows in ${named(f)} may then point at rows that do not exist, and `
+            + 'nothing will stop new ones doing so. '
+          : `Rows that would have been rejected can be written to ${named(f)} `
+            + 'from now on. ')
+          + 'What is already stored is not checked or changed.',
+      },
+    ],
+    filename: migrationName(`drop_${name}`),
   };
 }
 
