@@ -561,12 +561,25 @@ tr:hover .rowbtn, .rowbtn:focus-visible, .rowbtn[aria-expanded="true"] {
 .toasts .sh-toast { animation: rise-in 160ms ease; }
 
 /* ── the menu, positioned ─────────────────────────────────────────────────── */
+/* The trigger's box. No longer a positioning context — the list is a portal in
+   `document.body` — but still the thing an outside-click test measures. */
 .pop { position: relative; }
-.pop__menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 40; animation: rise-in 140ms ease; }
-.pop__menu--right { left: auto; right: 0; }
+/**
+ * The list, fixed and placed by `Menu.tsx` from the trigger's rect.
+ *
+ * `absolute` inside `.pop` was the old version, and it is clipped by any
+ * ancestor with `overflow` — which the workspace redesign gave to every
+ * surface, breaking every menu in the product at once. `fixed` in a portal
+ * cannot be clipped by construction. `top`/`left` are inline styles because
+ * they are measured, and `max-height` is here because a menu is not allowed to
+ * be taller than the window even when its trigger is at the top of it.
+ */
+.pop__menu {
+  position: fixed; z-index: 40; animation: rise-in 140ms ease;
+  max-height: calc(100vh - 16px); overflow-y: auto;
+}
 /* A value picker's list belongs to its control: `.sh-menu` is a fixed 300px,
    which is right for the switchers and wrong here. */
-.pop__menu--fit { min-width: 100%; }
 .pop__menu--fit .sh-menu { width: 100%; min-width: max-content; }
 .pop__menu .sh-menu { margin-top: 0; }
 .sh-menu__item { cursor: pointer; width: 100%; border: 0; background: none; text-align: left; }
