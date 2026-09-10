@@ -1,6 +1,6 @@
 'use client';
 
-import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient , keepPreviousData } from '@tanstack/react-query';
 import type { Role } from '@steadhold/types';
 import { api, type Org } from './api.ts';
 import { SETTLING } from '../components/ProjectState.tsx';
@@ -26,6 +26,15 @@ export const keys = {
    * catalog list would mean five invalidations that can partially fail.
    */
   introspection: (ref: string) => ['project', ref, 'introspection'] as const,
+  /**
+   * Keyed by the search *and* the cursor, because both change what came back
+   * and a shared key would show one page's rows under another's heading while
+   * the fetch is in flight.
+   */
+  authUsers: (ref: string, q: string, cursor: string) =>
+    ['project', ref, 'auth-users', q, cursor] as const,
+  /** Every page of the list, for invalidating after a mutation. */
+  authUsersAll: (ref: string) => ['project', ref, 'auth-users'] as const,
 };
 
 export const useMe = () => useQuery({ queryKey: keys.me, queryFn: api.me });
@@ -339,6 +348,56 @@ export function useInvites(orgId: string | undefined) {
     queryKey: keys.invites(orgId ?? 'none'),
     queryFn: () => api.invites(orgId!),
     enabled: Boolean(orgId),
+  });
+}
+
+/**
+ * A page of the project's end users (P7s).
+ *
+ * `placeholderData: keepPreviousData` is what makes paging and typing bearable:
+ * without it every keystroke and every Next blanks the table to a skeleton, and
+ * a list that flashes empty while you type reads as "no results" for a moment
+ * on every character. The previous page stays put and `isFetching` carries the
+ * fact that a newer one is coming.
+ */
+export function useAuthUsers(
+  ref: string, opts: { q?: string; cursor?: string; enabled?: boolean } = {},
+) {
+  const q = opts.q ?? '';
+  const cursor = opts.cursor ?? '';
+  return useQuery({
+    queryKey: keys.authUsers(ref, q, cursor),
+    queryFn: () => api.authUsers(ref, {
+      ...(q ? { q } : {}),
+      ...(cursor ? { cursor } : {}),
+      limit: 50,
+    }),
+    enabled: opts.enabled ?? true,
+    placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * Ban, unban, confirm, or sign out — one mutation, because the endpoint is one
+ * PATCH and splitting it into four hooks would mean four cache invalidations
+ * that can partially fail.
+ */
+export function useUpdateAuthUser(ref: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: {
+      id: string;
+      change: { ban_until?: string | null; email_confirm?: boolean; sign_out?: boolean };
+    }) => api.updateAuthUser(ref, v.id, v.change),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: keys.authUsersAll(ref) }); },
+  });
+}
+
+export function useDeleteAuthUser(ref: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.deleteAuthUser(ref, id),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: keys.authUsersAll(ref) }); },
   });
 }
 

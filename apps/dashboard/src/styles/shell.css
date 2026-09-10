@@ -1294,6 +1294,15 @@ a.section__note { text-decoration: none; }
 /* The scrolling middle. This is the only thing on the page that scrolls. */
 .deckgrid { flex: 1 1 auto; overflow: auto; min-height: 0; min-width: 0; }
 
+/* The end-users search (P7s). A form in the toolbar, so Return submits and the
+   search is applied on intent — a debounce would fire a substring scan on the
+   customer's table for every prefix of what someone types. */
+.usersearch { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.usersearch__input {
+  height: 28px; width: clamp(140px, 26vw, 280px);
+  font: var(--sh-body-s);
+}
+
 /**
  * The RLS-disabled banner, across the table view.
  *

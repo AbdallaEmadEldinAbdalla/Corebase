@@ -343,6 +343,43 @@ export interface MeResponse {
 import type { Role } from '@steadhold/types';
 export type { Role };
 
+/**
+ * One of the customer's **own** users — an end user of their app, not a member
+ * of their Steadhold organization (P7s).
+ *
+ * The two are unrelated and the naming keeps them apart on purpose: `Member` is
+ * a colleague with a role, `AuthUser` is a row in the project's `auth.users`.
+ * Conflating them in the type layer is how a page ends up offering to change an
+ * end user's organization role.
+ *
+ * No password field, and none is coming: the server shapes this list field by
+ * field rather than spreading its row, so a new column has to be added
+ * deliberately to reach here.
+ */
+export interface AuthUser {
+  id: string;
+  email: string | null;
+  email_confirmed_at: string | null;
+  banned_until: string | null;
+  created_at: string;
+  last_sign_in_at: string | null;
+  user_metadata: Record<string, unknown>;
+  app_metadata: Record<string, unknown>;
+}
+
+export interface AuthUserPage {
+  users: AuthUser[];
+  has_more: boolean;
+  next_cursor: string | null;
+  /**
+   * `reltuples`, so the footer can say "of ~4,200" without a sequential scan
+   * (D-466's argument, applied to `auth.users`). `-1` means the table has never
+   * been analyzed and `null` means this was a search, where a table-wide total
+   * beside a filtered count would answer a question nobody asked.
+   */
+  estimated_total: number | null;
+}
+
 export interface Org {
   id: string;              // org_<uuid>
   name: string;
@@ -618,6 +655,30 @@ export const api = {
         body: { email, password, ...(displayName ? { display_name: displayName } : {}) } }),
 
   logout: () => request<void>('/v1/auth/logout', { method: 'POST' }),
+
+  // ── the project's end users (P7s) ────────────────────────────────────────
+  authUsers: (ref: string, opts: { q?: string; limit?: number; cursor?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (opts.q) qs.set('q', opts.q);
+    if (opts.limit) qs.set('limit', String(opts.limit));
+    if (opts.cursor) qs.set('cursor', opts.cursor);
+    const query = qs.toString();
+    return request<AuthUserPage>(
+      `/v1/projects/${encodeURIComponent(ref)}/auth/users${query ? `?${query}` : ''}`);
+  },
+
+  updateAuthUser: (
+    ref: string, id: string,
+    change: { ban_until?: string | null; email_confirm?: boolean; sign_out?: boolean },
+  ) =>
+    request<AuthUser>(
+      `/v1/projects/${encodeURIComponent(ref)}/auth/users/${encodeURIComponent(id)}`,
+      { method: 'PATCH', body: change }),
+
+  deleteAuthUser: (ref: string, id: string) =>
+    request<void>(
+      `/v1/projects/${encodeURIComponent(ref)}/auth/users/${encodeURIComponent(id)}`,
+      { method: 'DELETE' }),
 
   /** `GET /v1/auth/tokens`. The token itself is never in this response. */
   tokens: () => request<{ tokens: AccessToken[] }>('/v1/auth/tokens'),

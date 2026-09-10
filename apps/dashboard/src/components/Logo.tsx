@@ -1,5 +1,6 @@
 import {
-  BarChart3, Cable, Gauge, KeyRound, LayoutGrid, Settings, SquareTerminal, Table2, Users, type LucideIcon,
+  BarChart3, Cable, Gauge, KeyRound, LayoutGrid, Settings, SquareTerminal, Table2, UserRound, Users,
+  type LucideIcon,
 } from 'lucide-react';
 
 /**
@@ -123,6 +124,14 @@ const ICONS = {
    * the result is.
    */
   sql: SquareTerminal,
+  /**
+   * One person, where the org's members use a group.
+   *
+   * The distinction is the whole reason this section is easy to misread: these
+   * are the customer's *end users*, not colleagues with a role, and the two
+   * pages would otherwise carry the same glyph in the same sidebar.
+   */
+  auth: UserRound,
   usage: BarChart3,
   settings: Settings,
 } satisfies Record<string, LucideIcon>;
