@@ -5514,6 +5514,23 @@ asks for a 40px hit area). And `.sqled { }` was an empty rule.
 These are not style preferences; each one exists because breaking it caused a real
 bug in this repository.
 
+**The `@steadhold/worker` and `@steadhold/api` e2e suites truncate the shared
+staging control DB — so seed a demo fixture *after* running them, never before.**
+Both took an hour out of this session, twice, for the same reason: a seeded
+project (org, project, provisioned container, tables, rows) was destroyed by
+`pnpm test`, and the second time it happened *after* the same mistake had already
+been made once. The suites are not wrong — they need a known-empty control plane,
+and D-223 has them fail rather than skip when the substrate is missing. The
+ordering is the rule.
+
+Two things make the damage worse than a lost row. A truncated `project_databases`
+leaves the port allocator unaware that a **stale test container still holds the
+port**, so the next provision creates a container Docker starts without external
+connectivity — which then surfaces three steps later as a pgBackRest lock
+timeout, blaming backups for a networking failure. And `next build` run while
+`next dev` is up clobbers the dev server's `.next`, so every page 500s until it
+is restarted; that one cost two rounds of confusion in this session alone.
+
 **Check-then-act, every saga step.** A step asks "is this already true?" before doing
 anything, so re-running it is harmless. This is what makes crash-resume possible.
 
