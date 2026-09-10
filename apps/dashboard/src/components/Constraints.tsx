@@ -135,8 +135,20 @@ export function Constraints(props: {
             </div>
           ) : null}
 
-          <div className="tablewrap">
-            <table className="sh-table structure">
+          <div className="dwrap">
+            {/* Explicit widths, so the column that gives way is the one that can
+                afford to. `Definition` is the longest and the least essential
+                to read in full — it is on the row's `title` and in the drop
+                dialog's preview — so it takes the remainder and ellipsises,
+                rather than every other column being squeezed to fit it. */}
+            <table className="dtable">
+              <colgroup>
+                <col style={{ width: '26%', minWidth: 160 }} />
+                <col style={{ width: '14%', minWidth: 110 }} />
+                <col style={{ width: '18%', minWidth: 120 }} />
+                <col />
+                {props.onDrop ? <col style={{ width: 48 }} /> : null}
+              </colgroup>
               <thead>
                 <tr>
                   <th scope="col">Name</th>
@@ -144,7 +156,7 @@ export function Constraints(props: {
                   <th scope="col">Columns</th>
                   <th scope="col">Definition</th>
                   {props.onDrop ? (
-                    <th scope="col" className="td-actions">
+                    <th scope="col" className="dtable__act">
                       <span className="sh-sr">Actions</span>
                     </th>
                   ) : null}
@@ -153,54 +165,42 @@ export function Constraints(props: {
               <tbody>
                 {rows.map((r) => (
                   <tr key={`${r.kind}:${r.name}`}>
-                    <td>
-                      <span className="structure__name">{r.name}</span>
-                      <span className="structure__flags">
-                        {r.invalid ? (
-                          <span className="tablelist__tag tablelist__tag--warn">
-                            invalid
-                          </span>
-                        ) : null}
-                        {r.kind === 'index' && r.unique ? (
-                          <span className="tablelist__tag">unique</span>
-                        ) : null}
-                      </span>
+                    <td className="dtable__mono" title={r.name}>
+                      {r.name}
+                      {r.invalid ? (
+                        <span className="dtable__tag dtable__tag--warn">invalid</span>
+                      ) : null}
+                      {r.kind === 'index' && r.unique ? (
+                        <span className="dtable__tag">unique</span>
+                      ) : null}
                     </td>
-                    <td>
+                    <td className="dtable__muted" title={LABEL[r.kind] ?? r.kind}>
                       {LABEL[r.kind] ?? r.kind}
-                      {/* Said once, on the constraint's row, instead of listing
-                          the index again as though it were a separate object. */}
+                      {/* One line, as a tag. This was a block of prose in a
+                          110px column, which wrapped to five lines and made the
+                          row taller than the header. */}
                       {r.backedBy ? (
-                        <div className="sh-help" style={{ margin: 0 }}>
-                          with its own index
-                        </div>
+                        <span className="dtable__tag">+ index</span>
                       ) : null}
                     </td>
-                    <td>
-                      <span className="structure__type">{columnList(r.columns)}</span>
+                    <td className="dtable__mono dtable__muted"
+                        title={columnList(r.columns)}>
+                      {columnList(r.columns)}
                       {r.references ? (
-                        <div className="sh-help" style={{ margin: 0 }}>
-                          → {r.references}
-                        </div>
+                        <span className="dtable__tag">&rarr; {r.references}</span>
                       ) : null}
                     </td>
-                    <td>
-                      {/* The verbatim definition, which is the only
-                          representation that is right for every kind — an
-                          expression index and a CHECK have no column list that
-                          says what they do. */}
-                      <code className="structure__default" title={r.definition}>
-                        {r.definition}
-                      </code>
+                    <td className="dtable__mono dtable__muted" title={r.definition}>
+                      {r.definition}
                     </td>
                     {props.onDrop ? (
-                      <td className="td-actions">
+                      <td className="dtable__act">
                         <Menu label={`Actions for ${r.name}`} align="right"
                               trigger={({ toggle, ref, open }) => (
                                 <button ref={ref} type="button" className="rowbtn"
                                         aria-expanded={open} aria-haspopup="menu"
                                         onClick={toggle}>
-                                  <span aria-hidden="true">⋯</span>
+                                  <span aria-hidden="true">&#8943;</span>
                                   <span className="sh-sr">Actions for {r.name}</span>
                                 </button>
                               )}>

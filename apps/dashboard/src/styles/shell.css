@@ -751,21 +751,12 @@ a.section__note { text-decoration: none; }
   border-radius: var(--sh-radius-lg) var(--sh-radius-lg) 0 0;
   overflow-x: auto; max-width: 100%;
 }
-.grid { min-width: max-content; }
-.grid thead th { vertical-align: bottom; padding: 0; }
-.grid__sort {
-  display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
-  width: 100%; background: none; border: 0; cursor: pointer; color: inherit;
-  padding: var(--sh-space-8) var(--sh-space-12); text-align: left;
-}
-.grid__sort:hover { background: var(--sh-surface-alt); }
+/* `.grid__sort`, `.grid__type`, `.grid__arrow` and the two-line header they
+   drew are gone: the header is one line now, and those four rules matched
+   nothing the moment it changed. Dead CSS is a claim the product makes and does
+   not keep — the same failure `.tok-*` was, found the same way. `.grid__col` and
+   `.gridwrap` stay because `SqlResults` still uses them. */
 .grid__col { font: var(--sh-body-s); font-weight: 600; color: var(--sh-text); }
-/* Type and nullability in the header, not in a tab away from the values — they
-   are what a developer needs *while* reading a row. */
-.grid__type { font: var(--sh-caption); color: var(--sh-text-muted); white-space: nowrap; }
-.grid__arrow { position: absolute; right: 8px; top: 8px; color: var(--sh-text-muted); }
-.grid thead th { position: relative; }
-.grid td { white-space: nowrap; max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
 /* `null` and an empty string render identically as text and are different
    values — in a grid over someone's data that is the difference between "no
    answer" and "a blank answer". */
@@ -869,10 +860,23 @@ a.section__note { text-decoration: none; }
 .structure__name { font: var(--sh-code); color: var(--sh-text); }
 .structure__type { font: var(--sh-code); color: var(--sh-text-secondary); }
 .structure__flags { display: flex; gap: var(--sh-space-4); flex-wrap: wrap; }
-.structure__default {
-  font: var(--sh-code); color: var(--sh-text-secondary);
-  max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
+/**
+ * A cell's monospaced secondary value — a default expression, a definition.
+ *
+ * **No truncation here, deliberately.** This rule used to carry `max-width`,
+ * `overflow: hidden` and `text-overflow: ellipsis`, and it was applied to a
+ * `<span>` and a `<code>` — both non-replaced **inline** elements, which none of
+ * those three properties apply to. So it never truncated anything: the
+ * Definition column expanded to its longest `CREATE INDEX …` string, the table
+ * grew past its container, and the narrow Kind column wrapped a five-word note
+ * onto five lines.
+ *
+ * Truncation now lives on `.dtable td`, which is a `table-cell` and therefore a
+ * box these properties *do* apply to. Putting it there rather than on a class
+ * also means there is no longer a class that can be attached to the wrong kind
+ * of element.
+ */
+.structure__default { font: var(--sh-code); color: var(--sh-text-secondary); }
 /* The "not filled in yet" line, where the preview will be. Reserves roughly the
    preview's own height so the dialog does not jump when the first character is
    typed — a layout shift on keystroke is the same cost as a page load, in
@@ -953,7 +957,6 @@ a.section__note { text-decoration: none; }
 .sh-checkbox:has(input:disabled) { cursor: not-allowed; }
 
 /* ── the grid's editing and selection affordances (P7p) ──────────────────── */
-.grid__select { width: 44px; text-align: center; padding: 0 !important; }
 /* A selected row gets a left bar and a tint, never a tint alone — §5 rule 2,
    which is also what keeps it legible in greyscale. */
 .grid tr.is-selected > td { background: var(--sh-accent-subtle); }
@@ -1018,3 +1021,376 @@ a.section__note { text-decoration: none; }
   font: var(--sh-code); color: var(--sh-text);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+
+/* ── the dense data table (P7q) ───────────────────────────────────────────────
+   The reference is Supabase's grid, which the UX standard names outright, and
+   the behaviour that makes it work is one rule: **a cell is one line.** No
+   wrapping, ever. A column too narrow for its content ellipsises and the table
+   scrolls sideways inside its own wrapper — it never squeezes a neighbour or
+   grows a row to four lines high.
+
+   The truncation is on the `td` and `th` rather than on a class for the content,
+   because a `table-cell` is a box that honours `max-width` and `overflow` while
+   a `<span>` or `<code>` is not. That was the actual bug this replaces. */
+.dtable { width: 100%; border-collapse: collapse; font: var(--sh-body-m); }
+.dtable th, .dtable td {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* Rows are 40px rather than `.sh-table`'s 52px. Supabase's density, and the
+     reason a schema of thirty columns is readable without scrolling twice. */
+  height: 40px; padding: 0 var(--sh-space-12);
+  border-bottom: 1px solid var(--sh-border);
+}
+.dtable th {
+  text-align: left; background: var(--sh-surface-alt);
+  font: var(--sh-caption); letter-spacing: var(--sh-tracking-caption);
+  color: var(--sh-text-secondary);
+  /* Sticky, so the column names survive a long table — the header is what makes
+     row 200 legible. `z-index` above the cells and below any dialog. */
+  position: sticky; top: 0; z-index: 1;
+}
+/* A vertical rule between columns, which is what lets the eye track a row
+   across a wide table. Subtle: the border token, not the strong one. */
+.dtable th + th, .dtable td + td { border-left: 1px solid var(--sh-border); }
+.dtable tbody tr:hover { background: var(--sh-surface-alt); }
+.dtable__num { color: var(--sh-text-muted); font: var(--sh-code); text-align: right; }
+/* The trailing action column: narrow, fixed, and never the thing that grows. */
+.dtable__act { width: 48px; text-align: center; padding: 0; }
+/* Monospaced identifiers, which is most of what these tables hold. */
+.dtable__mono { font: var(--sh-code); }
+.dtable__muted { color: var(--sh-text-secondary); }
+/* A tag inside a cell must not wrap the row: it sits inline and stays on the
+   line, and the cell ellipsises if there is no room. */
+.dtable__tag {
+  font: var(--sh-caption); color: var(--sh-text-muted);
+  border: 1px solid var(--sh-border); border-radius: var(--sh-radius-sm);
+  padding: 0 4px; margin-left: 6px; white-space: nowrap;
+}
+.dtable__tag--warn { color: var(--sh-warning); border-color: var(--sh-warning); }
+/* The scroll container. `max-width: 100%` and `overflow-x: auto` together are
+   what keep the *page* from scrolling (D-460) while the table does. */
+.dwrap {
+  max-width: 100%; overflow-x: auto; overflow-y: visible;
+  border: 1px solid var(--sh-border); border-radius: var(--sh-radius-md);
+}
+.dwrap .dtable tr:last-child td { border-bottom: 0; }
+
+/* The rows grid: the same one-line rule, with a per-cell cap instead of a
+   colgroup — its columns are the customer's and cannot be enumerated here. A
+   `max-width` on a `table-cell` is honoured (unlike on an inline element, which
+   is what broke the first version of these tables), so a 900-character text
+   column ellipsises at a readable width and the table scrolls sideways rather
+   than the row growing to fifteen lines. */
+.dtable--grid td, .dtable--grid th { max-width: 280px; }
+/* The editing row is the exception: its inputs need to be visible in full, so
+   the cell stops clipping and grows. */
+.dtable--grid tr.is-editing > td {
+  overflow: visible; white-space: normal; height: auto;
+  padding-top: 6px; padding-bottom: 6px; vertical-align: top;
+  background: var(--sh-surface-alt);
+}
+.dtable--grid tr.is-selected > td { background: var(--sh-accent-subtle); }
+.dtable--grid tr.is-selected > td:first-child { box-shadow: inset 3px 0 0 var(--sh-accent); }
+/* A sortable header is a full-cell button, so the hit area is the column rather
+   than the words — Supabase's grid behaves this way and it is also rule 5's
+   40×40 without a pseudo-element. */
+.dtable__sort {
+  display: flex; align-items: baseline; gap: 6px; width: 100%; height: 40px;
+  background: none; border: 0; padding: 0; cursor: pointer; color: inherit;
+  font: inherit; letter-spacing: inherit; text-align: left;
+}
+.dtable__sort:focus-visible { outline: 2px solid var(--sh-focus-ring); outline-offset: -2px; }
+.dtable__colname { color: var(--sh-text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+.dtable__coltype { font: var(--sh-code); font-size: 11px; color: var(--sh-text-muted); flex: none; }
+.dtable__arrow { margin-left: auto; color: var(--sh-accent); flex: none; }
+.dtable__sel { width: 44px; text-align: center; padding: 0; }
+
+/* ── the SQL editor (P7q) ─────────────────────────────────────────────────────
+   A column: tabs, toolbar, editor, results. The editor takes a fixed share of
+   the viewport rather than growing with its content, because a buffer that
+   pushes the results off the bottom as you type is a console you cannot iterate
+   in — the whole loop is write, run, read, adjust. */
+.sqlpage { display: flex; flex-direction: column; }
+
+/* Tabs. A strip, scrollable rather than wrapping: two rows of tabs move the
+   editor down as you open them, and a moving editor is worse than a strip you
+   scroll. */
+.sqltabs {
+  display: flex; align-items: stretch; gap: 2px;
+  overflow-x: auto; margin-bottom: var(--sh-space-8);
+  border-bottom: 1px solid var(--sh-border);
+}
+.sqltab { display: flex; align-items: center; flex: none; }
+.sqltab__pick {
+  display: flex; align-items: center; gap: 6px;
+  height: 34px; padding: 0 var(--sh-space-12);
+  background: none; border: 0; border-bottom: 2px solid transparent;
+  font: var(--sh-body-s); color: var(--sh-text-secondary); cursor: pointer;
+  white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis;
+}
+.sqltab.is-active .sqltab__pick {
+  color: var(--sh-text); border-bottom-color: var(--sh-accent);
+}
+.sqltab__pick:hover { color: var(--sh-text); }
+.sqltab__close, .sqltab__new {
+  width: 26px; height: 34px; display: grid; place-items: center;
+  background: none; border: 0; color: var(--sh-text-muted); cursor: pointer;
+  font-size: 15px; line-height: 1;
+}
+.sqltab__close:hover, .sqltab__new:hover { color: var(--sh-text); }
+/* Rule 5's floor on two small controls that sit in a 34px strip. */
+.sqltab__close, .sqltab__new { position: relative; }
+.sqltab__close::before, .sqltab__new::before {
+  content: ''; position: absolute; top: 50%; left: 50%;
+  width: 40px; height: 40px; transform: translate(-50%, -50%);
+}
+
+/* Toolbar. */
+.sqlbar {
+  display: flex; align-items: center; gap: var(--sh-space-8);
+  flex-wrap: wrap; margin-bottom: var(--sh-space-8);
+}
+.sqlbar__spacer { flex: 1 1 auto; }
+.sqlbar__claims { max-width: 280px; font: var(--sh-code); }
+.sqlbar__ro { min-width: auto; min-height: 32px; gap: 6px; }
+.sqlbar__rolabel { font: var(--sh-body-s); color: var(--sh-text-secondary); }
+
+/* The role chip. Quiet as `developer`, which is the normal state, and toned as
+   *information* when it is not — a non-admin role is a mode, not a fault, so it
+   takes neither the accent (which belongs to Run) nor the warning colour. */
+.sqlrole {
+  display: inline-flex; align-items: center; gap: 6px; height: 32px;
+  padding: 0 var(--sh-space-12); border-radius: var(--sh-radius-full);
+  border: 1px solid var(--sh-border-strong); background: var(--sh-surface);
+  font: var(--sh-body-s); color: var(--sh-text); cursor: pointer;
+}
+.sqlrole__label { color: var(--sh-text-muted); }
+.sqlrole__name { font: var(--sh-code); }
+.sqlrole--other {
+  background: var(--sh-info-bg); border-color: var(--sh-info); color: var(--sh-info);
+}
+.sqlrole--other .sqlrole__label { color: var(--sh-info); }
+
+/* The editor itself. A share of the viewport, floored so it is usable on a
+   phone and capped so the results are always on screen. */
+.sqled .cm-editor { height: clamp(160px, 32vh, 420px); }
+.sqled .cm-scroller { overflow: auto; }
+
+.sqlout { margin-top: var(--sh-space-16); }
+
+/* One statement's results. */
+.sqlres { margin-bottom: var(--sh-space-16); }
+.sqlres__head {
+  display: flex; align-items: center; gap: var(--sh-space-12);
+  flex-wrap: wrap; margin-bottom: var(--sh-space-8);
+}
+.sqlres__what { font: var(--sh-body-s); color: var(--sh-text-secondary); }
+/* The statement's ordinal, for a multi-statement run — small, so it reads as a
+   position rather than as a count. */
+.sqlres__n {
+  display: inline-grid; place-items: center; width: 18px; height: 18px;
+  margin-right: 6px; border-radius: var(--sh-radius-full);
+  background: var(--sh-surface-alt); color: var(--sh-text-muted);
+  font: var(--sh-caption);
+}
+.sqlres__none { font: var(--sh-body-s); color: var(--sh-text-secondary); margin: 0; }
+
+/* ── the table editor as a full-bleed workspace (P7r) ─────────────────────────
+   The reference is Supabase's table editor, and the difference from what this
+   page was is structural rather than cosmetic: there, **the grid is the page**.
+   It fills the viewport, a toolbar sits above it, a footer is pinned below it,
+   and neither scrolls with the rows. Here it was a 1120px centred column with
+   sections stacked under it, so a twelve-column table had a horizontal
+   scrollbar while a third of the window sat empty beside it.
+
+   Three consequences, each of which had to be built rather than styled:
+
+   - `.deck` replaces `.wrap` — no max-width, no bottom padding, and it owns the
+     height so its middle row can scroll while the frame stays put.
+   - The grid's scroll container is a *row of a grid* rather than a block in a
+     document, which is what lets `overflow: auto` on it mean "scroll the rows"
+     instead of "scroll the page".
+   - Structure and Indexes moved **off** this page. That is Supabase's answer to
+     the length problem I raised in my own review and then argued myself out of:
+     the grid is one question, and schema detail is another. */
+.deck {
+  height: calc(100vh - 48px);   /* the bar */
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+}
+/* Two panes: the table list, then the workspace. The list is a fixed 240px and
+   the workspace takes the rest — `minmax(0, 1fr)` so it can *shrink*, which a
+   bare `1fr` cannot (D-460). */
+.deck--split {
+  grid-template-columns: 240px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.deck__list {
+  border-right: 1px solid var(--sh-border);
+  overflow-y: auto; min-height: 0;
+  padding: var(--sh-space-12) var(--sh-space-8);
+}
+/**
+ * The workspace column: header, toolbar, rows, footer.
+ *
+ * **Flex, not grid, and that is the fix for a real bug.** This was
+ * `grid-template-rows: auto minmax(0, 1fr) auto` — three rows for what is
+ * actually five children, because `DataGrid` returns a fragment and its
+ * `.deckbar`, `.deckgrid` and `.deckfoot` become children *here*, after the
+ * page's own `.deckhead`. So the flexible row landed on the **toolbar**: a 40px
+ * control strip inside a row stretched to the full height, then the rows at
+ * content height below it. That is the empty band between the toolbar and the
+ * data in the screenshot that started this step, and no browser was needed to
+ * find it — only counting the children.
+ *
+ * A row template has to be kept in step with a child list that lives in two
+ * files. A flex column does not: the one element that should absorb the slack
+ * says so itself (`.deckgrid`), and inserting a child cannot silently hand the
+ * slack to the wrong one.
+ */
+.deck__main {
+  display: flex; flex-direction: column;
+  min-width: 0; min-height: 0;
+}
+.deckhead, .deckbar, .deckfoot, .deckwarn, .deckpanel { flex: 0 0 auto; }
+
+/* The workspace header: name, then the row of controls. Compact — 44px, so it
+   costs a row of data rather than three. */
+.deckhead {
+  display: flex; align-items: center; gap: var(--sh-space-8);
+  height: 44px; padding: 0 var(--sh-space-12);
+  border-bottom: 1px solid var(--sh-border); min-width: 0;
+}
+.deckhead__name {
+  font: var(--sh-body-m); font-weight: 600; color: var(--sh-text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.deckhead__schema { color: var(--sh-text-muted); font-weight: 400; }
+.deckhead__spacer { flex: 1 1 auto; }
+
+/* The toolbar. Every control is 28px and quiet — Supabase's grid toolbar is a
+   row of small outlined buttons, and the one loud thing is Insert. */
+.deckbar {
+  display: flex; align-items: center; gap: 6px;
+  height: 40px; padding: 0 var(--sh-space-12);
+  border-bottom: 1px solid var(--sh-border);
+  min-width: 0; overflow-x: auto;
+}
+.deckbar__spacer { flex: 1 1 auto; }
+.tbtn {
+  display: inline-flex; align-items: center; gap: 5px; flex: none;
+  height: 28px; padding: 0 9px; border-radius: var(--sh-radius-sm);
+  border: 1px solid var(--sh-border-strong); background: var(--sh-surface);
+  font: var(--sh-body-s); color: var(--sh-text-secondary); cursor: pointer;
+  white-space: nowrap;
+}
+.tbtn:hover { color: var(--sh-text); background: var(--sh-surface-alt); }
+.tbtn:disabled { opacity: .5; cursor: not-allowed; }
+.tbtn--on { background: var(--sh-accent-subtle); border-color: var(--sh-accent-border);
+  color: var(--sh-accent-on-subtle); }
+.tbtn--accent { background: var(--sh-accent); border-color: var(--sh-accent);
+  color: var(--sh-on-accent); font-weight: 500; }
+.tbtn--accent:hover { background: var(--sh-accent-hover); color: var(--sh-on-accent); }
+.tbtn--danger { color: var(--sh-danger); border-color: var(--sh-danger); }
+.tbtn__count {
+  display: inline-grid; place-items: center; min-width: 16px; height: 16px;
+  padding: 0 4px; border-radius: var(--sh-radius-full);
+  background: var(--sh-accent); color: var(--sh-on-accent); font: var(--sh-caption);
+}
+
+/* The scrolling middle. This is the only thing on the page that scrolls. */
+.deckgrid { flex: 1 1 auto; overflow: auto; min-height: 0; min-width: 0; }
+
+/**
+ * The RLS-disabled banner, across the table view.
+ *
+ * Required by the table-editor spec in those words — "Red banner across the
+ * table view" — and it had been reduced to a 70px toolbar button reading "RLS
+ * off". The button is a fine *affordance* and a poor *warning*: the sentence
+ * that matters is the consequence, and a developer who does not yet know what
+ * RLS is learns nothing from the acronym. This is the one state on the page
+ * where a row of vertical space is worth more than a row of data.
+ *
+ * Not `.sh-banner`, because that is a page-flow component with its own margins
+ * and this is a full-bleed strip in a flex column.
+ */
+.deckwarn {
+  display: flex; align-items: center; gap: var(--sh-space-12);
+  padding: var(--sh-space-8) var(--sh-space-12);
+  background: var(--sh-error-bg); border-bottom: 1px solid var(--sh-error);
+  color: var(--sh-error); font: var(--sh-body-s); min-width: 0;
+}
+.deckwarn__body { min-width: 0; flex: 1 1 auto; }
+.deckwarn__title { font-weight: 600; }
+.deckwarn__text { color: var(--sh-text); }
+
+/**
+ * A disclosure panel between the toolbar and the rows: structure, the object
+ * list, the policies.
+ *
+ * It replaced a modal, and the standard is what settles it — §3: "Dialogs are
+ * for decisions, panels are for detail. A panel that blocks the page to show
+ * read-only text is a dialog that forgot it had nothing to ask." The policy
+ * list asks nothing, so it must not block; and the reason to read it is usually
+ * to compare it against the rows, which a scrim hides.
+ *
+ * In flow rather than positioned, so it cannot be clipped by the scroll
+ * container beside it — `overflow: auto` clips absolutely-positioned
+ * descendants, which this codebase has already been bitten by once. It is
+ * capped and scrolls itself, so the grid keeps a usable share of the viewport.
+ */
+.deckpanel {
+  border-bottom: 1px solid var(--sh-border);
+  background: var(--sh-surface-alt);
+  max-height: 44vh; overflow: auto; min-width: 0;
+}
+.deckpanel__head {
+  display: flex; align-items: center; gap: var(--sh-space-8);
+  padding: var(--sh-space-8) var(--sh-space-12);
+  border-bottom: 1px solid var(--sh-border);
+  position: sticky; top: 0; background: var(--sh-surface-alt);
+}
+.deckpanel__title {
+  font: var(--sh-body-s); font-weight: 600; color: var(--sh-text); flex: 1 1 auto;
+}
+.deckpanel__body { padding: var(--sh-space-12); min-width: 0; }
+
+/* The pinned footer: paging on the left, counts on the right, 36px. */
+.deckfoot {
+  display: flex; align-items: center; gap: var(--sh-space-8);
+  height: 36px; padding: 0 var(--sh-space-12);
+  border-top: 1px solid var(--sh-border);
+  font: var(--sh-body-s); color: var(--sh-text-secondary);
+  min-width: 0; overflow-x: auto;
+}
+.deckfoot__spacer { flex: 1 1 auto; }
+.pgbtn {
+  width: 24px; height: 24px; display: grid; place-items: center; flex: none;
+  border: 1px solid var(--sh-border-strong); border-radius: var(--sh-radius-sm);
+  background: var(--sh-surface); color: var(--sh-text-secondary); cursor: pointer;
+  position: relative;
+}
+.pgbtn:disabled { opacity: .4; cursor: not-allowed; }
+/* Rule 5's 40px floor on a 24px control. */
+.pgbtn::before {
+  content: ''; position: absolute; top: 50%; left: 50%;
+  width: 40px; height: 40px; transform: translate(-50%, -50%);
+}
+
+/* ── the grid, at Supabase's density ──────────────────────────────────────────
+   24px rows and a 32px header. That is not a taste preference: at 40px a laptop
+   shows 14 rows, and at 24px it shows 24 — and the number of rows on screen is
+   the whole reason to look at a grid rather than a query result. */
+.dtable--dense th { height: 32px; padding: 0 var(--sh-space-8); }
+.dtable--dense td { height: 26px; padding: 0 var(--sh-space-8); font: var(--sh-code); }
+.dtable--dense .dtable__sort { height: 32px; }
+/* The header cell's contents on one line: name, then type in the muted mono,
+   then the sort arrow. */
+.dtable--dense .dtable__colname { font: var(--sh-body-s); font-weight: 500; }
+.dtable--dense .dtable__coltype { font: var(--sh-code); font-size: 10px; }
+/* A sticky first column keeps the key visible while the rest scrolls, which is
+   what makes a forty-column table navigable rather than merely scrollable. */
+.dtable--dense th.dtable__sel, .dtable--dense td.dtable__sel {
+  position: sticky; left: 0; z-index: 2; background: var(--sh-bg);
+}
+.dtable--dense thead th.dtable__sel { z-index: 3; background: var(--sh-surface-alt); }

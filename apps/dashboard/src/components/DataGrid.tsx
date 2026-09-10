@@ -91,6 +91,40 @@ export function DataGrid(props: {
   onDeleteRows?: (rows: Record<string, unknown>[]) => void;
   /** The key of a row just inserted, so it can be found after the refetch. */
   newRowKey?: string | null;
+  /** Re-read this page. */
+  onRefresh?: () => void;
+  /**
+   * The RLS state as a toolbar control — the *affordance*, not the warning.
+   *
+   * An earlier version of this comment argued that a banner "says read this
+   * before the rows, and the rows are what the user came for", and used that to
+   * replace the banner entirely. Half right. For an enabled table the toolbar
+   * chip is the correct weight: `RLS · 3 policies` is a status, and status
+   * belongs beside the data it governs. For a **disabled** table it was wrong,
+   * and the spec says so in its own words — "Red banner across the table view" —
+   * because the fact that matters there is not the acronym but the consequence,
+   * and `RLS off` in a 70px button states neither. The banner is the page's job
+   * (`deckwarn`), since only the page knows the table is ours to fix.
+   */
+  rls?: { enabled: boolean; policyCount: number; active: boolean; onOpen: () => void };
+  /**
+   * The other disclosure buttons — structure, indexes and constraints.
+   *
+   * Generic rather than two more named props, because these are the same
+   * control: a toggle that opens `panel` below the toolbar. The IA puts
+   * structure on this page (`/[schema]/[table] → grid + structure + RLS panel`)
+   * and a disclosure is how it fits beside a full-height grid.
+   */
+  tools?: { label: string; active: boolean; onToggle: () => void }[];
+  /**
+   * Whatever a disclosure button opened, rendered between the toolbar and the
+   * rows.
+   *
+   * A prop rather than the page rendering it, because "between the toolbar and
+   * the rows" is a position only this component can offer: it emits both, and a
+   * sibling in the page can only land before or after the pair.
+   */
+  panel?: React.ReactNode;
 }) {
   const [showSql, setShowSql] = useState(false);
   const { columns, rows, page, pageSize } = props;
@@ -181,38 +215,83 @@ export function DataGrid(props: {
   const maybeMore = (rows?.length ?? 0) === pageSize;
 
   return (
-    <section className="section">
-      <div className="section__head">
-        <h2 className="section__title">Rows</h2>
-        <p className="section__note">
-          {rowCount(props.rowsEstimate, props.exactCount)}
-          {props.exactCount === null ? (
-            <>
-              {' · '}
-              <button type="button" className="sh-linkbtn" onClick={props.onCountExactly}>
-                count exactly
-              </button>
-              {/* The cost, named. An estimate you cannot escape is worse than one
-                  you can, and a count that scans a production table without
-                  saying so is worse than both. */}
-              <span className="sh-help"> (scans the table)</span>
-            </>
-          ) : null}
-        </p>
+    <>
+      {/**
+        * The toolbar: outside the scroll container, so it stays put while the
+        * rows move.
+        *
+        * That is the difference between a control strip and a heading, and it is
+        * why this replaced a `.section__head`: a heading may scroll away, and a
+        * control you might need on row 400 may not. The reference — Supabase's
+        * grid — puts sort, RLS, the role and Insert in one 40px row and never
+        * moves it.
+        */}
+      <div className="deckbar">
+        <button type="button" className={`tbtn${props.sort ? ' tbtn--on' : ''}`}
+                onClick={() => { if (props.sort) props.onSort(props.sort.column); }}
+                disabled={!props.sort}
+                title={props.sort
+                  ? `Sorted by ${props.sort.column} ${props.sort.direction} — click to reverse`
+                  : 'Click a column header to sort'}>
+          {props.sort ? `Sorted by ${props.sort.column}` : 'Sort'}
+        </button>
+
+        {props.rls ? (
+          <button type="button" aria-expanded={props.rls.active}
+                  className={`tbtn${props.rls.enabled ? '' : ' tbtn--danger'}`
+                    + `${props.rls.active ? ' tbtn--on' : ''}`}
+                  onClick={props.rls.onOpen}>
+            {props.rls.enabled
+              ? `RLS · ${props.rls.policyCount} ${props.rls.policyCount === 1 ? 'policy' : 'policies'}`
+              : 'RLS off'}
+          </button>
+        ) : null}
+
+        {(props.tools ?? []).map((t) => (
+          <button key={t.label} type="button" aria-expanded={t.active}
+                  className={`tbtn${t.active ? ' tbtn--on' : ''}`}
+                  onClick={t.onToggle}>
+            {t.label}
+          </button>
+        ))}
+
+        <span className="deckbar__spacer" />
+
+        {selectable && selected.size > 0 ? (
+          <>
+            <span className="dtable__muted">{selected.size} selected</span>
+            <button type="button" className="tbtn"
+                    onClick={() => setSelected(new Set())}>
+              Clear
+            </button>
+            <button type="button" className="tbtn tbtn--danger"
+                    onClick={() => props.onDeleteRows!(
+                      [...selected].sort((a, b) => a - b)
+                        .map((i) => rows![i]!).filter(Boolean))}>
+              Delete {selected.size}
+            </button>
+          </>
+        ) : null}
+
+        {props.onRefresh ? (
+          <button type="button" className="tbtn" onClick={props.onRefresh}
+                  title="Re-read this page of rows">
+            Refresh
+          </button>
+        ) : null}
         {props.onInsertRow ? (
-          /* Secondary, not accent: this page's one accent belongs to "Enable
-             RLS" when RLS is off and "Add column" otherwise, and §5 rule 1
-             allows one per view. */
-          <button type="button" className="sh-btn sh-btn--sm sh-btn--secondary"
-                  onClick={props.onInsertRow}>
-            Insert row
+          <button type="button" className="tbtn tbtn--accent" onClick={props.onInsertRow}>
+            + Insert
           </button>
         ) : null}
       </div>
 
+      {props.panel}
+
+      <div className="deckgrid">
       {props.primaryKey.length === 0 ? (
         <div className="sh-banner sh-banner--warning" role="status"
-             style={{ marginBottom: 'var(--sh-space-12)' }}>
+             style={{ margin: 'var(--sh-space-12)' }}>
           <div className="sh-banner__body">
             <div className="sh-banner__title">No primary key</div>
             <div className="sh-banner__text">
@@ -277,42 +356,17 @@ export function DataGrid(props: {
         // with forty columns is wider than any window, and squeezing it is what
         // makes a cell unreadable. Scoped to this container so the *page* never
         // scrolls (D-460).
-        <div>
-          {/**
-            * The selection bar, in the flow above the grid rather than floating
-            * over it. A floating bar covers rows, and the rows it covers are the
-            * ones next to the selection — exactly what someone is checking
-            * before they delete.
-            */}
-          {selectable && selected.size > 0 ? (
-            <div className="gridbar" role="status">
-              <span>
-                {selected.size} {selected.size === 1 ? 'row' : 'rows'} selected
-              </span>
-              <span className="gridbar__spacer" />
-              <button type="button" className="sh-linkbtn"
-                      onClick={() => setSelected(new Set())}>
-                Clear
-              </button>
-              <button type="button" className="sh-btn sh-btn--sm sh-btn--danger"
-                      onClick={() => props.onDeleteRows!(
-                        [...selected].sort((a, b) => a - b)
-                          .map((i) => rows![i]!).filter(Boolean))}>
-                Delete {selected.size === 1 ? 'row' : `${selected.size} rows`}…
-              </button>
-            </div>
-          ) : null}
-
+        <>
           {/* The grid is the one place in this app that may scroll sideways: a
               table with forty columns is wider than any window, and squeezing it
               is what makes a cell unreadable. Scoped to this container so the
               *page* never scrolls (D-460). */}
-          <div className="gridwrap">
-          <table className="sh-table grid">
+          <div className="dwrap">
+          <table className="dtable dtable--grid grid">
             <thead>
               <tr>
                 {selectable ? (
-                  <th scope="col" className="grid__select">
+                  <th scope="col" className="dtable__sel">
                     {/* Select-all across *this page*, which is what it can
                         honestly do — it has no other rows to select. The
                         indeterminate state is the third one the design system's
@@ -328,19 +382,18 @@ export function DataGrid(props: {
                 {columns.map((c) => {
                   const active = props.sort?.column === c.name;
                   return (
-                    <th scope="col" key={c.name}>
-                      <button type="button" className="grid__sort"
+                    <th scope="col" key={c.name} title={`${c.name} · ${c.type}`}>
+                      <button type="button" className="dtable__sort"
                               onClick={() => props.onSort(c.name)}
                               aria-label={`Sort by ${c.name}`}>
-                        <span className="grid__col">{c.name}</span>
-                        {/* The type and nullability live in the header because
-                            they are what a developer needs while reading the
-                            values, not in a structure tab away from them. */}
-                        <span className="grid__type">
-                          {c.type}{c.nullable ? '' : ' · not null'}
-                          {c.is_primary_key ? ' · pk' : ''}
-                        </span>
-                        <span className="grid__arrow" aria-hidden="true">
+                        <span className="dtable__colname">{c.name}</span>
+                        {/* The type stays in the header because it is what a
+                            developer needs while reading the values — but on one
+                            line now. Nullability and the key moved to the
+                            Structure section, which has room for them: three
+                            annotations in a 120px header is what wrapped it. */}
+                        <span className="dtable__coltype">{c.type}</span>
+                        <span className="dtable__arrow" aria-hidden="true">
                           {active ? (props.sort!.direction === 'asc' ? '↑' : '↓') : ''}
                         </span>
                       </button>
@@ -348,7 +401,7 @@ export function DataGrid(props: {
                   );
                 })}
                 {editable ? (
-                  <th scope="col" className="td-actions">
+                  <th scope="col" className="dtable__act">
                     <span className="sh-sr">Edit</span>
                   </th>
                 ) : null}
@@ -368,7 +421,7 @@ export function DataGrid(props: {
                         isEditing ? 'is-editing ' : ''}${isNew ? 'is-new' : ''}`.trim()
                         || undefined}>
                     {selectable ? (
-                      <td className="grid__select">
+                      <td className="dtable__sel">
                         <Checkbox
                           label={`Select row ${page * pageSize + i + 1}`}
                           checked={isSelected}
@@ -429,7 +482,7 @@ export function DataGrid(props: {
                       </td>
                     ))}
                     {editable ? (
-                      <td className="td-actions">
+                      <td className="dtable__act">
                         {isEditing ? (
                           <span className="grid__rowactions">
                             <button type="button"
@@ -459,29 +512,42 @@ export function DataGrid(props: {
             </tbody>
           </table>
           </div>
-        </div>
+        </>
       )}
+      </div>
 
-      <div className="tablecount">
+      {/**
+        * Pinned below the rows: paging left, counts right.
+        *
+        * The counts say *which* number they are, because `~250` and `250` mean
+        * different things and showing one as the other invents precision (Q19).
+        * "Count" runs `count(*)` and says so on hover — an estimate you cannot
+        * escape is worse than one you can, and a scan that happens without
+        * warning is worse than both.
+        */}
+      <div className="deckfoot">
+        <button type="button" className="pgbtn" aria-label="Previous page"
+                disabled={page === 0} onClick={() => props.onPage(page - 1)}>
+          <span aria-hidden="true">&lsaquo;</span>
+        </button>
+        <span>Page {page + 1}</span>
+        <button type="button" className="pgbtn" aria-label="Next page"
+                disabled={!maybeMore} onClick={() => props.onPage(page + 1)}>
+          <span aria-hidden="true">&rsaquo;</span>
+        </button>
+        <span className="dtable__muted">{pageSize} rows</span>
+        <span className="deckfoot__spacer" />
         <span>
-          {rows === null || rows.length === 0
-            ? ' '
-            /* §4: "1–20 of 143 is a sentence; twenty rows and no count is a lie
-               of omission." The total is an estimate, so the sentence says so
-               rather than pretending to a precision it does not have. */
-            : `${from.toLocaleString()}–${to.toLocaleString()} of `
-              + rowCount(props.rowsEstimate, props.exactCount)}
+          {rows !== null && rows.length > 0
+            ? `${from.toLocaleString()}–${to.toLocaleString()} of ` : ''}
+          {rowCount(props.rowsEstimate, props.exactCount)}
         </span>
-        <span className="sh-row sh-row--tight">
-          <button type="button" className="sh-btn sh-btn--sm sh-btn--secondary"
-                  disabled={page === 0} onClick={() => props.onPage(page - 1)}>
-            Previous
+        {props.exactCount === null ? (
+          <button type="button" className="tbtn" onClick={props.onCountExactly}
+                  title="Runs count(*), which scans the table">
+            Count exactly
           </button>
-          <button type="button" className="sh-btn sh-btn--sm sh-btn--secondary"
-                  disabled={!maybeMore} onClick={() => props.onPage(page + 1)}>
-            Next
-          </button>
-        </span>
+        ) : null}
       </div>
 
       {/**
@@ -500,6 +566,6 @@ export function DataGrid(props: {
           <div className="sh-code"><pre>{props.executedSql}</pre></div>
         </details>
       ) : null}
-    </section>
+    </>
   );
 }

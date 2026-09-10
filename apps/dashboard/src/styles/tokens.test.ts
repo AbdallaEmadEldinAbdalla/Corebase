@@ -44,8 +44,17 @@ const CONSUMERS = [
   ...readdirSync(STYLES)
     .filter((f) => f.endsWith('.css') && f !== 'tokens.css')
     .map((f) => ({ file: f, css: read(f) })),
+  /**
+   * `.ts` as well as `.tsx`, which it was not until the SQL editor arrived.
+   *
+   * CodeMirror is themed with a **JavaScript object** of CSS properties, so a
+   * theme is code rather than a stylesheet — and a theme module written as `.ts`
+   * sat outside this guard entirely. Nothing would have objected to
+   * `backgroundColor: '#1e1e1e'` in it. The rule was always "every colour is a
+   * role token"; only its reach was accidental.
+   */
   ...walk(SRC)
-    .filter((f) => f.endsWith('.tsx') && !f.includes('.test.'))
+    .filter((f) => (f.endsWith('.tsx') || f.endsWith('.ts')) && !f.includes('.test.'))
     .map((f) => ({ file: f.slice(SRC.length + 1), css: readFileSync(f, 'utf8') })),
 ];
 
@@ -404,4 +413,157 @@ describe('D-178 — no stylesheet reaches past a role token to a ramp step', () 
       ).toEqual([]);
     });
   }
+});
+
+describe('the CodeMirror theme (D-178 reaches code CodeMirror draws)', () => {
+  const editor = () => readFileSync(join(SRC, 'components/SqlEditor.tsx'), 'utf8');
+
+  /**
+   * The source with its prose removed.
+   *
+   * Needed because the file *explains* that `indentWithTab` is deliberately not
+   * used, and an assertion that the string is absent matched the explanation.
+   * The same trap the D-178 colour guard hit and the same one
+   * `introspect.test.ts` documents: a rule written against the file rather than
+   * against the code will find the comment that describes the rule. Third
+   * occurrence; the pattern is now a habit rather than a surprise.
+   */
+  const code = () => editor()
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+
+  /**
+   * The failure mode for a theme is an **omission**, which the colour-literal
+   * check cannot see: forgetting `.cm-selectionBackground` does not add a wrong
+   * colour to this repo, it inherits CodeMirror's — a cool blue selection in a
+   * warm clay palette, with nothing in the diff to notice.
+   *
+   * So each surface CM6 would otherwise pick for itself is asserted by name.
+   * The list is the interesting part of the review: it is every element that has
+   * a default, not every element that happened to look wrong.
+   */
+  const MUST_THEME = [
+    // The editor's own box and its focus ring.
+    "'&':", '&.cm-focused',
+    // Text, caret and the drop cursor, which is a separate element.
+    '.cm-content', '.cm-cursor, .cm-dropCursor',
+    // Selection — CM6 draws its own *and* the native one shows through.
+    '.cm-selectionBackground',
+    '.cm-gutters', '.cm-activeLine', '.cm-activeLineGutter',
+    '.cm-matchingBracket',
+    // The completion popup, which CM6 positions as a floating layer.
+    '.cm-tooltip', '.cm-completionDetail',
+    // The diagnostic underline and gutter marker — the whole point of wiring
+    // Postgres's `position` through to the client.
+    '.cm-lintRange-error', '.cm-lint-marker-error',
+    '.cm-placeholder', '.cm-panels', '.cm-specialChar',
+  ];
+
+  it('BYPASS: names every surface CodeMirror would otherwise colour itself', () => {
+    const src = editor();
+    for (const selector of MUST_THEME) {
+      expect(src.includes(selector),
+        `SqlEditor.tsx does not theme ${selector}, so CodeMirror's own colour `
+        + `shows through — a cool default in a warm palette, invisible in a diff.`,
+      ).toBe(true);
+    }
+  });
+
+  it('themes the syntax tags from the four code role tokens', () => {
+    // Four, not twelve: colour is how the eye finds the exception, so the
+    // exception has to stay rare. The same argument `sql-highlight.ts` makes.
+    const src = editor();
+    for (const token of [
+      '--sh-code-keyword', '--sh-code-string', '--sh-code-comment', '--sh-code-text',
+    ]) expect(src, token).toContain(token);
+  });
+
+  it('BYPASS: does not bind Tab to indent, which would trap a keyboard user', () => {
+    /**
+     * `indentWithTab` is opt-in in CM6 and must stay unused: bound, Tab indents
+     * instead of moving focus, and the editor becomes reachable but not
+     * escapable — §2's "no pointer-only affordances" failing in the other
+     * direction, which only a keyboard user ever discovers.
+     */
+    expect(code()).not.toContain('indentWithTab');
+  });
+});
+
+/**
+ * The table editor's workspace, as three rules that were each broken once.
+ *
+ * They live here rather than in a component test because all three are
+ * *absences* — a row template that is not there, a sentence that is, a component
+ * that is still referenced — and an absence is what a rendering test is worst at
+ * proving and a source read is best at.
+ */
+describe('the table editor workspace (P7r)', () => {
+  const page = () => readFileSync(
+    join(SRC, 'app/project/[ref]/table-editor/[schema]/[table]/page.tsx'), 'utf8');
+  const shell = () => read('shell.css');
+
+  it('BYPASS: .deck__main does not size its children by counting them', () => {
+    /**
+     * It was `grid-template-rows: auto minmax(0, 1fr) auto` — three rows for
+     * five children, because `DataGrid` returns a fragment and its toolbar,
+     * scroller and footer land here as siblings of the page's own header. The
+     * flexible row therefore fell on the **toolbar**, which is why a 40px
+     * control strip sat above an empty band with the rows at content height
+     * below it. A flex column cannot be knocked out of step by a new child.
+     */
+    const css = shell();
+    const rule = css.slice(css.indexOf('.deck__main'), css.indexOf('.deck__main') + 240);
+    expect(rule, 'a row template here has to be kept in step with two files')
+      .not.toContain('grid-template-rows');
+    expect(rule).toContain('flex-direction: column');
+    // And the element that should absorb the slack has to say so itself.
+    expect(css).toMatch(/\.deckgrid \{[^}]*flex: 1 1 auto/);
+  });
+
+  it('BYPASS: an RLS-disabled table states the consequence, not the acronym', () => {
+    /**
+     * The table-editor spec's own words are "Red banner across the table view:
+     * Row Level Security is disabled — anyone with the anon key can read and
+     * write every row of this table through the API." A redesign reduced it to a
+     * toolbar button reading `RLS off`, which names the feature and not the
+     * risk. The sentence is the content of the warning, so the sentence is what
+     * is asserted.
+     */
+    const src = page();
+    expect(src).toContain('Row Level Security is disabled');
+    expect(src).toMatch(/anyone with the anon key can read and write every row/i);
+    expect(shell()).toContain('.deckwarn');
+  });
+
+  it('BYPASS: structure and the object list are reachable from the table page', () => {
+    /**
+     * Both were removed on the stated grounds that "the reference puts schema
+     * detail under a Database section" — true of Supabase, false of this
+     * product, whose IA has no such page and puts them here
+     * (`/[schema]/[table] → grid + structure + RLS panel`). They became
+     * reachable from nowhere while their components stayed in the tree, which no
+     * typecheck and no test noticed.
+     */
+    const src = page();
+    for (const component of ['Structure', 'Constraints', 'RlsPanel']) {
+      expect(src.includes(`<${component}`),
+        `${component} is not rendered by the table page, so it is reachable from `
+        + `nowhere — the IA puts it on this page.`).toBe(true);
+    }
+  });
+
+  it('BYPASS: read-only detail is a panel, never a blocking dialog', () => {
+    /**
+     * §3: "Dialogs are for decisions, panels are for detail. A panel that blocks
+     * the page to show read-only text is a dialog that forgot it had nothing to
+     * ask." The RLS policy list asks nothing, and the reason to read it is to
+     * compare it with the rows a scrim would hide.
+     */
+    const src = page();
+    const rls = src.indexOf('RlsPanel table=');
+    expect(rls).toBeGreaterThan(-1);
+    const around = src.slice(Math.max(0, rls - 1400), rls);
+    expect(around, 'the RLS panel is inside a modal again')
+      .not.toContain('aria-modal');
+  });
 });

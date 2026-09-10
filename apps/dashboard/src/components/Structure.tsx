@@ -80,48 +80,57 @@ export function Structure(props: {
         </div>
       ) : null}
 
-      <div className="tablewrap">
-        <table className="sh-table structure">
+      <div className="dwrap">
+        {/* One line per cell, and the widths say which column gives way. Every
+            cell carries its full value on `title`, because ellipsising without
+            a way to read the whole thing is hiding it. */}
+        <table className="dtable">
+          <colgroup>
+            <col style={{ width: '30%', minWidth: 150 }} />
+            <col style={{ width: '22%', minWidth: 130 }} />
+            <col style={{ width: 90 }} />
+            <col />
+            {onVerb ? <col style={{ width: 48 }} /> : null}
+          </colgroup>
           <thead>
             <tr>
               <th scope="col">Name</th>
               <th scope="col">Type</th>
               <th scope="col">Nullable</th>
               <th scope="col">Default</th>
-              {onVerb ? <th scope="col" className="td-actions"><span className="sh-sr">Actions</span></th> : null}
+              {onVerb ? (
+                <th scope="col" className="dtable__act">
+                  <span className="sh-sr">Actions</span>
+                </th>
+              ) : null}
             </tr>
           </thead>
           <tbody>
             {columns.map((c) => (
               <tr key={c.name}>
-                <td>
-                  <span className="structure__name">{c.name}</span>
-                  <span className="structure__flags">
-                    {c.is_primary_key ? <span className="tablelist__tag">pk</span> : null}
-                    {c.is_identity ? <span className="tablelist__tag">identity</span> : null}
-                  </span>
-                  {c.comment ? (
-                    <div className="sh-help" style={{ margin: 0 }}>{c.comment}</div>
-                  ) : null}
+                <td className="dtable__mono" title={c.comment ?? c.name}>
+                  {c.name}
+                  {c.is_primary_key ? <span className="dtable__tag">pk</span> : null}
+                  {c.is_identity ? <span className="dtable__tag">identity</span> : null}
                 </td>
-                <td><span className="structure__type">{c.type}</span></td>
+                <td className="dtable__mono dtable__muted" title={c.type}>{c.type}</td>
                 {/* The word, not a tick. State is never colour or shape alone
                     (§5 rule 2), and "no" beside a nullable column reads wrong
                     either way round — so the cell says which it is. */}
-                <td>{c.nullable ? 'yes' : 'no'}</td>
-                <td>
+                <td className="dtable__muted">{c.nullable ? 'yes' : 'no'}</td>
+                <td className="dtable__mono dtable__muted" title={c.default ?? 'none'}>
                   {c.default === null
                     ? <span className="grid__null">none</span>
-                    : <span className="structure__default" title={c.default}>{c.default}</span>}
+                    : c.default}
                 </td>
                 {onVerb ? (
-                  <td className="td-actions">
+                  <td className="dtable__act">
                     <Menu label={`Change column ${c.name}`} align="right"
                           trigger={({ toggle, ref, open }) => (
                             <button ref={ref} type="button" className="rowbtn"
                                     aria-expanded={open} aria-haspopup="menu"
                                     onClick={toggle}>
-                              <span aria-hidden="true">⋯</span>
+                              <span aria-hidden="true">&#8943;</span>
                               <span className="sh-sr">Change column {c.name}</span>
                             </button>
                           )}>

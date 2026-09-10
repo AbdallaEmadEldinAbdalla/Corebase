@@ -65,6 +65,9 @@ export function AppShell({ children, orgSlug, projectRef, nav }: {
       m: () => { if (orgSlug) router.push(`/org/${orgSlug}/members`); },
       o: () => { if (projectRef) router.push(`/project/${projectRef}`); },
       t: () => { if (projectRef) router.push(`/project/${projectRef}/table-editor`); },
+      // `g q` for the query console. Not `g s` — that is settings, and a
+      // shortcut that took someone to the wrong page would be worse than none.
+      q: () => { if (projectRef) router.push(`/project/${projectRef}/sql`); },
       c: () => { if (projectRef) router.push(`/project/${projectRef}/connect`); },
       k: () => { if (projectRef) router.push(`/project/${projectRef}/keys`); },
       u: () => { if (projectRef) router.push(`/project/${projectRef}/usage`); },

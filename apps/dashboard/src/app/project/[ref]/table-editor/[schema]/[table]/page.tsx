@@ -5,9 +5,9 @@ import { useIntrospection, useRunSql } from '../../../../../../lib/queries.ts';
 import { pageSql, countSql } from '../../../../../../lib/grid-sql.ts';
 import { ErrorSurface } from '../../../../../../components/ErrorSurface.tsx';
 import { RlsPanel } from '../../../../../../components/RlsPanel.tsx';
-import { DataGrid } from '../../../../../../components/DataGrid.tsx';
 import { Structure, type ColumnVerb } from '../../../../../../components/Structure.tsx';
 import { Constraints } from '../../../../../../components/Constraints.tsx';
+import { DataGrid } from '../../../../../../components/DataGrid.tsx';
 import { TableOps, type Op } from '../../../../../../components/TableOps.tsx';
 import { Menu, MenuItem } from '../../../../../../components/Menu.tsx';
 import type { IntrospectionColumn } from '../../../../../../lib/api.ts';
@@ -19,11 +19,26 @@ const PAGE_SIZE = 100;
  * One table: its rows, its columns, its row-level security, and the operations
  * that change them.
  *
- * Three things on one page rather than three tabs, because the IA says so
- * (`/[schema]/[table] → grid + structure + RLS panel`) and because the question a
- * developer actually arrives with is usually a join of them — "why does my API
- * return nothing from this table" is answered by the policy list beside the rows,
- * not by a tab away from them.
+ * Three things on one page, because the IA says so (`/[schema]/[table] → grid +
+ * structure + RLS panel`) and because the question a developer actually arrives
+ * with is usually a join of them — "why does my API return nothing from this
+ * table" is answered by the policy list beside the rows, not a tab away.
+ *
+ * ## Disclosures, after one wrong turn in each direction
+ *
+ * The read path stacked all three as always-open sections, which made the page
+ * four screens tall and the grid a strip. The redesign then deleted structure and
+ * the object list outright and put RLS behind a blocking modal, on the stated
+ * grounds that "the reference puts schema detail under a Database section" —
+ * true of Supabase and **false of this product**, whose IA has no such page.
+ * `/database` here is connection info, roles, extensions and pooling. So two
+ * capabilities became reachable from nowhere, on a reason that was not checked
+ * against the document it claimed to be quoting.
+ *
+ * They are disclosures now: one open at a time, in flow between the toolbar and
+ * the rows, so the grid keeps the height the redesign was for and §3's rule
+ * holds — "dialogs are for decisions, panels are for detail", and a policy list
+ * asks nothing.
  *
  * ## Where the verbs live, and why not on the grid
  *
@@ -36,12 +51,11 @@ const PAGE_SIZE = 100;
  *
  * ## The one accent
  *
- * §5 rule 1 allows one primary action per view, and this page has two candidates.
- * When RLS is off, the accent belongs to the banner that fixes it — that is a
- * table the anon key can read and write in full, and it is the most important
- * thing on the screen. Otherwise it belongs to "Add column". The decision is made
- * here rather than in either component, because "per view" is a property of the
- * page.
+ * §5 rule 1 allows one primary action per view. The grid's `+ Insert` holds the
+ * accent; the RLS-disabled banner's fix is a `danger` control, which is a
+ * different colour with a different meaning, so the two do not compete. The
+ * toolbar's disclosures are quiet by design — a toggle that reveals text is not
+ * an action.
  */
 export default function TablePage(
   { params }: { params: Promise<{ ref: string; schema: string; table: string }> },
@@ -70,6 +84,14 @@ export default function TablePage(
    * "where did it go" without moving anything.
    */
   const [newRowKey, setNewRowKey] = useState<string | null>(null);
+  /**
+   * Which disclosure is open, or none. One at a time: two panels stacked above
+   * the grid would leave the rows a strip, and the reason to open one is to read
+   * it *against* the rows.
+   */
+  const [panel, setPanel] = useState<'rls' | 'structure' | 'objects' | null>(null);
+  const toggle = (which: 'rls' | 'structure' | 'objects') =>
+    setPanel((p) => (p === which ? null : which));
 
   const meta = intro.data?.tables.find((t) => t.schema === schema && t.name === table);
   const columns = useMemo(
@@ -261,12 +283,12 @@ export default function TablePage(
   }
 
   const facts = { schema, table, rowsEstimate: meta.rows_estimate };
+  const rlsIsOff = isTable && !meta.rls_enabled;
+
+  /** Why the column and object verbs are absent, when they are (D-462). */
   const readOnlyReason = editable ? undefined
     : !isTable ? `a ${meta.kind.replace('_', ' ')} has no columns of its own to change`
       : `owned by ${meta.owner}, so this editor cannot change it`;
-
-  /** §5 rule 1: the accent goes to the security hole when there is one. */
-  const rlsIsOff = isTable && !meta.rls_enabled;
 
   const openColumnOp = (verb: ColumnVerb, column: IntrospectionColumn) => {
     const MAP: Record<ColumnVerb, Op['kind']> = {
@@ -278,22 +300,24 @@ export default function TablePage(
   };
 
   return (
-    <>
-      <div className="head">
-        <div style={{ minWidth: 0 }}>
-          <h1 className="head__title" style={{ font: 'var(--sh-heading-2)' }}>
-            <span style={{ color: 'var(--sh-text-muted)' }}>{schema}.</span>{table}
-          </h1>
-          <p className="head__sub">
-            {meta.kind === 'table' ? 'Table' : meta.kind.replace('_', ' ')}
-            {' · owned by '}{meta.owner}
-            {meta.comment ? ` · ${meta.comment}` : ''}
-          </p>
-        </div>
+    <div className="deck__main">
+      <div className="deckhead">
+        <span className="deckhead__name">
+          <span className="deckhead__schema">{schema}.</span>{table}
+        </span>
+        {meta.kind !== 'table' ? (
+          <span className="dtable__tag">{meta.kind.replace('_', ' ')}</span>
+        ) : null}
+        {!isOurs ? (
+          <span className="dtable__tag" title={`owned by ${meta.owner}`}>
+            {meta.owner}
+          </span>
+        ) : null}
+        <span className="deckhead__spacer" />
         {editable ? (
           <Menu label={`Change the table ${table}`} align="right"
                 trigger={({ toggle, ref: r, open }) => (
-                  <button ref={r} type="button" className="sh-btn sh-btn--secondary"
+                  <button ref={r} type="button" className="tbtn"
                           aria-expanded={open} aria-haspopup="menu" onClick={toggle}>
                     Change table
                   </button>
@@ -309,10 +333,7 @@ export default function TablePage(
                 </MenuItem>
                 <MenuItem onSelect={() => { close(); setOp(
                   { kind: 'add_foreign_key', candidates: columns,
-                    // Every readable column in the database, so the picker can
-                    // offer any table — introspection already carries them.
-                    targets: intro.data?.columns ?? [],
-                    indexedColumns }); }}>
+                    targets: intro.data?.columns ?? [], indexedColumns }); }}>
                   New foreign key…
                 </MenuItem>
                 <MenuItem onSelect={() => { close(); setOp(
@@ -331,19 +352,6 @@ export default function TablePage(
                     Enable Row Level Security
                   </MenuItem>
                 ) : null}
-                <div className="sh-menu__sep" />
-                {/**
-                  * Both directions, offered unconditionally, because the page
-                  * cannot tell which is current: introspection reports policies
-                  * and not *grants*, and `anon`'s table grant is the thing that
-                  * decides whether an anon policy does anything at all (D-108).
-                  *
-                  * A toggle would have to claim a state it does not know. Two
-                  * verbs claim nothing, and the preview shows exactly what each
-                  * one runs — which is the whole point of this editor. The
-                  * toggle D-108 describes needs grants in the introspection
-                  * payload; recorded as a gap rather than faked.
-                  */}
                 <MenuItem onSelect={() => { close(); setOp({ kind: 'grant_anon' }); }}>
                   Allow anonymous read…
                 </MenuItem>
@@ -361,15 +369,36 @@ export default function TablePage(
         ) : null}
       </div>
 
-      {/* Spread conditionally, not `: undefined` — `exactOptionalPropertyTypes`
-          makes an explicit undefined a different thing from an absent key. */}
-      <RlsPanel table={meta} policies={policies}
-                {...(rlsIsOff && editable
-                  ? { onEnable: () => setOp({ kind: 'enable_rls' }) } : {})}
-                {...(editable ? {
-                  onGrantAnon: () => setOp({ kind: 'grant_anon' }),
-                  onRevokeAnon: () => setOp({ kind: 'revoke_anon' }),
-                } : {})} />
+      {/**
+        * The RLS-disabled banner, in the spec's own words and for its reason.
+        *
+        * "Red banner across the table view: Row Level Security is disabled —
+        * anyone with the anon key can read and write every row of this table
+        * through the API." The redesign had reduced this to a toolbar button
+        * reading `RLS off`, which states the acronym and not the consequence —
+        * and the consequence is the entire content of the warning.
+        *
+        * `role="alert"` rather than `status`: this is not a state the user
+        * asked about, it is one they need told. Absent for a view (`isTable`),
+        * which has no row security of its own to disable.
+        */}
+      {rlsIsOff ? (
+        <div className="deckwarn" role="alert">
+          <div className="deckwarn__body">
+            <div className="deckwarn__title">Row Level Security is disabled</div>
+            <div className="deckwarn__text">
+              Anyone with the anon key can read and write every row of this table
+              through the API.
+            </div>
+          </div>
+          {editable ? (
+            <button type="button" className="sh-btn sh-btn--sm sh-btn--danger"
+                    onClick={() => setOp({ kind: 'enable_rls' })}>
+              Enable it
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       <DataGrid
         columns={columns}
@@ -400,58 +429,84 @@ export default function TablePage(
         }}
         primaryKey={primaryKey}
         executedSql={ranSql}
+        onRefresh={() => { lastKey.current = null; setRows(null); }}
+        rls={{
+          enabled: meta.rls_enabled,
+          policyCount: policies.length,
+          active: panel === 'rls',
+          onOpen: () => toggle('rls'),
+        }}
+        tools={[
+          { label: `Structure · ${columns.length}`,
+            active: panel === 'structure', onToggle: () => toggle('structure') },
+          { label: `Indexes · ${indexes.length + constraints.length}`,
+            active: panel === 'objects', onToggle: () => toggle('objects') },
+        ]}
+        panel={panel === null ? null : (
+          <div className="deckpanel">
+            <div className="deckpanel__head">
+              {panel === 'rls' ? (
+                <span className="deckpanel__title">Row Level Security</span>
+              ) : <span className="deckpanel__title" />}
+              <button type="button" className="tbtn" onClick={() => setPanel(null)}>
+                Close
+              </button>
+            </div>
+            <div className="deckpanel__body">
+              {panel === 'rls' ? (
+                <RlsPanel table={meta} policies={policies}
+                          {...(rlsIsOff && editable
+                            ? { onEnable: () => setOp({ kind: 'enable_rls' }) }
+                            : {})}
+                          {...(editable ? {
+                            onGrantAnon: () => setOp({ kind: 'grant_anon' }),
+                            onRevokeAnon: () => setOp({ kind: 'revoke_anon' }),
+                          } : {})} />
+              ) : null}
+              {panel === 'structure' ? (
+                <Structure
+                  columns={columns}
+                  truncated={Boolean(intro.data?.truncated['columns'])}
+                  {...(editable ? {
+                    onVerb: openColumnOp,
+                    onAddColumn: () => setOp({ kind: 'add_column' }),
+                  } : {})}
+                  {...(readOnlyReason ? { readOnlyReason } : {})} />
+              ) : null}
+              {panel === 'objects' ? (
+                <Constraints
+                  indexes={indexes} constraints={constraints}
+                  truncated={Boolean(intro.data?.truncated['indexes'])
+                    || Boolean(intro.data?.truncated['constraints'])}
+                  {...(editable ? {
+                    onDrop: (row) => setOp(row.kind === 'index'
+                      ? { kind: 'drop_index', name: row.name, invalid: row.invalid }
+                      : { kind: 'drop_constraint', name: row.name, constraintKind: row.kind }),
+                    onNewIndex: () => setOp({ kind: 'create_index', candidates: columns }),
+                  } : {})}
+                  {...(readOnlyReason ? { readOnlyReason } : {})} />
+              ) : null}
+            </div>
+          </div>
+        )}
         {...(newRowKey !== null ? { newRowKey } : {})}
         {...(editable && primaryKey.length > 0 ? {
-          /**
-           * Row editing, present only with a primary key — which is what makes
-           * an `UPDATE` able to name one row (D-133). The grid's own banner
-           * already explains the absence and offers to add the key, so passing
-           * nothing here is the whole of "read-only" rather than a second
-           * message about it.
-           */
           onUpdateRow: (
             row: Record<string, unknown>,
             changes: { column: string; value: CellValue }[],
           ) => setOp({ kind: 'update_row', row, changes, primaryKey }),
-          onDeleteRows: (rows: Record<string, unknown>[]) =>
-            setOp({ kind: 'delete_rows', rows, primaryKey }),
+          onDeleteRows: (rowsToDelete: Record<string, unknown>[]) =>
+            setOp({ kind: 'delete_rows', rows: rowsToDelete, primaryKey }),
         } : {})}
         {...(editable ? {
-          // Insert needs no key: a table without one can still be appended to,
-          // and refusing would be a restriction the database does not have.
           onInsertRow: () => setOp({
             kind: 'insert_row',
-            // Every column, including the ones with defaults — the form shows
-            // the default as a placeholder so leaving a field alone visibly
-            // means "the database decides".
             editable: columns.filter((c) => !c.is_identity),
           }),
         } : {})}
-        {...(editable
-          ? { onAddPrimaryKey: () => setOp({ kind: 'add_primary_key', candidates: columns }) }
-          : {})}
-      />
-
-      <Structure
-        columns={columns}
-        truncated={Boolean(intro.data?.truncated['columns'])}
-        {...(editable ? { onVerb: openColumnOp } : {})}
-        {...(editable && !rlsIsOff ? { onAddColumn: () => setOp({ kind: 'add_column' }) } : {})}
-        {...(readOnlyReason ? { readOnlyReason } : {})}
-      />
-
-      <Constraints
-        indexes={indexes}
-        constraints={constraints}
-        truncated={Boolean(intro.data?.truncated['indexes'])
-          || Boolean(intro.data?.truncated['constraints'])}
         {...(editable ? {
-          onDrop: (row) => setOp(row.kind === 'index'
-            ? { kind: 'drop_index', name: row.name, invalid: row.invalid }
-            : { kind: 'drop_constraint', name: row.name, constraintKind: row.kind }),
-          onNewIndex: () => setOp({ kind: 'create_index', candidates: columns }),
+          onAddPrimaryKey: () => setOp({ kind: 'add_primary_key', candidates: columns }),
         } : {})}
-        {...(readOnlyReason ? { readOnlyReason } : {})}
       />
 
       {op ? (
@@ -473,6 +528,6 @@ export default function TablePage(
                       ? String(inserted[primaryKey[0]]) : null);
                   }} />
       ) : null}
-    </>
+    </div>
   );
 }

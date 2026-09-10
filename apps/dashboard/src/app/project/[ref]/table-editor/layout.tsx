@@ -4,33 +4,38 @@ import { use } from 'react';
 import { TableList } from '../../../../components/TableList.tsx';
 
 /**
- * The table editor's own two-pane layout: a table list that stays, and the
- * selected table beside it.
+ * The table editor's workspace: a table list that stays, and the grid beside it.
  *
  * A layout rather than a component each page renders, and that is §1's "the
  * chrome never re-renders on navigation within a context" applied one level
  * down. Moving from `posts` to `comments` is a navigation — the IA gives it a URL
- * (`/table-editor/[schema]/[table]`) because §1 also requires that the selection
- * be sendable — but the list is not part of what changed, so it must not
- * re-mount, lose its scroll position, or flash a skeleton.
+ * because §1 requires the selection be sendable — but the list is not what
+ * changed, so it must not re-mount, lose its scroll position, or flash a
+ * skeleton.
  *
- * §3 asks for exactly this shape: "the list stays visible behind a detail panel
- * so the user can see where they are and move to the next item without a round
- * trip". The list is the context, the pane is the subject.
+ * ## Full-bleed, not a centred column
  *
- * The list is neither a table nor cards, which is the question §4 does not
- * answer: its dichotomy is about *content* lists, and this is a selector. A
- * grouped sidebar list is what the IA's route map implies and what makes "which
- * table am I on" answerable without reading the URL.
+ * `.deck` rather than `.wrap`, and the difference is the whole shape of the
+ * page. `.wrap` caps at 1120px with 24px gutters, which put a twelve-column
+ * table in a horizontal scroll while a third of a laptop screen sat empty beside
+ * it. The reference — Supabase's table editor, which the UX standard names — has
+ * the grid *be* the page: it fills the viewport, a toolbar sits above and a
+ * footer below, and the rows are the only thing that scrolls.
+ *
+ * That is also why the height is owned here. A grid whose scroll container is a
+ * block in a scrolling document cannot pin a footer; one whose container is a
+ * row of a `grid-template-rows: auto minmax(0,1fr) auto` can.
  */
 export default function TableEditorLayout(
   { children, params }: { children: React.ReactNode; params: Promise<{ ref: string }> },
 ) {
   const { ref } = use(params);
   return (
-    <div className="wrap tablepane">
-      <TableList projectRef={ref} />
-      <div className="tablepane__main">{children}</div>
+    <div className="deck deck--split">
+      <div className="deck__list">
+        <TableList projectRef={ref} />
+      </div>
+      {children}
     </div>
   );
 }
