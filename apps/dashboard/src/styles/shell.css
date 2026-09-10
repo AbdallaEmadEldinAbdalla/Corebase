@@ -897,3 +897,124 @@ a.section__note { text-decoration: none; }
 /* A tag that means "look at this" rather than "this is a category". The only
    other warning-coloured tag is the RLS badge, and both are about exposure. */
 .tablelist__tag--warn { color: var(--sh-warning); border-color: var(--sh-warning); }
+
+/* ── a checkbox this product draws (P7p) ──────────────────────────────────────
+   `.sh-check` sets `accent-color` on a native input, so the box itself is drawn
+   by the operating system — which is what D-429 forbids, and which is also why
+   the design system's own inventory row ("Checkbox — off, on, indeterminate,
+   disabled") has never been implementable as written: `accent-color` cannot draw
+   an indeterminate state at all, and nothing in the app renders one.
+
+   So this is built the way `.sh-switch` is built — the real input is hidden and
+   kept, the box is ours — and the indeterminate state a select-all header needs
+   exists for the first time. The alternative considered was a switch per row,
+   which would have satisfied D-429 by misusing a control that means "a setting
+   is on" to mean "this row is selected". */
+.sh-checkbox {
+  display: inline-flex; align-items: center; gap: 10px;
+  font: var(--sh-body-m); color: var(--sh-text); cursor: pointer;
+  /* Rule 5's 40×40 floor, on a 20px box. The row is 52px so this never
+     overlaps a neighbour. */
+  min-height: 40px; min-width: 40px; justify-content: center;
+  position: relative;
+}
+.sh-checkbox input { position: absolute; opacity: 0; width: 0; height: 0; }
+.sh-checkbox__box {
+  flex: none; width: 18px; height: 18px; border-radius: var(--sh-radius-sm);
+  border: 1px solid var(--sh-border-strong); background: var(--sh-surface);
+  display: grid; place-items: center;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+/* The tick and the dash are drawn with borders rather than a glyph, so they do
+   not depend on a font that may not have loaded and cannot be the wrong size. */
+.sh-checkbox__box::after {
+  content: ''; width: 9px; height: 5px; opacity: 0;
+  border-left: 2px solid var(--sh-on-accent);
+  border-bottom: 2px solid var(--sh-on-accent);
+  transform: rotate(-45deg) translate(1px, -1px);
+}
+.sh-checkbox input:checked + .sh-checkbox__box {
+  background: var(--sh-accent); border-color: var(--sh-accent);
+}
+.sh-checkbox input:checked + .sh-checkbox__box::after { opacity: 1; }
+/* Indeterminate: a dash, and the tick's rotation undone so it reads as a bar. */
+.sh-checkbox input:indeterminate + .sh-checkbox__box {
+  background: var(--sh-accent); border-color: var(--sh-accent);
+}
+.sh-checkbox input:indeterminate + .sh-checkbox__box::after {
+  opacity: 1; width: 9px; height: 0; transform: none;
+  border-left: 0; border-bottom: 2px solid var(--sh-on-accent);
+}
+.sh-checkbox input:focus-visible + .sh-checkbox__box {
+  outline: 2px solid var(--sh-focus-ring); outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--sh-focus-halo);
+}
+.sh-checkbox input:disabled + .sh-checkbox__box { opacity: 0.45; }
+.sh-checkbox:has(input:disabled) { cursor: not-allowed; }
+
+/* ── the grid's editing and selection affordances (P7p) ──────────────────── */
+.grid__select { width: 44px; text-align: center; padding: 0 !important; }
+/* A selected row gets a left bar and a tint, never a tint alone — §5 rule 2,
+   which is also what keeps it legible in greyscale. */
+.grid tr.is-selected > td { background: var(--sh-accent-subtle); }
+.grid tr.is-selected > td:first-child { box-shadow: inset 3px 0 0 var(--sh-accent); }
+/* The row being edited is the subject: it keeps its own surface so the inputs
+   do not read as floating over the table. */
+.grid tr.is-editing > td { background: var(--sh-surface-alt); vertical-align: top; }
+.grid__cellinput {
+  width: 100%; min-width: 90px; font: var(--sh-code);
+  padding: 4px 6px; border-radius: var(--sh-radius-sm);
+  border: 1px solid var(--sh-border-strong); background: var(--sh-surface);
+  color: var(--sh-text);
+}
+.grid__cellinput:focus-visible {
+  outline: 2px solid var(--sh-focus-ring); outline-offset: 1px;
+}
+.grid__cellinput:disabled { color: var(--sh-text-muted); }
+/* The null control sits under its field rather than beside it: beside, it either
+   squeezed the field to nothing on a narrow column or forced the column wide. */
+.grid__cellnull { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.grid__cellnull span { font: var(--sh-caption); color: var(--sh-text-secondary); }
+/* A cell the user cannot edit, said once rather than per row. */
+.grid__cellfixed { font: var(--sh-code); color: var(--sh-text-muted); }
+/* The row of buttons that commits or abandons an edit, pinned to the first
+   column so it is where the eye already is after ticking a checkbox. */
+.grid__rowactions { display: flex; gap: var(--sh-space-8); flex-wrap: wrap; }
+/* The bar that appears when rows are selected. Not a floating overlay: it takes
+   space above the grid, so nothing it covers can be what the user wanted to
+   look at. */
+.gridbar {
+  display: flex; align-items: center; gap: var(--sh-space-12); flex-wrap: wrap;
+  padding: var(--sh-space-8) var(--sh-space-12);
+  margin-bottom: var(--sh-space-8);
+  background: var(--sh-accent-subtle); border-radius: var(--sh-radius-md);
+  font: var(--sh-body-s); color: var(--sh-accent-on-subtle);
+}
+.gridbar__spacer { flex: 1 1 auto; }
+/* A row that was just inserted, so the user can find it after the refetch.
+   Fades rather than persists — it is an answer to "where did it go", not a
+   permanent state. */
+@keyframes row-settle { from { background: var(--sh-accent-subtle); } to { background: transparent; } }
+.grid tr.is-new > td { animation: row-settle 1600ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  /* D-225: no motion. The tint still appears and simply does not fade, which is
+     the same information without the animation. */
+  .grid tr.is-new > td { animation: none; background: var(--sh-accent-subtle); }
+}
+
+/* What each placeholder holds, beside the statement that uses it (P7p). A
+   definition list because that is what it is — the placeholder is the term and
+   the value is its definition — and a grid so the values line up in a column
+   the eye can run down rather than hunting each one after its `$n`. */
+.ddl__binds {
+  margin: 0; display: grid; gap: 2px;
+  font: var(--sh-body-s);
+}
+.ddl__bind { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: var(--sh-space-8); }
+.ddl__bind dt { color: var(--sh-text-muted); }
+.ddl__bind dd { margin: 0; display: flex; gap: var(--sh-space-8); min-width: 0; }
+.ddl__bindcol { color: var(--sh-text-secondary); flex: none; }
+.ddl__bindval {
+  font: var(--sh-code); color: var(--sh-text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}

@@ -279,14 +279,39 @@ describe('design tokens', () => {
         `${file} uses a native <select>; its open list is OS chrome. `
         + `Use the branded Select from components/Menu.tsx.`,
       ).toEqual([]);
-      // The switch's own input is the sanctioned use, so the check is for a
-      // checkbox that is *not* inside an `sh-switch` label.
-      const bare = (css.match(/type="checkbox"/g) ?? []).length;
-      const switches = (css.match(/sh-switch/g) ?? []).length;
-      expect(bare <= switches,
-        `${file} has a checkbox outside an sh-switch; sh-check leaves the box to `
-        + `the OS. Use the switch.`,
-      ).toBe(true);
+      /**
+       * Two sanctioned homes for a real `<input type="checkbox">`, and both draw
+       * their own control while keeping the input's behaviour: `.sh-switch` for
+       * a setting, and `.sh-checkbox` for a selection.
+       *
+       * `.sh-checkbox` was added when row selection needed one — a switch would
+       * have satisfied this rule by misusing a control that means "a setting is
+       * on" to mean "this row is selected". It is also what finally makes the
+       * design system's own inventory row implementable ("Checkbox — off, on,
+       * **indeterminate**, disabled"): `accent-color` cannot draw an
+       * indeterminate state, so that state had never existed in this app.
+       */
+      if (/type="checkbox"/.test(css)) {
+        expect(/sh-switch|sh-checkbox__box/.test(css),
+          `${file} has a checkbox outside an sh-switch or sh-checkbox. Both of `
+          + `those draw the box; a bare one leaves it to the OS.`,
+        ).toBe(true);
+      }
+
+      /**
+       * And the OS-drawn classes are used by **nothing**, which is now checked
+       * rather than merely true.
+       *
+       * `.sh-check` and `.sh-radio` set `accent-color` on a native input, so the
+       * box is the operating system's — the exact thing D-429 forbids. They were
+       * already unused when this assertion was written; without it the next
+       * person to want a checkbox finds them in `components.css`, uses one, and
+       * nothing objects.
+       */
+      expect(/className="[^"]*\bsh-(check|radio)\b/.test(css),
+        `${file} uses .sh-check or .sh-radio, which only tint the box the OS `
+        + `draws (D-429). Use the Checkbox component, or .sh-switch for a setting.`,
+      ).toBe(false);
     }
   });
 
