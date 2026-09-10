@@ -153,8 +153,10 @@ function OneResult(
           No rows matched.
         </p>
       ) : (
-        <div className="gridwrap">
-          <table className="sh-table grid">
+        <div className="dwrap">
+          {/* The same table the grid uses, at the same density: two tables of
+              rows from the same database looked like two products. */}
+          <table className="dtable dtable--dense">
             <thead>
               <tr>
                 {fields.map((f) => (
@@ -249,6 +251,24 @@ export function SqlResults(props: {
         <div className="sh-empty__text">
           Results appear here. Press <span className="kbd">{props.runShortcut}</span> to
           run the buffer, or select part of it to run only that.
+          {/**
+            * The three rails that are not visible as controls, named here
+            * rather than in a paragraph above the editor.
+            *
+            * That paragraph was the page's `.head__sub` and it went when the
+            * page became a workspace. Deleting the sentences with it would have
+            * lost real information — a developer needs to know a run is one
+            * transaction before they write two statements that depend on it —
+            * so they moved to the one place that is on screen exactly while
+            * nothing has run: this state. The role and read-only rails need no
+            * sentence, because their controls are in the toolbar saying what
+            * they are.
+            */}
+          <br /><br />
+          Everything in a run goes in <strong>one transaction</strong>, so a
+          failure rolls the whole run back. A bare <code style={{ font: 'var(--sh-code)' }}>select</code>{' '}
+          gets a 500-row limit appended, and every statement has a
+          60&nbsp;second timeout. Nothing reaches the server until you run it.
         </div>
       </div></div>
     );

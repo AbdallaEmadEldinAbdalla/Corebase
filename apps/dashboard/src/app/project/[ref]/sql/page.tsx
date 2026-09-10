@@ -156,33 +156,34 @@ export default function SqlPage({ params }: { params: Promise<{ ref: string }> }
 
   if (intro.error) {
     return (
-      <div className="wrap">
-        <ErrorSurface error={intro.error} onRetry={() => void intro.refetch()}
-                      title="Could not read the schema" />
-        <p className="sh-help">
-          Completions need the schema, and running SQL does not — but both go
-          through the same connection, so this is likely to fail too.
-        </p>
+      <div className="deck__main">
+        <div className="deckhead"><span className="deckhead__name">SQL</span></div>
+        <div className="deckgrid" style={{ padding: 'var(--sh-space-24)' }}>
+          <ErrorSurface error={intro.error} onRetry={() => void intro.refetch()}
+                        title="Could not read the schema" />
+          <p className="sh-help">
+            Completions need the schema, and running SQL does not — but both go
+            through the same connection, so this is likely to fail too.
+          </p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="wrap sqlpage">
-      <div className="head">
-        <div style={{ minWidth: 0 }}>
-          <h1 className="head__title" style={{ font: 'var(--sh-heading-2)' }}>SQL</h1>
-          <p className="head__sub">
-            Runs as the role you choose, in one transaction, with a{' '}
-            {/* The rails, named where they can be seen rather than in a doc. */}
-            60&nbsp;second timeout. Nothing here is saved to the server until you
-            run it.
-          </p>
-        </div>
-      </div>
-
-      {/* ── tabs ───────────────────────────────────────────────────────────── */}
-      <div className="sqltabs" role="tablist" aria-label="Query tabs">
+    <div className="deck__main">
+      {/**
+        * The tabs *are* the header.
+        *
+        * A `.head__title` reading "SQL" above a tab strip named the section
+        * twice — the sidebar already says it, and the breadcrumb says it again.
+        * What belonged in that space is which buffer is open, so the tabs get
+        * it. The paragraph that used to sit here explained three of the six
+        * rails; it now lives in the results pane's own empty state, where it is
+        * read at the moment it matters rather than skipped once on arrival.
+        */}
+      <div className="deckhead deckhead--tabs">
+        <div className="sqltabs" role="tablist" aria-label="Query tabs">
         {state.tabs.map((t) => (
           <div key={t.id} className={`sqltab${t.id === state.activeId ? ' is-active' : ''}`}>
             <button type="button" role="tab" aria-selected={t.id === state.activeId}
@@ -212,11 +213,12 @@ export default function SqlPage({ params }: { params: Promise<{ ref: string }> }
                   return { tabs: [...s.tabs, t], activeId: t.id };
                 })}>
           <span aria-hidden="true">+</span>
-        </button>
+          </button>
+        </div>
       </div>
 
       {/* ── toolbar ────────────────────────────────────────────────────────── */}
-      <div className="sqlbar">
+      <div className="deckbar sqlbar">
         {/**
           * The role chip, loud **only when it is not admin**.
           *
@@ -277,18 +279,25 @@ export default function SqlPage({ params }: { params: Promise<{ ref: string }> }
 
         <span className="sqlbar__spacer" />
 
-        <button type="button" className="sh-btn sh-btn--sm sh-btn--secondary"
+        {/* 28px toolbar controls, not 40px buttons: a `.sh-btn` is exactly the
+            height of the bar it sits in and left no room around itself. Run
+            keeps the single accent the view is allowed — the same weight the
+            grid's `+ Insert` carries — and Explain is quiet beside it. */}
+        <button type="button" className="tbtn"
                 disabled={run.isPending || !active.sql.trim()}
                 onClick={() => doExplain(null)}>
           Explain
         </button>
-        <button type="button" className="sh-btn sh-btn--sm"
+        <button type="button" className="tbtn tbtn--accent"
                 disabled={run.isPending || !active.sql.trim()}
                 onClick={() => doRun(null)}>
           {run.isPending ? 'Running…' : `Run  ${mod}↵`}
         </button>
       </div>
 
+      {/* The editor's own pane: a fixed share of the deck, so the results get
+          the rest and the whole thing scrolls in one place rather than two. */}
+      <div className="sqled">
       <SqlEditor
         value={active.sql}
         onChange={(sql) => patch(active.id, { sql })}
@@ -298,6 +307,14 @@ export default function SqlPage({ params }: { params: Promise<{ ref: string }> }
         errorAt={pg?.position != null
           ? { position: pg.position, message: (error as Error).message } : null}
       />
+      </div>
+
+      {/* Everything below the editor is one scrolling pane: an error, the
+          per-statement results, or the state that says nothing has run. Two
+          scroll containers would mean a results table that scrolls inside a
+          page that also scrolls, which is the thing the redesign removed from
+          the grid. */}
+      <div className="deckgrid sqlout">
 
       {error && !pg ? (
         /* A platform failure rather than a SQL one — unreachable project, rate
@@ -344,7 +361,6 @@ export default function SqlPage({ params }: { params: Promise<{ ref: string }> }
         </div>
       ) : null}
 
-      <div className="sqlout">
         <SqlResults results={results} running={run.isPending} hint={hint}
                     runShortcut={`${mod}↵`} />
       </div>

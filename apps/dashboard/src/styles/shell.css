@@ -196,7 +196,16 @@
 }
 
 /* ── content ──────────────────────────────────────────────────────────────── */
-.main { grid-area: main; min-width: 0; }
+/**
+ * The content column, and the height authority for a full-bleed page.
+ *
+ * A flex column rather than a plain block, so a page that wants to *fill* the
+ * viewport can say `flex: 1 1 auto` and get exactly what is left after the
+ * banner slot — instead of claiming `100vh - 48px` and overflowing by whatever
+ * else is on screen. Ordinary pages are unaffected: a single `.wrap` child is
+ * `flex: 0 1 auto`, so its height is still its content's.
+ */
+.main { grid-area: main; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .wrap { max-width: 1120px; padding: var(--sh-space-24) var(--sh-space-24) var(--sh-space-48); }
 .wrap--narrow { max-width: 620px; }
 
@@ -206,6 +215,18 @@
    right edge and the header's bottom edge. Same gutter and column as `.wrap`, no
    bottom padding: the page's own top padding is the gap. */
 .bannerslot { max-width: 1120px; padding: var(--sh-space-24) var(--sh-space-24) 0; }
+/**
+ * No banner, no slot.
+ *
+ * `ResumeBanner` returns `null` for a ready project, and the wrapper stayed —
+ * an empty `<div>` with 24px of top padding on every project page. Harmless on a
+ * scrolling page and not harmless on a full-bleed one: the table editor's deck
+ * asked for `100vh - 48px` *below* those 24px, so the page overflowed the
+ * viewport by exactly that much, giving a document scrollbar and a "pinned"
+ * footer 24px under the fold. It was visible in the screenshot that started the
+ * redesign and I read it as a grid problem.
+ */
+.bannerslot:empty { display: none; }
 
 .head { display: flex; align-items: flex-start; gap: var(--sh-space-16); margin-bottom: var(--sh-space-24); }
 .head__title { font: var(--sh-heading-1); letter-spacing: var(--sh-tracking-heading-1); margin: 0; }
@@ -746,16 +767,12 @@ a.section__note { text-decoration: none; }
    The one container in the app allowed to scroll sideways: a forty-column table
    is wider than any window, and squeezing it is what makes a cell unreadable.
    Scoped here so the *page* never scrolls (D-460). */
-.gridwrap {
-  background: var(--sh-surface); border: 1px solid var(--sh-border);
-  border-radius: var(--sh-radius-lg) var(--sh-radius-lg) 0 0;
-  overflow-x: auto; max-width: 100%;
-}
-/* `.grid__sort`, `.grid__type`, `.grid__arrow` and the two-line header they
-   drew are gone: the header is one line now, and those four rules matched
-   nothing the moment it changed. Dead CSS is a claim the product makes and does
-   not keep — the same failure `.tok-*` was, found the same way. `.grid__col` and
-   `.gridwrap` stay because `SqlResults` still uses them. */
+/* `.gridwrap` has gone the same way as `.grid__sort`, `.grid__type` and
+   `.grid__arrow` before it: `SqlResults` was its last consumer and now uses
+   `.dwrap` with the grid's own table, so two lists of rows from the same
+   database stop looking like two products. Dead CSS is a claim the product makes
+   and does not keep. `.grid__col` and the two value classes stay because
+   `SqlResults` still uses them. */
 .grid__col { font: var(--sh-body-s); font-weight: 600; color: var(--sh-text); }
 /* `null` and an empty string render identically as text and are different
    values — in a grid over someone's data that is the difference between "no
@@ -1109,9 +1126,11 @@ a.section__note { text-decoration: none; }
    scroll. */
 .sqltabs {
   display: flex; align-items: stretch; gap: 2px;
-  overflow-x: auto; margin-bottom: var(--sh-space-8);
-  border-bottom: 1px solid var(--sh-border);
+  overflow-x: auto; min-width: 0; flex: 1 1 auto;
 }
+/* The tab strip is the header, so the header gives up its own padding and
+   border — the strip carries both, and 40px is a tab, not a heading. */
+.deckhead--tabs { height: 40px; padding: 0 var(--sh-space-8) 0 0; }
 .sqltab { display: flex; align-items: center; flex: none; }
 .sqltab__pick {
   display: flex; align-items: center; gap: 6px;
@@ -1139,8 +1158,12 @@ a.section__note { text-decoration: none; }
 
 /* Toolbar. */
 .sqlbar {
-  display: flex; align-items: center; gap: var(--sh-space-8);
-  flex-wrap: wrap; margin-bottom: var(--sh-space-8);
+  /* `.deckbar` supplies the height, the border and the horizontal scroll. What
+     stays here is the gap, which is wider than the grid toolbar's because these
+     controls are labelled words rather than icons. No `flex-wrap`: a toolbar
+     that wraps changes the height of a pane whose height the deck has already
+     divided up. */
+  gap: var(--sh-space-8);
 }
 .sqlbar__spacer { flex: 1 1 auto; }
 .sqlbar__claims { max-width: 280px; font: var(--sh-code); }
@@ -1165,10 +1188,14 @@ a.section__note { text-decoration: none; }
 
 /* The editor itself. A share of the viewport, floored so it is usable on a
    phone and capped so the results are always on screen. */
+/* A fixed share of the deck: the editor does not grow into the results, and the
+   results do not push it off screen. `clamp` rather than a percentage so it is
+   usable on a phone and does not swallow a tall monitor. */
+.sqled { flex: 0 0 auto; border-bottom: 1px solid var(--sh-border); min-width: 0; }
 .sqled .cm-editor { height: clamp(160px, 32vh, 420px); }
 .sqled .cm-scroller { overflow: auto; }
 
-.sqlout { margin-top: var(--sh-space-16); }
+.sqlout { padding: var(--sh-space-16); }
 
 /* One statement's results. */
 .sqlres { margin-bottom: var(--sh-space-16); }
@@ -1205,11 +1232,30 @@ a.section__note { text-decoration: none; }
    - Structure and Indexes moved **off** this page. That is Supabase's answer to
      the length problem I raised in my own review and then argued myself out of:
      the grid is one question, and schema detail is another. */
+/**
+ * A full-bleed workspace: it fills what is left of the column rather than
+ * naming a height.
+ *
+ * `height: calc(100vh - 48px)` was the first version and it was wrong twice over
+ * — it double-counts anything else in the column (see `.bannerslot:empty`), and
+ * it would have to be edited again the day the header's height changes or a
+ * second banner appears. `flex: 1 1 auto` inside `.main` is the same intent
+ * expressed as a relationship, and `min-height: 0` is what lets it *shrink*,
+ * which a flex item will not do by default and without which the panes inside
+ * cannot scroll.
+ */
 .deck {
-  height: calc(100vh - 48px);   /* the bar */
+  flex: 1 1 auto;
+  min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
+}
+/* One pane, filling the deck: the SQL editor and the end-users page, which have
+   no second column to put beside the work. */
+.deck--one {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
 }
 /* Two panes: the table list, then the workspace. The list is a fixed 240px and
    the workspace takes the rest — `minmax(0, 1fr)` so it can *shrink*, which a
@@ -1222,6 +1268,29 @@ a.section__note { text-decoration: none; }
   border-right: 1px solid var(--sh-border);
   overflow-y: auto; min-height: 0;
   padding: var(--sh-space-12) var(--sh-space-8);
+}
+
+/**
+ * Narrow viewports, which the deck shipped without any answer for.
+ *
+ * `240px minmax(0, 1fr)` leaves a 375px window 135px for the data — a column of
+ * one-word fragments — and there was no media query for `.deck` anywhere in this
+ * file. The list stacks above the work instead, capped at a third of the height
+ * and scrolling itself, so both halves stay usable rather than one being
+ * theoretically present.
+ *
+ * 760px rather than 640px: the breakpoint is about the *two panes*, and 240px
+ * plus a usable grid runs out well before a phone.
+ */
+@media (max-width: 760px) {
+  .deck--split {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 33vh) minmax(0, 1fr);
+  }
+  .deck__list {
+    border-right: 0;
+    border-bottom: 1px solid var(--sh-border);
+  }
 }
 /**
  * The workspace column: header, toolbar, rows, footer.
@@ -1245,7 +1314,7 @@ a.section__note { text-decoration: none; }
   display: flex; flex-direction: column;
   min-width: 0; min-height: 0;
 }
-.deckhead, .deckbar, .deckfoot, .deckwarn, .deckpanel { flex: 0 0 auto; }
+.deckhead, .deckbar, .deckfoot, .deckwarn, .deckpanel, .sqled { flex: 0 0 auto; }
 
 /* The workspace header: name, then the row of controls. Compact — 44px, so it
    costs a row of data rather than three. */

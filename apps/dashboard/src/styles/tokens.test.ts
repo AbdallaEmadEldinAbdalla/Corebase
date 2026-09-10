@@ -502,6 +502,40 @@ describe('the table editor workspace (P7r)', () => {
     join(SRC, 'app/project/[ref]/table-editor/[schema]/[table]/page.tsx'), 'utf8');
   const shell = () => read('shell.css');
 
+  it('BYPASS: a full-bleed pane fills its column instead of naming a height', () => {
+    /**
+     * `.deck` asked for `height: calc(100vh - 48px)`, which double-counts
+     * everything else in the column. `.bannerslot` renders empty with 24px of
+     * padding on every project page, so the table editor overflowed the viewport
+     * by exactly that: a document scrollbar and a "pinned" footer under the
+     * fold. Both halves are asserted, because either one alone leaves the bug.
+     */
+    // Comments stripped first. The third assertion passed against my own
+    // docblock, which names `.bannerslot:empty` while explaining it — the same
+    // prose-versus-markup trap the `<select>` guard above documents, and the
+    // third time in one afternoon that a guard matched an explanation of itself.
+    const css = shell().replace(/\/\*[\s\S]*?\*\//g, '');
+    const deck = css.slice(css.indexOf('\n.deck {'), css.indexOf('\n.deck--one'));
+    expect(deck, 'a viewport-relative height here double-counts the banner slot')
+      .not.toMatch(/height:\s*calc\(100vh/);
+    expect(deck).toContain('flex: 1 1 auto');
+    expect(css, 'an empty banner slot still costs 24px without this')
+      .toMatch(/\.bannerslot:empty\s*\{[^}]*display:\s*none/);
+  });
+
+  it('BYPASS: the two-pane deck has a narrow-viewport answer', () => {
+    /**
+     * `240px minmax(0, 1fr)` leaves a 375px window 135px for the data, and the
+     * deck shipped with no media query anywhere near it — the whole system was
+     * added below the last one in the file.
+     */
+    const css = shell().replace(/\/\*[\s\S]*?\*\//g, '');
+    const at = css.indexOf('.deck--split');
+    expect(at).toBeGreaterThan(-1);
+    expect(css.slice(at), 'no media query governs .deck--split at any width')
+      .toMatch(/@media[^{]*max-width[^{]*\{[^]*?\.deck--split/);
+  });
+
   it('BYPASS: .deck__main does not size its children by counting them', () => {
     /**
      * It was `grid-template-rows: auto minmax(0, 1fr) auto` — three rows for
