@@ -71,7 +71,6 @@ export default function TablePage(
   const [sort, setSort] = useState<{ column: string; direction: 'asc' | 'desc' } | undefined>();
   const [exact, setExact] = useState<number | null>(null);
   const [rows, setRows] = useState<Record<string, unknown>[] | null>(null);
-  const [ranSql, setRanSql] = useState<string | null>(null);
   const [op, setOp] = useState<Op | null>(null);
   /**
    * The key of a row just inserted, so the grid can point at it after the
@@ -192,7 +191,6 @@ export default function TablePage(
       onSuccess: (data) => {
         const first = data.results[0];
         setRows(first?.rows ?? []);
-        setRanSql(first?.executed_sql ?? key);
       },
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -428,7 +426,6 @@ export default function TablePage(
           });
         }}
         primaryKey={primaryKey}
-        executedSql={ranSql}
         onRefresh={() => { lastKey.current = null; setRows(null); }}
         rls={{
           enabled: meta.rls_enabled,

@@ -5504,6 +5504,15 @@ again. Two of my first attempts to break them were substring-safe mutations that
 passed — `<StructureGONE` still contains `<Structure` — which is worth recording
 as a limit of source-reading guards rather than a fault in them.
 
+**And "View as SQL" is gone from the grid (D-477).** It was written in P7m, when
+the SQL editor did not exist, to extend D-133's "every operation compiles to
+visible SQL" to the grid's own `ORDER BY`. P7q makes it a duplicate of a whole
+surface, and the redesign left it sitting *below the pinned footer* — the one
+position on a full-bleed grid that reads as leftover page. The rule it served is
+untouched: every mutation still previews its verbatim statement, and the preview
+is still what runs. What is gone is a read's receipt, which nobody was asked to
+approve and which the editor gives on demand.
+
 Also fixed: the SQL editor's read-only checkbox had its visible label *outside*
 its `<label>`, so clicking the word did nothing and the accessible name came only
 from an `aria-label` that had to be kept in step with it (design system §5 rule 5
@@ -6090,8 +6099,8 @@ mechanisms and a product needs both.
 
 ## 6. Decisions made while building (not from the plan)
 
-The [decision log](docs/00-foundation/05-decision-log.md) holds **465 decisions**,
-numbered D-001…D-476 — D-041…D-049 and D-158…D-159 were never allocated. It is
+The [decision log](docs/00-foundation/05-decision-log.md) holds **466 decisions**,
+numbered D-001…D-477 — D-041…D-049 and D-158…D-159 were never allocated. It is
 binding when two documents disagree, and it is the authority; this section is not.
 
 **The table below is a historical extract, not a current index.** It covers

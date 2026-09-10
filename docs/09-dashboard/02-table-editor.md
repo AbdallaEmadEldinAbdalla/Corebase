@@ -69,7 +69,7 @@ Confirm executes both statements as one run (one transaction) via the D-132 path
 **Grid behavior:**
 
 - Paginated 100 rows/page; keyset pagination on the primary key where one exists, offset fallback otherwise. Total count uses `pg_class.reltuples` estimates above a threshold (exact `COUNT(*)` on big tables is a self-inflicted seq scan); shown as "~12,400 rows".
-- Column headers show type + nullability; sort toggles emit `ORDER BY` (visible in a collapsed "view as SQL" affordance — reads are SQL too).
+- Column headers show type + nullability; sort toggles emit `ORDER BY`. **The "view as SQL" affordance this line specified is removed (D-477)** — the SQL editor is where a read is read as SQL, and it did not exist when this was written. Every *mutation* still previews its verbatim statement, which is D-133's actual rule.
 - Filters compile to `WHERE` clauses with typed operators per column type:
 
   | Column type | Offered operators | Compiled shape |

@@ -767,13 +767,6 @@ a.section__note { text-decoration: none; }
   background: none; border: 0; padding: 0; cursor: pointer;
   font: inherit; color: var(--sh-accent); text-decoration: underline;
 }
-.sqlpeek { margin-top: var(--sh-space-12); }
-.sqlpeek > summary {
-  font: var(--sh-body-s); color: var(--sh-text-secondary); cursor: pointer;
-}
-.sqlpeek .sh-code { margin-top: var(--sh-space-8); max-width: 100%; }
-.sqlpeek pre { white-space: pre-wrap; overflow-wrap: anywhere; }
-
 /* ── the DDL loop's dialog (P7n) ──────────────────────────────────────────────
    A wider dialog than `.sh-dialog`'s 420px, because a SQL statement is the
    subject rather than a sentence about one — `alter table "public"."posts" alter
@@ -782,7 +775,7 @@ a.section__note { text-decoration: none; }
    read than the form it came from.
 
    Overriding an `sh-` component class from here is the established pattern (see
-   `.sqlpeek .sh-code` below) and is deliberate: `components.css` mirrors the
+   `.sqlprev` below, which drops `.sh-code`'s width cap) and is deliberate: `components.css` mirrors the
    Pencil boards, and a wide dialog is not on a board — it is this surface's
    layout. `min(680px, 100%)` rather than a media query, so it is the narrower of
    the two on any viewport and there is no breakpoint to get wrong. */

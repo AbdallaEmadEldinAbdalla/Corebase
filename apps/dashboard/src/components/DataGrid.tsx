@@ -76,7 +76,6 @@ export function DataGrid(props: {
   exactCount: number | null;
   onCountExactly: () => void;
   primaryKey: readonly string[];
-  executedSql: string | null;
   /** Opens the add-primary-key flow. Absent when the table is not ours. */
   onAddPrimaryKey?: () => void;
   /**
@@ -126,7 +125,6 @@ export function DataGrid(props: {
    */
   panel?: React.ReactNode;
 }) {
-  const [showSql, setShowSql] = useState(false);
   const { columns, rows, page, pageSize } = props;
 
   /**
@@ -550,22 +548,6 @@ export function DataGrid(props: {
         ) : null}
       </div>
 
-      {/**
-        * "View as SQL", because reads are SQL too.
-        *
-        * The table editor's rule is that every operation compiles to visible SQL
-        * and the SQL is what runs, and the doc extends it to the grid's own
-        * sorting. Collapsed by default — it is reference, not the subject — and
-        * it shows what the *server* reported executing rather than what the
-        * client built, so any rewrite the server made is visible here.
-        */}
-      {props.executedSql ? (
-        <details className="sqlpeek" open={showSql}
-                 onToggle={(e) => setShowSql((e.currentTarget as HTMLDetailsElement).open)}>
-          <summary>View as SQL</summary>
-          <div className="sh-code"><pre>{props.executedSql}</pre></div>
-        </details>
-      ) : null}
     </>
   );
 }
