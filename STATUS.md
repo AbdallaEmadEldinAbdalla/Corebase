@@ -5609,6 +5609,58 @@ confirm letting a previously-blocked user sign in, a delete that 404s on repeat,
 CSRF enforced, a strict body, and an unauthenticated caller unable to tell a real
 ref from an invented one.
 
+## 4w. P7t — the same shape on all three, and two bugs in the mechanism
+
+"You only made table editor like supabase" — correct, and the reason was
+mechanical. The SQL editor was still a `.wrap`: a 1120px centred column with an
+`<h1>` and a paragraph of prose, which is what every page looked like before
+P7r. The end-users page had deck *markup* and none of the effect, because
+`.deck` — the element that supplies the height — is rendered only by the table
+editor's own layout. Without it, `.deckgrid`'s `flex: 1 1 auto; overflow: auto`
+had no bounded parent, so the footer could not pin and the rows could not scroll
+inside the pane.
+
+Both now sit under a `.deck--one` layout, and moving the height from a number to
+a relationship exposed two live bugs.
+
+**The table editor was overflowing the viewport by 24px, and had been since
+P7r.** `.deck` asked for `height: calc(100vh - 48px)`, which double-counts
+anything else in the column — and `.bannerslot` renders *empty* with 24px of top
+padding on every project page, because `ResumeBanner` returns `null` for a ready
+project while its wrapper div stays in the DOM. The result was a document
+scrollbar and a "pinned" footer sitting 24px below the fold. It is visible in the
+screenshot that started the redesign, cropping the footer, and I read it as a
+grid problem and fixed something else. `.main` is the height authority now — a
+flex column, which leaves ordinary pages alone because a lone `.wrap` child is
+`flex: 0 1 auto` — `.deck` takes what is left, and an empty banner slot is
+`display: none`.
+
+**No media query touched `.deck` at any width.** The whole system landed in P7r
+below the last media query in the file, so `240px minmax(0, 1fr)` gave a 375px
+window 135px for the data. The list stacks above the work below 760px.
+
+Three consequences of the shape, each a choice rather than a side effect. The SQL
+page's **tab strip is its header**: a heading reading "SQL" above it named the
+section a third time after the sidebar and the breadcrumb. The paragraph that
+explained three of the six rails **moved into the results pane's "nothing has run
+yet" state**, where it is on screen exactly while it is relevant instead of
+skipped once on arrival — deleting it with the header would have lost real
+information, since a developer needs to know a run is one transaction before
+writing two statements that depend on it. And **Run is a 28px `.tbtn--accent`**
+like the grid's `+ Insert`, because a 40px `.sh-btn` is the entire height of the
+bar it sits in; Explain is quiet beside it, so the view still has one accent.
+
+`SqlResults` draws the grid's own `.dtable--dense` now, and `.gridwrap` went with
+it — two lists of rows from the same database should not look like two products.
+
+**Three guards, each proven by breaking it:** `.deck` cannot go back to a
+viewport height, an empty banner slot cannot cost 24px again, and
+`.deck--split` cannot lose its narrow-viewport rule. The second one passed on
+its first attempt because it matched **my own docblock**, which names
+`.bannerslot:empty` while explaining it — the third time in one afternoon that a
+guard matched an explanation of itself, and the reason the assertion now strips
+comments and requires the declaration rather than the selector.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -6190,8 +6242,8 @@ mechanisms and a product needs both.
 
 ## 6. Decisions made while building (not from the plan)
 
-The [decision log](docs/00-foundation/05-decision-log.md) holds **468 decisions**,
-numbered D-001…D-479 — D-041…D-049 and D-158…D-159 were never allocated. It is
+The [decision log](docs/00-foundation/05-decision-log.md) holds **469 decisions**,
+numbered D-001…D-480 — D-041…D-049 and D-158…D-159 were never allocated. It is
 binding when two documents disagree, and it is the authority; this section is not.
 
 **The table below is a historical extract, not a current index.** It covers

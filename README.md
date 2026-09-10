@@ -365,6 +365,16 @@ did not consider: a table created while running as a platform role would be
 `steadhold export` would emit objects owned by a role that does not exist in
 vanilla Postgres.
 
+**The table editor, the SQL editor and the end-users page are the same shape.**
+Each fills the column it is given — a header, a toolbar that stays put, the work,
+and only the work scrolling. That took two attempts, because the first version
+had the panes claim `100vh` minus the header's height, which double-counts
+anything else on screen: with an empty banner slot costing 24px on every project
+page, the table editor overflowed the viewport by exactly that much and its
+"pinned" footer sat below the fold. A pane now fills what is left of its column
+rather than naming a height, which is the same intent written as a relationship
+and is the version that survives the header changing (D-480).
+
 **The table editor is a grid that fills the screen, and the schema is a
 disclosure beside it.** Rows are 26px, the toolbar and the footer stay put, and
 the rows are the only thing that scrolls — the reference is Supabase's grid, and
