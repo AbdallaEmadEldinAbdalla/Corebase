@@ -4,9 +4,11 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { DdlDialog } from './DdlDialog.tsx';
+import { Checkbox } from './Checkbox.tsx';
 import { useToast } from './Toasts.tsx';
 import { keys, useRunSql } from '../lib/queries.ts';
 import type { IntrospectionColumn } from '../lib/api.ts';
+import { deleteRows, insertRow, updateRow, type CellValue } from '../lib/dml.ts';
 import {
   addCheck, addColumn, addForeignKey, addPrimaryKey, addUnique, changeType,
   createIndex, createTable, dropColumn, dropConstraint, dropDefault, dropIndex,
@@ -14,6 +16,7 @@ import {
   revokeAnonAccess, setDefault, setNotNull,
   type NewColumn, type Plan, type TableFacts,
 } from '../lib/ddl.ts';
+import type { RowPlan } from '../lib/dml.ts';
 
 /**
  * Every table-editor operation's form, and the one place that runs them.
@@ -48,6 +51,17 @@ export type Op =
   | { kind: 'add_check' }
   | { kind: 'drop_index'; name: string; invalid: boolean }
   | { kind: 'drop_constraint'; name: string; constraintKind: string }
+  /**
+   * The three row operations. They carry their rows rather than looking them up,
+   * because the grid holds the page the user is actually looking at — and a
+   * refetch between opening the dialog and confirming must not silently change
+   * which rows the statement names.
+   */
+  | { kind: 'update_row'; row: Record<string, unknown>;
+      changes: { column: string; value: CellValue }[]; primaryKey: readonly string[] }
+  | { kind: 'insert_row'; editable: IntrospectionColumn[] }
+  | { kind: 'delete_rows'; rows: Record<string, unknown>[];
+      primaryKey: readonly string[] }
   /**
    * The foreign key needs the *other* table, so it carries the whole schema —
    * which introspection does provide. Only the fan-in warning's condition is
@@ -119,6 +133,11 @@ export function TableOps(props: {
   facts?: TableFacts;
   schema: string;
   onClose: () => void;
+  /**
+   * A row operation finished. Carries the inserted row when there is one, so
+   * the caller can highlight it.
+   */
+  onRowsChanged?: (inserted?: Record<string, unknown>) => void;
 }) {
   const { op, facts, schema, projectRef, onClose } = props;
   const run = useRunSql(projectRef);
@@ -173,9 +192,20 @@ export function TableOps(props: {
    * write cost.
    */
   const [alsoIndex, setAlsoIndex] = useState(false);
+  /**
+   * The insert form's values, keyed by column, **absent meaning "use the
+   * default"**.
+   *
+   * Absent rather than an explicit `{kind:'default'}` per column, because that
+   * is what an untouched field means and the compiler treats a defaulted column
+   * by omitting it from the statement entirely — which is the difference between
+   * getting `now()` for a `created_at not null default now()` and failing on a
+   * not-null violation.
+   */
+  const [newRow, setNewRow] = useState<Record<string, CellValue>>({});
 
   /** The plan, rebuilt on every keystroke so the preview is never stale. */
-  const plan = (): Plan => {
+  const plan = (): Plan | RowPlan => {
     switch (op.kind) {
       case 'create_table':
         return createTable(schema, name, newColumns.filter((c) => c.name.trim()));
@@ -197,6 +227,18 @@ export function TableOps(props: {
         return dropIndex(schema, op.name, { invalid: op.invalid });
       case 'drop_constraint':
         return dropConstraint(facts!, op.name, op.constraintKind);
+      case 'update_row':
+        return updateRow({ schema, table: facts!.table }, {
+          row: op.row, primaryKey: op.primaryKey, changes: op.changes });
+      case 'insert_row':
+        return insertRow({ schema, table: facts!.table },
+          op.editable.map((c) => ({
+            column: c.name,
+            value: newRow[c.name] ?? { kind: 'default' },
+          })));
+      case 'delete_rows':
+        return deleteRows({ schema, table: facts!.table }, {
+          rows: op.rows, primaryKey: op.primaryKey });
       case 'add_foreign_key': {
         const [ts, tt] = target2.split('.');
         return addForeignKey(facts!, {
@@ -243,6 +285,11 @@ export function TableOps(props: {
     set_default: `Default for ${target?.name ?? 'the column'}`,
     drop_default: `Remove the default from ${target?.name ?? 'the column'}`,
     drop_column: `Drop ${target?.name ?? 'the column'}`,
+    update_row: 'Save this row',
+    insert_row: 'Insert a row',
+    delete_rows: op.kind === 'delete_rows'
+      ? `Delete ${op.rows.length === 1 ? 'this row' : `${op.rows.length} rows`}`
+      : 'Delete rows',
   };
 
   const LABELS: Record<Op['kind'], string> = {
@@ -260,6 +307,9 @@ export function TableOps(props: {
     add_foreign_key: 'Add foreign key',
     drop_index: 'Drop index',
     drop_constraint: 'Drop constraint',
+    update_row: 'Save',
+    insert_row: 'Insert',
+    delete_rows: 'Delete',
     rename_column: 'Rename column',
     change_type: 'Change type',
     set_not_null: 'Set NOT NULL',
@@ -286,9 +336,10 @@ export function TableOps(props: {
         </datalist>
         {renderForm()}
       </>}
-      onRun={async ({ sql, confirmDestructive, confirmNames, edited }) => {
-        await run.mutateAsync({
+      onRun={async ({ sql, params, confirmDestructive, confirmNames, edited }) => {
+        const result = await run.mutateAsync({
           sql,
+          ...(params.length > 0 ? { params } : {}),
           // Explicitly false. The console defaults to read-only nowhere, but
           // saying it here means a reader of this call site knows this is the
           // write path without going to look.
@@ -335,6 +386,27 @@ export function TableOps(props: {
         if (op.kind === 'create_table' || op.kind === 'rename_table') {
           await qc.refetchQueries({ queryKey: keys.introspection(projectRef) })
             .catch(() => {});
+        }
+
+        /**
+         * Row operations re-read the rows, which no cache invalidates.
+         *
+         * `useRunSql` invalidates the *schema* query when a DDL command runs,
+         * and a row edit changes no schema — so nothing would refetch and the
+         * grid would keep showing the values the user just replaced, which reads
+         * as the save having failed. `onRowsChanged` is the page clearing its
+         * fetch key so the effect that reads a page of rows fires again.
+         *
+         * An insert additionally reports the row it made, from `returning *`, so
+         * the grid can point at it. Reported rather than inferred: a defaulted
+         * `id` is only knowable from the database.
+         */
+        if (op.kind === 'update_row' || op.kind === 'insert_row'
+          || op.kind === 'delete_rows') {
+          const returned = result.results[0]?.rows?.[0] as
+            Record<string, unknown> | undefined;
+          props.onRowsChanged?.(op.kind === 'insert_row' && returned
+            ? returned : undefined);
         }
 
         /**
@@ -583,6 +655,62 @@ export function TableOps(props: {
           </>
         );
 
+      case 'insert_row':
+        return (
+          <>
+            {op.editable.map((c, i) => {
+              const v = newRow[c.name];
+              const isNull = v?.kind === 'null';
+              const isDefault = v === undefined || v.kind === 'default';
+              return (
+                <div className="sh-field" key={c.name}>
+                  <label className="sh-label" htmlFor={`ins-${c.name}`}>
+                    {c.name}{' '}
+                    <span className="structure__type">{c.type}</span>
+                    {c.nullable ? null : (
+                      <span className="sh-help"> · required</span>
+                    )}
+                  </label>
+                  <input id={`ins-${c.name}`} className="sh-input"
+                         autoComplete="off" spellCheck={false}
+                         autoFocus={i === 0}
+                         disabled={isNull}
+                         placeholder={c.default !== null
+                           /* The default shown as the placeholder, so an
+                              untouched field visibly means "the database
+                              decides" rather than "empty string". */
+                           ? `default: ${c.default}`
+                           : c.nullable ? 'null' : ''}
+                         value={v?.kind === 'value' ? v.text : ''}
+                         onChange={(e) => setNewRow((r) => ({
+                           ...r,
+                           [c.name]: e.target.value === ''
+                             // Cleared means "leave it to the default" again,
+                             // not "store an empty string" — the null toggle is
+                             // how you ask for null, and this field is how you
+                             // ask for a value.
+                             ? { kind: 'default' }
+                             : { kind: 'value', text: e.target.value },
+                         }))} />
+                  {c.nullable ? (
+                    <label className="grid__cellnull">
+                      <Checkbox label={`Set ${c.name} to null`} checked={isNull}
+                                onChange={(on) => setNewRow((r) => ({
+                                  ...r,
+                                  [c.name]: on ? { kind: 'null' } : { kind: 'default' },
+                                }))} />
+                      <span>
+                        null
+                        {isDefault && c.default !== null ? ' (rather than the default)' : ''}
+                      </span>
+                    </label>
+                  ) : null}
+                </div>
+              );
+            })}
+          </>
+        );
+
       case 'add_check':
         return (
           <div className="sh-field">
@@ -732,6 +860,10 @@ export function TableOps(props: {
       case 'revoke_anon':
       case 'drop_index':
       case 'drop_constraint':
+      // The two whose whole question is the preview: the rows are already
+      // chosen, and the statement plus its bindings is what there is to check.
+      case 'update_row':
+      case 'delete_rows':
         return null;
     }
   }

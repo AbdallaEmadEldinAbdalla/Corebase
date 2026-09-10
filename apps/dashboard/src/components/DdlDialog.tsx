@@ -7,6 +7,7 @@ import { ApiError } from '../lib/api.ts';
 import { SqlPreview } from './SqlPreview.tsx';
 import { CopyButton } from './Copy.tsx';
 import { describeFailure, type Plan } from '../lib/ddl.ts';
+import type { RowPlan } from '../lib/dml.ts';
 import { namesSatisfied } from '../lib/confirm.ts';
 
 /**
@@ -53,12 +54,22 @@ export interface DdlDialogProps {
   title: string;
   /** The form controls. Disabled by the dialog while the SQL is authoritative. */
   form: ReactNode;
-  /** Recomputed each render. Throws `Impossible` when the form is not runnable. */
-  plan: () => Plan;
+  /**
+   * Recomputed each render. Throws `Impossible` when the form is not runnable.
+   *
+   * A `Plan` or a `RowPlan`, and the difference is read off the value rather
+   * than declared by the caller: a `RowPlan` has `bindings` and **no**
+   * `filename`, so the download button and the binding list both appear exactly
+   * when they should. "Row edits are never offered as migrations" is therefore
+   * enforced by the shape of the data instead of by a prop somebody has to
+   * remember to pass.
+   */
+  plan: () => Plan | RowPlan;
   onCancel: () => void;
   /** Runs the script. Resolves on success; rejects with an `ApiError`. */
   onRun: (req: {
-    sql: string; confirmDestructive: boolean; confirmNames: string[];
+    sql: string; params: unknown[];
+    confirmDestructive: boolean; confirmNames: string[];
     /** True when the user hand-edited the SQL, so the caller's own summary of
      *  what it does is no longer reliable. */
     edited: boolean;
@@ -108,7 +119,7 @@ export function DdlDialog(props: DdlDialogProps) {
    * re-thrown, because a `TypeError` rendered as a friendly hint is a
    * `TypeError` that survives.
    */
-  let built: { plan: Plan } | { refusal: string } | { todo: string };
+  let built: { plan: Plan | RowPlan } | { refusal: string } | { todo: string };
   try { built = { plan: plan() }; } catch (err) { built = describeFailure(err); }
 
   const generated = 'plan' in built ? built.plan.sql : '';
@@ -188,6 +199,18 @@ export function DdlDialog(props: DdlDialogProps) {
     try {
       await onRun({
         sql,
+        /**
+         * The params travel only while the *generated* statement is running.
+         *
+         * Once the user has hand-edited the SQL, `$1` may no longer mean what
+         * the plan thought it meant — they may have reordered the SET list or
+         * removed a clause — so sending the old array would bind values to the
+         * wrong placeholders. Dropping them makes the edited statement fail
+         * loudly on a missing parameter instead of writing the wrong value,
+         * which is the right way round for this to break.
+         */
+        params: !editing && 'plan' in built && 'params' in built.plan
+          ? built.plan.params : [],
         // `editing`, the mode — not `edited`, which is the text itself.
         edited: editing,
         // Sent from what the *script* says, not from what the operation intended:
@@ -278,6 +301,30 @@ export function DdlDialog(props: DdlDialogProps) {
               ) : (
                 <SqlPreview sql={sql} />
               )}
+
+              {/**
+                * What each placeholder holds.
+                *
+                * The spec asks for "values as placeholders", which is about not
+                * *interpolating* them rather than about hiding them — a preview
+                * showing `set "title" = $1` alone is a statement the user cannot
+                * check, and this loop's entire premise is that they can. So the
+                * statement keeps its placeholders and the values are listed
+                * beside it, which is also how psql reports a prepared statement.
+                */}
+              {'bindings' in built.plan && built.plan.bindings.length > 0 ? (
+                <dl className="ddl__binds">
+                  {built.plan.bindings.map((b) => (
+                    <div className="ddl__bind" key={b.placeholder}>
+                      <dt><code style={{ font: 'var(--sh-code)' }}>{b.placeholder}</code></dt>
+                      <dd>
+                        <span className="ddl__bindcol">{b.column}</span>
+                        <span className="ddl__bindval">{b.value}</span>
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              ) : null}
 
               {/* Cost, as prose. No checkbox, no second button: the confirm
                   control is the same one whether or not these are here. */}
@@ -376,7 +423,7 @@ export function DdlDialog(props: DdlDialogProps) {
         </div>
 
         <div className="sh-dialog__footer ddl__footer">
-          {'plan' in built ? (
+          {'plan' in built && 'filename' in built.plan ? (
             /**
              * Not "Save as migration", deliberately.
              *

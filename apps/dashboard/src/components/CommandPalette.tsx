@@ -221,6 +221,15 @@ export function CommandPalette({ open, onClose, orgSlug, projectRef }: {
             run: tableOp('enable_rls') },
           { id: 'drop-table', group: 'Actions', label: 'Drop this table',
             keywords: 'delete remove destroy ddl', run: tableOp('drop_table') },
+          /**
+           * Insert is table-scoped and needs no selection, so D-226 puts it
+           * here. `update` and `delete` are not: they are parameterised by
+           * *which rows*, and the palette has no way to select any — the same
+           * reason the column verbs are absent. The grid is the picker.
+           */
+          { id: 'insert-row', group: 'Actions', label: 'Insert a row into this table',
+            keywords: 'new row add record data insert',
+            run: tableOp('insert_row') },
           { id: 'new-index', group: 'Actions', label: 'Create an index on this table',
             keywords: 'index btree unique performance slow query',
             run: tableOp('create_index') },

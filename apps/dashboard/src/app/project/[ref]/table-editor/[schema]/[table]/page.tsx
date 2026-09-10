@@ -11,6 +11,7 @@ import { Constraints } from '../../../../../../components/Constraints.tsx';
 import { TableOps, type Op } from '../../../../../../components/TableOps.tsx';
 import { Menu, MenuItem } from '../../../../../../components/Menu.tsx';
 import type { IntrospectionColumn } from '../../../../../../lib/api.ts';
+import type { CellValue } from '../../../../../../lib/dml.ts';
 
 const PAGE_SIZE = 100;
 
@@ -58,6 +59,17 @@ export default function TablePage(
   const [rows, setRows] = useState<Record<string, unknown>[] | null>(null);
   const [ranSql, setRanSql] = useState<string | null>(null);
   const [op, setOp] = useState<Op | null>(null);
+  /**
+   * The key of a row just inserted, so the grid can point at it after the
+   * refetch.
+   *
+   * §5's "hand off to the object being created" is about work that takes time —
+   * a project that provisions. An insert is synchronous and has already returned
+   * the row, so jumping the grid to it would mean re-sorting or re-paging to
+   * find a row the user can already see arriving. A brief highlight answers
+   * "where did it go" without moving anything.
+   */
+  const [newRowKey, setNewRowKey] = useState<string | null>(null);
 
   const meta = intro.data?.tables.find((t) => t.schema === schema && t.name === table);
   const columns = useMemo(
@@ -70,6 +82,24 @@ export default function TablePage(
     [intro.data, schema, table]);
 
   const primaryKey = columns.filter((c) => c.is_primary_key).map((c) => c.name);
+
+  /**
+   * Whether this table is ours to change, derived here rather than further down.
+   *
+   * A view's columns cannot be altered, and a table someone else owns cannot be
+   * altered *by us* — the console runs as `developer` (D-462), so an operation on
+   * `pg_stat_statements` would come back as a permission error naming a role the
+   * user has never heard of. Better to say why the verbs are absent.
+   *
+   * It is computed **above the effects** on purpose. One of them reads it, and a
+   * `const` declared after a `useEffect` is safe inside the callback and throws
+   * the moment anyone adds it to the dependency array — the array is evaluated
+   * during render, before the declaration runs. That is a trap laid for the next
+   * person rather than a bug today, so it is removed rather than commented.
+   */
+  const isTable = meta?.kind === 'table' || meta?.kind === 'partitioned_table';
+  const isOurs = meta?.owner === 'developer';
+  const editable = isTable && isOurs;
 
   const indexes = useMemo(
     () => (intro.data?.indexes ?? []).filter((i) => i.schema === schema && i.table === table),
@@ -189,14 +219,18 @@ export default function TablePage(
       } else if (kind === 'create_index') {
         // Needs the column list, which only this page has.
         setOp({ kind: 'create_index', candidates: columns });
+      } else if (kind === 'insert_row' && editable) {
+        setOp({ kind: 'insert_row', editable: columns.filter((c) => !c.is_identity) });
       }
     };
     window.addEventListener('sh:table-op', onOp);
     return () => window.removeEventListener('sh:table-op', onOp);
     // `columns` is a dependency now that one command carries it: a listener
     // closed over the first render's empty list would open an index dialog with
-    // no columns to choose from.
-  }, [columns]);
+    // no columns to choose from. `editable` for the same reason — a listener
+    // captured before the schema arrived would refuse an insert on a table that
+    // is in fact editable.
+  }, [columns, editable]);
 
   if (intro.isPending) {
     return (
@@ -227,15 +261,6 @@ export default function TablePage(
   }
 
   const facts = { schema, table, rowsEstimate: meta.rows_estimate };
-  /**
-   * A view's columns cannot be altered, and a table someone else owns cannot be
-   * altered *by us* — the console runs as `developer` (D-462), so an operation on
-   * `pg_stat_statements` would come back as a permission error naming a role the
-   * user has never heard of. Better to say why the verbs are absent.
-   */
-  const isTable = meta.kind === 'table' || meta.kind === 'partitioned_table';
-  const isOurs = meta.owner === 'developer';
-  const editable = isTable && isOurs;
   const readOnlyReason = editable ? undefined
     : !isTable ? `a ${meta.kind.replace('_', ' ')} has no columns of its own to change`
       : `owned by ${meta.owner}, so this editor cannot change it`;
@@ -375,6 +400,33 @@ export default function TablePage(
         }}
         primaryKey={primaryKey}
         executedSql={ranSql}
+        {...(newRowKey !== null ? { newRowKey } : {})}
+        {...(editable && primaryKey.length > 0 ? {
+          /**
+           * Row editing, present only with a primary key — which is what makes
+           * an `UPDATE` able to name one row (D-133). The grid's own banner
+           * already explains the absence and offers to add the key, so passing
+           * nothing here is the whole of "read-only" rather than a second
+           * message about it.
+           */
+          onUpdateRow: (
+            row: Record<string, unknown>,
+            changes: { column: string; value: CellValue }[],
+          ) => setOp({ kind: 'update_row', row, changes, primaryKey }),
+          onDeleteRows: (rows: Record<string, unknown>[]) =>
+            setOp({ kind: 'delete_rows', rows, primaryKey }),
+        } : {})}
+        {...(editable ? {
+          // Insert needs no key: a table without one can still be appended to,
+          // and refusing would be a restriction the database does not have.
+          onInsertRow: () => setOp({
+            kind: 'insert_row',
+            // Every column, including the ones with defaults — the form shows
+            // the default as a placeholder so leaving a field alone visibly
+            // means "the database decides".
+            editable: columns.filter((c) => !c.is_identity),
+          }),
+        } : {})}
         {...(editable
           ? { onAddPrimaryKey: () => setOp({ kind: 'add_primary_key', candidates: columns }) }
           : {})}
@@ -407,7 +459,19 @@ export default function TablePage(
         // rather than carrying the last rename's text into the next one.
         <TableOps key={`${op.kind}:${'column' in op ? op.column.name : ''}`}
                   projectRef={ref} op={op} facts={facts} schema={schema}
-                  onClose={() => setOp(null)} />
+                  onClose={() => setOp(null)}
+                  onRowsChanged={(inserted) => {
+                    // Clearing the key is what makes the fetch effect fire
+                    // again; nothing else invalidates a mutation's result.
+                    lastKey.current = null;
+                    setRows(null);
+                    // The exact count is stale the moment a row is added or
+                    // removed, and a stale exact number is worse than an
+                    // estimate because it looks authoritative (Q19).
+                    setExact(null);
+                    setNewRowKey(inserted && primaryKey[0]
+                      ? String(inserted[primaryKey[0]]) : null);
+                  }} />
       ) : null}
     </>
   );
