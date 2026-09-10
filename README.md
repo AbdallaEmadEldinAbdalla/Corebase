@@ -382,6 +382,24 @@ touches no existing row, a rename is free in the database and 404s every
 deployed client, and `RESTRICT` refusing is the useful outcome because it names
 what would have broken.
 
+**The dashboard can now see indexes and constraints**, which turned out to
+decide their own presentation: every primary-key and unique constraint has a
+backing index of the same name, so two lists show the same object twice — they
+are one reconciled section instead, with the index named on its constraint's row.
+Reading an index's key columns is where the care went: an expression index
+reports `null` in the leading slot and `INCLUDE`d columns are excluded, which is
+what makes "is this column indexed for a foreign-key check" answerable at all. An
+inner join got it wrong in the reassuring direction, claiming an index that
+cannot serve the lookup.
+
+The same addition caught a false sentence. The RLS panel said "your API returns
+only the rows these policies allow" — true of signed-in callers and wrong about
+anonymous ones, which without a table grant are refused outright. Anonymous
+access is now stated beside the policies as its own fact, as a status line with a
+verb rather than a switch: every mutation here goes through a preview and a
+confirmation, so a toggle that opens a dialog would lie about when the change
+happens (D-471).
+
 There is no "Save as migration" button, because that promise is a
 `schema_migrations` row plus a written file (D-076) and there is no endpoint yet.
 There is a **"Download .sql"** button, correctly named per D-028, next to one

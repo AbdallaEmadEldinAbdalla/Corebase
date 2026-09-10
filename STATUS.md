@@ -4561,7 +4561,7 @@ The scope is ~30 routes. What is missing is mostly **API, not UI**:
 
 | Surface | Blocker |
 |---|---|
-| ~~Table editor~~ (read path, and DDL) | **Built — P7m and P7n.** Table list, grid with sort and paging, the Structure section, the per-table RLS panel, and thirteen DDL operations through one preview→confirm loop. Three things remain. **Dropping an index or a constraint** needs a list of what exists and the introspection payload has neither — two more catalog queries in `introspect.ts` unblock both, plus the **FK fan-in warning's condition** ("if the referencing column has no index") and the **anonymous-access toggle** D-108 describes. The grant and revoke verbs are built; a *toggle* has to render its current state and nothing reports `has_table_privilege('anon', …)`, so it is two buttons rather than a switch that cannot know whether it is on. **`CREATE INDEX CONCURRENTLY`** is separately blocked, and not by OQ-132 being undecided: it cannot run inside a transaction block and the console runs every script in one (D-464), so it needs a non-transactional lane in the execution path. Creating indexes, foreign keys, CHECK and UNIQUE all ship in P7n — an earlier version of this row called them API-blocked, which was true of the two drops and not of the five adds. **Row-level DML** — inline edit, insert, delete — is unblocked and simply not built; the grid already refuses to edit a keyless table and now offers to add the key. **Save-as-migration** is genuinely API-blocked: D-076 wants a server-side `schema_migrations` row plus a written file and there is no endpoint, so the loop offers a correctly-named `.sql` download and says it is not recorded |
+| ~~Table editor~~ (read path, and DDL) | **Built — P7m and P7n.** Table list, grid with sort and paging, the Structure section, the per-table RLS panel, and thirteen DDL operations through one preview→confirm loop. Three things remain. **Row-level DML** — inline edit, insert, delete — is unblocked and simply not built; the grid already refuses to edit a keyless table and offers to add the key. **`CREATE INDEX CONCURRENTLY`** is blocked, and not by OQ-132 being undecided: it cannot run inside a transaction block and the console runs every script in one (D-464), so it needs a non-transactional lane in the execution path. **Save-as-migration** needs D-076's endpoint. Everything else in the operation catalog ships: P7n added the fifteen column- and table-level operations plus the five adds, and P7o added drop-index, drop-constraint, the foreign-key fan-in condition and anonymous access — the last as a status line with a verb rather than the toggle D-108 describes, because a switch that opens a confirmation dialog lies about when the change happens (D-471). **Row-level DML** — inline edit, insert, delete — is unblocked and simply not built; the grid already refuses to edit a keyless table and now offers to add the key. **Save-as-migration** is genuinely API-blocked: D-076 wants a server-side `schema_migrations` row plus a written file and there is no endpoint, so the loop offers a correctly-named `.sql` download and says it is not recorded |
 | SQL editor | **Endpoint built — P7l**: `POST /v1/projects/:ref/db/query` with all six D-134 rails, and `GET …/db/introspect` for the completion source. Two things still stand in the way: saved queries and history (blocked on OQ-134, since history stores verbatim SQL and therefore any literal typed into a `WHERE`), and rail 3's per-project timeout, which has no column — the default and cap are enforced, the persistence is not |
 | Auth users, storage browser | Data-plane only (`/auth/v1/admin/*`, `/storage/v1/*`), which needs a `service_role` key — and a session-cookie dashboard (D-062) must never hold one in the browser. Needs a control-plane proxy, which is an architectural decision, not a screen |
 | Logs, metrics, backups list, audit | No endpoints |
@@ -5139,6 +5139,116 @@ and it was not.
 
 
 
+## 4q. P7o — indexes, constraints, and the grant the panel was wrong about
+
+Two catalog queries and one column, which unblocked four things at once: drop
+index, drop constraint, the foreign-key fan-in condition, and the anonymous-access
+control D-108 calls "the dashboard toggle".
+
+### The payload decided the design
+
+Two sections — one for indexes, one for constraints — would list the same object
+**twice**. Every primary-key and unique constraint has a backing index of the
+same name, and on a live project `articles_pkey`, `articles_notes_key`,
+`fk_target_pkey` and `no_key_pkey` were all in both lists. So it is one section:
+a constraint is a row, and the index that exists only to back it is *named on
+that row* rather than repeated below. Matched **by name**, because Postgres
+guarantees a constraint and its index share one — matching by column set would
+merge a hand-made index that happens to cover the same columns, which is a real
+thing to have and a real thing to want to see separately.
+
+Folding constraints into the Structure table instead fails differently: a
+table-level `CHECK` belongs to no column and a composite `UNIQUE` belongs to
+several, so they are either lost or duplicated across rows.
+
+None of that was visible from the spec. It came from looking at what the queries
+actually returned.
+
+### Two subtleties in the index query, both in the unsafe direction
+
+`columns[0] === col` is the test for "is this column indexed for a foreign-key
+check", and it is only correct because of two details:
+
+- **An expression index reports `null` in that slot.** An inner join dropped the
+  expression entry and *shifted the rest up*, so an index on `(lower(title),
+  status)` came back as `["status"]` — claiming an index that cannot serve a
+  lookup on `status` at all. Verified both ways: with the LEFT join it is
+  `[null, "status"]`.
+- **`INCLUDE`d columns are excluded.** They are in `indkey` and serve no lookup,
+  so `(status) include (title)` reports `["status"]` and not both.
+
+Both are pinned by tests that fail when reverted.
+
+### The panel was wrong, and this is what made it checkable
+
+`RlsPanel` said *"Your API returns only the rows these policies allow"*. That is
+true of `authenticated` and **false of `anon`**, which without a table grant is
+refused outright — D-108 gives it none by default. A developer reading that
+sentence writes the policy, tests with their anon key, gets `permission denied`,
+and concludes the policy engine is broken. It now says "signed-in callers", and
+the anon grant is stated beside it as its own fact.
+
+**Not a toggle**, although the state is now knowable and D-108 calls it one.
+Every mutation here goes through the preview→confirm loop, so a switch that opens
+a dialog and stays put lies about when the change happens, and one that flips
+first lies about whether it happened. A status line with a verb claims neither.
+
+`anon_can_select` is a **tri-state**. `null` means there is no `anon` role —
+the `steadhold export` case (D-004) — and the panel renders nothing there rather
+than drawing "off", which would invent a setting. `has_table_privilege` on a
+missing role *raises* rather than returning false, so the query guards on the
+role existing; unguarded, introspection would have failed outright on exactly the
+portability case the product is built to promise.
+
+### An invalid index gets a banner and the verb on its row
+
+A failed `CREATE INDEX CONCURRENTLY` leaves an index Postgres will not use and
+will not drop: it costs write time on every insert and serves nothing. Nothing
+in this product can create one — the console emits the plain form — so it arrives
+from the customer's own psql session, where nothing told them. A badge alone is
+too quiet for something silently costing writes and a red banner too loud for
+something that is not a security hole, so it is a status banner naming them with
+"Drop index…" on each row. §6's "an empty state carries the action that fixes it",
+applied to a broken one.
+
+### Dropping a primary key is previewed, warned, and not blocked
+
+It is the customer's database and the classifier already puts it on the `confirm`
+rung. But the notice says the thing no Postgres message mentions: the grid
+becomes read-only, because PK-guarded DML is the only `UPDATE` shape that cannot
+silently hit more rows than the user can see (D-133), and paging stops being
+stable. That is a product consequence, and this is the only place it can be said.
+
+### One more pure function moved out of a component
+
+`mergeRows` started in `Constraints.tsx` and could not be called by the live
+verification script at all — Node's type stripping does not handle JSX, so a
+`.tsx` file is unreachable from anything outside the React toolchain. It is in
+`lib/table-objects.ts` now, the third time this session that a rule worth testing
+turned out to be in a place nothing could reach (after `describeFailure` and
+`namesSatisfied`).
+
+### Verification
+
+Live, against a real project:
+
+| | result |
+|---|---|
+| the merge | `articles` → 8 rows, no duplicate names; `articles_pkey` and `articles_notes_key` attributed with `backedBy`; `idx_expr` shows `[null, "status"]` |
+| the fan-in condition | leading columns read as `["notes","id","status","title"]` — including the constraint-backed indexes, which serve a check exactly as a hand-made one does |
+| an indexed column | no fan-in warning |
+| an unindexed column | the warning as a statement of fact, not a hedge |
+| five drops | plain index, check, unique, foreign key and **primary key** — all `confirm`, all applied, all gone from the next introspection |
+| the anon state | `false → true` on grant, `write=true` on an insert grant, back to `false → false` on revoke — so the sentence the panel renders tracks the grants, including the read/write split |
+
+A test assertion of mine failed here and was the thing at fault: it expected
+`notes` *not* to lead an index, when the unique constraint's index leads with it
+and would genuinely serve a foreign key on it. The code was right.
+
+**The pixels are still unverified.** Both browser surfaces stayed unavailable for
+this step too. Every claim above is API-level; the new section's layout, the
+status line's wrap at 375px, and both themes are read but not seen.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -5538,6 +5648,14 @@ differ in everything that matters. A guard that greps for `DROP` demands a typed
 name for a reversible one-line change, which teaches people to type through
 confirmations and so makes the dangerous case *less* safe than before the guard
 existed. Splitting the action list is what separates them (**D-468**).
+
+**A pure function in a `.tsx` file is unreachable from anything but React.**
+Node's type stripping does not handle JSX, so a live verification script could
+not import `mergeRows` at all — and that is the *third* time this session a rule
+worth testing turned out to be somewhere nothing could reach it, after
+`describeFailure` and `namesSatisfied`. The tell is the same each time: if the
+logic has a name and a rule, it belongs in `lib/`, and the component keeps only
+the rendering.
 
 **A popover cannot live inside a scroll container.** `.pop__menu` is `position:
 absolute`, and `overflow: auto` on an ancestor clips absolutely-positioned
