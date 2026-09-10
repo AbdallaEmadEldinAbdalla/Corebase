@@ -221,6 +221,27 @@ export function CommandPalette({ open, onClose, orgSlug, projectRef }: {
             run: tableOp('enable_rls') },
           { id: 'drop-table', group: 'Actions', label: 'Drop this table',
             keywords: 'delete remove destroy ddl', run: tableOp('drop_table') },
+          { id: 'new-index', group: 'Actions', label: 'Create an index on this table',
+            keywords: 'index btree unique performance slow query',
+            run: tableOp('create_index') },
+          /**
+           * Anonymous access, both directions, unconditionally.
+           *
+           * The palette cannot read the current grant — it does not hold the
+           * introspection payload — so offering only the direction that applies
+           * is not available to it. Offering both is honest and costs a line:
+           * each opens the preview loop, which shows exactly what it will run,
+           * and a `GRANT` that is already in place is a no-op the user can see
+           * before confirming.
+           */
+          { id: 'grant-anon', group: 'Actions',
+            label: 'Allow anonymous read on this table',
+            keywords: 'anon public grant expose api key rls',
+            run: tableOp('grant_anon') },
+          { id: 'revoke-anon', group: 'Actions',
+            label: 'Remove anonymous access from this table',
+            keywords: 'anon revoke private hide api key',
+            run: tableOp('revoke_anon') },
         );
       }
     }

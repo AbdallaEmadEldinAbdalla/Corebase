@@ -882,3 +882,18 @@ a.section__note { text-decoration: none; }
   padding: 0 var(--sh-space-12);
   background: var(--sh-surface-alt); border-radius: var(--sh-radius-md);
 }
+
+/* ── anonymous access, on the RLS panel (P7o) ─────────────────────────────────
+   A status line rather than a switch: every mutation here goes through the
+   preview→confirm loop, so a switch would lie about when the change happens.
+   `flex-basis: 100%` puts it on its own row under the badge and the sentence,
+   because it is a second fact about the same subject rather than a continuation
+   of the first. */
+.rls__anon {
+  flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: baseline;
+  gap: var(--sh-space-8); padding-top: var(--sh-space-8);
+  border-top: 1px solid var(--sh-border);
+}
+/* A tag that means "look at this" rather than "this is a category". The only
+   other warning-coloured tag is the RLS badge, and both are about exposure. */
+.tablelist__tag--warn { color: var(--sh-warning); border-color: var(--sh-warning); }

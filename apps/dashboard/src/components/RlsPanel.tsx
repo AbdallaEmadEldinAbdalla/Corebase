@@ -31,7 +31,7 @@ import type { IntrospectionPolicy, IntrospectionTable } from '../lib/api.ts';
  * is any RLS at all, not only when policies are missing.
  */
 export function RlsPanel(
-  { table, policies, onEnable }: {
+  { table, policies, onEnable, onGrantAnon, onRevokeAnon }: {
     table: IntrospectionTable;
     policies: IntrospectionPolicy[];
     /**
@@ -40,6 +40,10 @@ export function RlsPanel(
      * banner on someone else's table is a dead end that looks like a bug.
      */
     onEnable?: () => void;
+    /** Opens the grant flow. Absent when the table is not ours to change. */
+    onGrantAnon?: () => void;
+    /** Opens the revoke flow. */
+    onRevokeAnon?: () => void;
   },
 ) {
   const [open, setOpen] = useState(false);
@@ -98,16 +102,89 @@ export function RlsPanel(
       </button>
 
       <span className="rls__text">
+        {/**
+          * The two API roles, said separately — because they behave differently
+          * and the earlier single sentence was **false for one of them**.
+          *
+          * It read "Your API returns only the rows these policies allow", which
+          * is true of `authenticated` and wrong about `anon`: D-108 gives `anon`
+          * no default table grant, so without one it is refused outright and a
+          * `CREATE POLICY … TO anon` changes nothing. Measured on a live project
+          * — a table carrying `to anon using (true)` answered `permission denied`
+          * until the grant was run, and then returned every row.
+          *
+          * A developer reading the old sentence writes the policy, tests with
+          * their anon key, gets an error, and concludes the policy engine is
+          * broken. That is the most expensive kind of wrong sentence: it sends
+          * someone to debug the wrong thing.
+          */}
         {policies.length === 0
-          ? 'Your API returns no rows from this table. That is the safe default '
-            + 'for a new table, not a fault — a policy is what opens it up.'
-          : 'Your API returns only the rows these policies allow.'}
+          ? 'Signed-in callers get an empty list from your API. That is the safe '
+            + 'default for a new table, not a fault — a policy is what opens it up.'
+          : 'Signed-in callers get only the rows these policies allow.'}
         {' '}
         {/* The trap, stated every time there is RLS: the grid is the owner's
             view and the API's is not. */}
         <strong>The rows below are the owner&rsquo;s view</strong> and ignore these
         policies, the same as your connection string does.
       </span>
+
+      {/**
+        * Anonymous access, as a **status line with a verb** rather than a switch.
+        *
+        * D-108 calls this "the dashboard toggle" and a switch is now technically
+        * possible — the state arrives in the payload. It is still the wrong
+        * control: every mutation in this editor goes through the preview→confirm
+        * loop, so a switch that opens a dialog and stays where it was lies about
+        * when the change happens, and one that flips first lies about whether it
+        * happened at all. A sentence plus a verb claims neither.
+        *
+        * It lives *here*, beside the policies, because a grant and a policy are
+        * two halves of one question — "what can the API see" — and the panel's
+        * own sentence was wrong until this was on the same line as it.
+        *
+        * `null` renders nothing at all, deliberately: it means the database has
+        * no `anon` role, which is the `steadhold export` case (D-004), and
+        * drawing "off" there would invent a setting that does not exist. Nothing
+        * on this panel mentions `anon` in that case.
+        */}
+      {table.anon_can_select !== null ? (
+        <span className="rls__anon">
+          {table.anon_can_select ? (
+            <>
+              <span className="rls__badge rls__badge--warn">anon can read</span>
+              <span className="rls__text">
+                Anyone with your project&rsquo;s anon key reads this table, filtered
+                by the policies above and by nothing else.
+                {table.anon_can_write ? (
+                  <>
+                    {' '}
+                    <strong>They can write to it too.</strong>
+                  </>
+                ) : null}
+              </span>
+              {onRevokeAnon ? (
+                <button type="button" className="sh-linkbtn" onClick={onRevokeAnon}>
+                  Remove anonymous access…
+                </button>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <span className="rls__badge rls__badge--muted">anon cannot read</span>
+              <span className="rls__text">
+                Anonymous callers are refused outright, whatever the policies say —
+                a grant sits above RLS, and a new table gives them none.
+              </span>
+              {onGrantAnon ? (
+                <button type="button" className="sh-linkbtn" onClick={onGrantAnon}>
+                  Allow anonymous read…
+                </button>
+              ) : null}
+            </>
+          )}
+        </span>
+      ) : null}
 
       {open && policies.length > 0 ? (
         <div className="rls__list">

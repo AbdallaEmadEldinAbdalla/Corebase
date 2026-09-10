@@ -9,9 +9,9 @@ import { keys, useRunSql } from '../lib/queries.ts';
 import type { IntrospectionColumn } from '../lib/api.ts';
 import {
   addCheck, addColumn, addForeignKey, addPrimaryKey, addUnique, changeType,
-  createIndex, createTable, dropColumn, dropDefault, dropNotNull, dropTable,
-  enableRls, grantAnonRead, renameColumn, renameTable, revokeAnonAccess,
-  setDefault, setNotNull,
+  createIndex, createTable, dropColumn, dropConstraint, dropDefault, dropIndex,
+  dropNotNull, dropTable, enableRls, grantAnonRead, renameColumn, renameTable,
+  revokeAnonAccess, setDefault, setNotNull,
   type NewColumn, type Plan, type TableFacts,
 } from '../lib/ddl.ts';
 
@@ -46,6 +46,8 @@ export type Op =
   | { kind: 'create_index'; candidates: IntrospectionColumn[] }
   | { kind: 'add_unique'; candidates: IntrospectionColumn[] }
   | { kind: 'add_check' }
+  | { kind: 'drop_index'; name: string; invalid: boolean }
+  | { kind: 'drop_constraint'; name: string; constraintKind: string }
   /**
    * The foreign key needs the *other* table, so it carries the whole schema —
    * which introspection does provide. Only the fan-in warning's condition is
@@ -53,7 +55,16 @@ export type Op =
    */
   | { kind: 'add_foreign_key';
       candidates: IntrospectionColumn[];
-      targets: IntrospectionColumn[] }
+      targets: IntrospectionColumn[];
+      /**
+       * Column names that lead an index on this table, so the fan-in warning can
+       * state its condition as fact instead of admitting it cannot check.
+       *
+       * Leading only. An index on `(a, b)` serves a lookup on `a` and not on
+       * `b`, and an expression index serves neither — which is why the payload
+       * reports `null` in that slot and the page filters on `columns[0]`.
+       */
+      indexedColumns: string[] }
   | { kind: 'rename_column'; column: IntrospectionColumn }
   | { kind: 'change_type'; column: IntrospectionColumn }
   | { kind: 'set_not_null'; column: IntrospectionColumn }
@@ -182,6 +193,10 @@ export function TableOps(props: {
       case 'create_index': return createIndex(facts!, keyColumns, { unique });
       case 'add_unique': return addUnique(facts!, keyColumns);
       case 'add_check': return addCheck(facts!, expression);
+      case 'drop_index':
+        return dropIndex(schema, op.name, { invalid: op.invalid });
+      case 'drop_constraint':
+        return dropConstraint(facts!, op.name, op.constraintKind);
       case 'add_foreign_key': {
         const [ts, tt] = target2.split('.');
         return addForeignKey(facts!, {
@@ -191,6 +206,9 @@ export function TableOps(props: {
           targetColumn: targetCol,
           ...(onDelete ? { onDelete } : {}),
           alsoIndex,
+          // Only once a column is chosen. Before that, `indexed` stays absent so
+          // the notice reads as the honest unknown rather than as a false "no".
+          ...(name ? { indexed: op.indexedColumns.includes(name) } : {}),
         });
       }
       case 'rename_column': return renameColumn(facts!, target!.name, name);
@@ -216,6 +234,8 @@ export function TableOps(props: {
     add_unique: 'Require unique values',
     add_check: 'New check constraint',
     add_foreign_key: 'New foreign key',
+    drop_index: 'Drop index',
+    drop_constraint: 'Drop constraint',
     rename_column: `Rename ${target?.name ?? 'the column'}`,
     change_type: `Change the type of ${target?.name ?? 'the column'}`,
     set_not_null: `Require a value in ${target?.name ?? 'the column'}`,
@@ -238,6 +258,8 @@ export function TableOps(props: {
     add_unique: 'Add constraint',
     add_check: 'Add constraint',
     add_foreign_key: 'Add foreign key',
+    drop_index: 'Drop index',
+    drop_constraint: 'Drop constraint',
     rename_column: 'Rename column',
     change_type: 'Change type',
     set_not_null: 'Set NOT NULL',
@@ -708,6 +730,8 @@ export function TableOps(props: {
       case 'enable_rls':
       case 'grant_anon':
       case 'revoke_anon':
+      case 'drop_index':
+      case 'drop_constraint':
         return null;
     }
   }

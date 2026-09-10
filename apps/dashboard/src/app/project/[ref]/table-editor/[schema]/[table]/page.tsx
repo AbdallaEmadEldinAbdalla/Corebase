@@ -7,6 +7,7 @@ import { ErrorSurface } from '../../../../../../components/ErrorSurface.tsx';
 import { RlsPanel } from '../../../../../../components/RlsPanel.tsx';
 import { DataGrid } from '../../../../../../components/DataGrid.tsx';
 import { Structure, type ColumnVerb } from '../../../../../../components/Structure.tsx';
+import { Constraints } from '../../../../../../components/Constraints.tsx';
 import { TableOps, type Op } from '../../../../../../components/TableOps.tsx';
 import { Menu, MenuItem } from '../../../../../../components/Menu.tsx';
 import type { IntrospectionColumn } from '../../../../../../lib/api.ts';
@@ -69,6 +70,30 @@ export default function TablePage(
     [intro.data, schema, table]);
 
   const primaryKey = columns.filter((c) => c.is_primary_key).map((c) => c.name);
+
+  const indexes = useMemo(
+    () => (intro.data?.indexes ?? []).filter((i) => i.schema === schema && i.table === table),
+    [intro.data, schema, table]);
+  const constraints = useMemo(
+    () => (intro.data?.constraints ?? [])
+      .filter((c) => c.schema === schema && c.table === table),
+    [intro.data, schema, table]);
+
+  /**
+   * Columns that **lead** an index, which is the only form that serves a lookup.
+   *
+   * `columns[0]` and not `columns.includes` — an index on `(a, b)` answers a
+   * query filtering on `a` and cannot answer one filtering only on `b`, so a
+   * foreign key on `b` would still seq-scan. And it is correct for an expression
+   * index precisely because the payload puts `null` in that slot rather than
+   * shifting the next column up (P7o), which an inner join in the catalog query
+   * would have done — it reported `["status"]` for an index on
+   * `(lower(title), status)` before that was fixed.
+   */
+  const indexedColumns = useMemo(
+    () => [...new Set(indexes.map((i) => i.columns[0]).filter(
+      (c): c is string => typeof c === 'string'))],
+    [indexes]);
 
   /**
    * The allowlist that makes the generated SQL safe.
@@ -158,13 +183,20 @@ export default function TablePage(
       // Only the table-scoped operations arrive this way; the column ones need a
       // column, which the Structure menu is how you choose.
       if (kind === 'add_column' || kind === 'rename_table'
-        || kind === 'drop_table' || kind === 'enable_rls') {
+        || kind === 'drop_table' || kind === 'enable_rls'
+        || kind === 'grant_anon' || kind === 'revoke_anon') {
         setOp({ kind });
+      } else if (kind === 'create_index') {
+        // Needs the column list, which only this page has.
+        setOp({ kind: 'create_index', candidates: columns });
       }
     };
     window.addEventListener('sh:table-op', onOp);
     return () => window.removeEventListener('sh:table-op', onOp);
-  }, []);
+    // `columns` is a dependency now that one command carries it: a listener
+    // closed over the first render's empty list would open an index dialog with
+    // no columns to choose from.
+  }, [columns]);
 
   if (intro.isPending) {
     return (
@@ -254,7 +286,8 @@ export default function TablePage(
                   { kind: 'add_foreign_key', candidates: columns,
                     // Every readable column in the database, so the picker can
                     // offer any table — introspection already carries them.
-                    targets: intro.data?.columns ?? [] }); }}>
+                    targets: intro.data?.columns ?? [],
+                    indexedColumns }); }}>
                   New foreign key…
                 </MenuItem>
                 <MenuItem onSelect={() => { close(); setOp(
@@ -307,7 +340,11 @@ export default function TablePage(
           makes an explicit undefined a different thing from an absent key. */}
       <RlsPanel table={meta} policies={policies}
                 {...(rlsIsOff && editable
-                  ? { onEnable: () => setOp({ kind: 'enable_rls' }) } : {})} />
+                  ? { onEnable: () => setOp({ kind: 'enable_rls' }) } : {})}
+                {...(editable ? {
+                  onGrantAnon: () => setOp({ kind: 'grant_anon' }),
+                  onRevokeAnon: () => setOp({ kind: 'revoke_anon' }),
+                } : {})} />
 
       <DataGrid
         columns={columns}
@@ -348,6 +385,20 @@ export default function TablePage(
         truncated={Boolean(intro.data?.truncated['columns'])}
         {...(editable ? { onVerb: openColumnOp } : {})}
         {...(editable && !rlsIsOff ? { onAddColumn: () => setOp({ kind: 'add_column' }) } : {})}
+        {...(readOnlyReason ? { readOnlyReason } : {})}
+      />
+
+      <Constraints
+        indexes={indexes}
+        constraints={constraints}
+        truncated={Boolean(intro.data?.truncated['indexes'])
+          || Boolean(intro.data?.truncated['constraints'])}
+        {...(editable ? {
+          onDrop: (row) => setOp(row.kind === 'index'
+            ? { kind: 'drop_index', name: row.name, invalid: row.invalid }
+            : { kind: 'drop_constraint', name: row.name, constraintKind: row.kind }),
+          onNewIndex: () => setOp({ kind: 'create_index', candidates: columns }),
+        } : {})}
         {...(readOnlyReason ? { readOnlyReason } : {})}
       />
 
