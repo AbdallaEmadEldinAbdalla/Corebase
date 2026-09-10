@@ -110,10 +110,21 @@ export class ApiError extends Error {
 
 /**
  * The CSRF token lives in `sessionStorage`, not a cookie and not a module
- * variable. Not a cookie, because a cookie readable by script defeats the point
- * of a double-submit token. Not a module variable, because a full page reload —
- * which the create flow does on redirect — would lose it and every subsequent
- * mutation would 403.
+ * variable.
+ *
+ * **Not a cookie**, because the API is a different origin: a cookie it sets is
+ * unreadable by this script, so there is nothing to echo. (The earlier comment
+ * here said a script-readable cookie "defeats the point of a double-submit
+ * token", which is the wrong reason — same-origin readability is exactly how
+ * double-submit works. The real obstacle is the origin split, and getting the
+ * reason wrong is what kept the true fix out of sight. See D-473.)
+ *
+ * **Not a module variable**, because a full page reload — which the create flow
+ * does on redirect — would lose it and every subsequent mutation would 403.
+ *
+ * `sessionStorage` is nonetheless per *tab* while the session cookie is per
+ * *origin*, so a tab that did not itself log in has the session and not the
+ * token. `ensureCsrf` below is what closes that gap.
  */
 const CSRF_STORAGE_KEY = 'sh.csrf';
 
@@ -128,6 +139,70 @@ export function clearCsrfToken(): void {
 }
 
 const MUTATING = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
+
+/**
+ * The token for this tab, obtaining one from the server if the tab has none.
+ *
+ * A new tab, a pasted URL, a duplicated tab and a restored window all arrive
+ * with the session cookie — cookies are shared across an origin — and with an
+ * empty `sessionStorage`. Every `GET` then works and every mutation 403s, which
+ * in the table editor means the page renders and reads nothing, because D-132
+ * runs even a read as `POST /db/query`. `GET /v1/auth/me` re-issues the token
+ * for the session the cookie already proves (D-473).
+ *
+ * Single-flight: a page that fires several mutations at once must ask once, not
+ * once per call. The promise is cleared in `finally` so a failed attempt does
+ * not poison the next one, and the token is returned rather than only stored so
+ * a caller cannot read `sessionStorage` back before the write lands.
+ */
+let seeding: Promise<string | null> | null = null;
+
+export function resetCsrfSeeding(): void { seeding = null; }
+
+/**
+ * The mutations that *create* the session, and so cannot be asked to prove one.
+ *
+ * Without this list, `ensureCsrf` fired on `POST /v1/auth/login` itself: a
+ * browser with no session would call `GET /v1/auth/me`, get a 401, and the 401
+ * handling would clear the token and redirect to `/login` — from inside the
+ * login request, which never left. Logging in would have been impossible, and
+ * only on a *fresh* browser, which is the one state a signed-in developer never
+ * tests. Found by reading the call sites of the thing I had just changed rather
+ * than by running it.
+ *
+ * `logout` is deliberately absent: it ends a session, so it has one, and the
+ * server requires the header on it like any other mutation.
+ */
+const NO_SESSION_YET = new Set(['/v1/auth/login', '/v1/auth/signup']);
+
+/**
+ * The token for this tab, obtaining one from the server if the tab has none.
+ *
+ * Never throws. A failure here must not become the caller's error: if there is
+ * genuinely no session then the real request 401s a moment later and the
+ * central handler does the right thing with it, whereas a 401 raised from a
+ * *probe* would report the wrong URL and pre-empt the caller's own error
+ * handling.
+ */
+async function ensureCsrf(path: string): Promise<string | null> {
+  const held = csrfToken();
+  if (held) return held;
+  if (NO_SESSION_YET.has(path)) return null;
+  seeding ??= (async () => {
+    try {
+      // Not `api.me()`: this module's endpoint wrappers are defined below, and a
+      // GET needs no token, so there is no recursion here.
+      const me = await attempt<MeResponse>('/v1/auth/me');
+      if (me.csrf_token) { setCsrfToken(me.csrf_token); return me.csrf_token; }
+      return null;
+    } catch {
+      return null;
+    } finally {
+      seeding = null;
+    }
+  })();
+  return seeding;
+}
 
 export interface RequestOptions {
   method?: string;
@@ -145,13 +220,38 @@ export interface RequestOptions {
 let onUnauthenticated: (() => void) | null = null;
 export function setUnauthenticatedHandler(fn: () => void): void { onUnauthenticated = fn; }
 
+/**
+ * One request, and the retry that makes a stale CSRF token recoverable.
+ *
+ * `ensureCsrf` covers the tab that has *no* token. The other half is the tab
+ * whose token is *wrong*: log out and back in elsewhere and this tab's stored
+ * token belongs to a session that no longer exists, and no amount of reloading
+ * would fix it because `sessionStorage` survives a reload. `CSRF_REQUIRED` is
+ * the server's word for "the session is fine, the token is not", so it is the
+ * one 403 worth retrying — and retrying is safe because the check runs before
+ * any handler does, so the rejected call had no effect.
+ *
+ * Exactly one retry, and only for that code. A loop here would turn a
+ * server-side mistake into a request storm.
+ */
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  try {
+    return await attempt<T>(path, options);
+  } catch (err) {
+    if (!(err instanceof ApiError) || err.code !== 'CSRF_REQUIRED') throw err;
+    clearCsrfToken();
+    resetCsrfSeeding();
+    return attempt<T>(path, options);
+  }
+}
+
+async function attempt<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const method = (options.method ?? 'GET').toUpperCase();
   const headers: Record<string, string> = {};
 
   if (options.body !== undefined) headers['content-type'] = 'application/json';
   if (MUTATING.has(method)) {
-    const csrf = csrfToken();
+    const csrf = await ensureCsrf(path);
     if (csrf) headers['x-csrf-token'] = csrf;
   }
   if (options.idempotencyKey) headers['idempotency-key'] = options.idempotencyKey;
@@ -226,6 +326,12 @@ export interface MeResponse {
   user: { id: string; email: string; display_name: string | null; email_verified: boolean } | null;
   memberships: { org_id: string; name: string; slug: string; role: Role }[];
   principal: string;
+  /**
+   * Present for a cookie session, absent for a PAT (D-473). Optional because
+   * the field is genuinely absent rather than null, which is the distinction
+   * `exactOptionalPropertyTypes` exists to keep.
+   */
+  csrf_token?: string;
 }
 
 /**

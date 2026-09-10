@@ -225,6 +225,52 @@ describe('P1c — sessions and CSRF', () => {
     expect(res.statusCode).toBe(201);
   });
 
+  t('the refusal carries CSRF_REQUIRED, not a generic UNAUTHORIZED', async () => {
+    // The distinction the client needs: this 403 is recoverable without the user
+    // doing anything, and "your role is insufficient" is not (D-473).
+    const { app: a, cookie } = await signup();
+    const res = await a.inject({
+      method: 'POST', url: '/v1/auth/tokens',
+      headers: { cookie: `${SESSION_COOKIE}=${cookie}` }, payload: { name: 'code' } });
+    expect(res.json().error.code).toBe('CSRF_REQUIRED');
+  });
+
+  t('GET /me re-issues the CSRF token, so a tab that did not log in can mutate',
+    async () => {
+    // The bug this closes: `sessionStorage` is per tab and the cookie is per
+    // origin, so a new tab, a pasted URL or a restored window had the session
+    // and no token — authenticated for every GET, 403 on every mutation, and no
+    // way out but logging in again (D-473).
+    const { app: a, cookie, csrf } = await signup();
+
+    const me = await a.inject({ method: 'GET', url: '/v1/auth/me',
+                                headers: { cookie: `${SESSION_COOKIE}=${cookie}` } });
+    const reissued = (me.json() as { csrf_token?: string }).csrf_token;
+    expect(reissued).toBe(csrf);
+
+    // And it is the real thing, not a plausible-looking string.
+    const res = await a.inject({
+      method: 'POST', url: '/v1/auth/tokens',
+      headers: { cookie: `${SESSION_COOKIE}=${cookie}`, [CSRF_HEADER]: reissued as string },
+      payload: { name: 'from-me' } });
+    expect(res.statusCode).toBe(201);
+  });
+
+  t('a bearer principal gets no csrf_token from /me', async () => {
+    // CSRF does not apply to a token, and a field for it would imply otherwise.
+    const { app: a, cookie, csrf } = await signup();
+    const made = await a.inject({
+      method: 'POST', url: '/v1/auth/tokens',
+      headers: { cookie: `${SESSION_COOKIE}=${cookie}`, [CSRF_HEADER]: csrf },
+      payload: { name: 'pat' } });
+    const token = (made.json() as { token: string }).token;
+
+    const me = await a.inject({ method: 'GET', url: '/v1/auth/me',
+                                headers: { authorization: `Bearer ${token}` } });
+    expect(me.json().principal).toBe('token');
+    expect(me.json()).not.toHaveProperty('csrf_token');
+  });
+
   t('logout ends the session', async () => {
     const { app: a, cookie, csrf } = await signup();
     const out = await a.inject({

@@ -28,7 +28,17 @@ const ID_BYTES = 32;
 
 export interface SessionRecord {
   user_id: string;
-  /** Double-submit CSRF token: also in a readable cookie, echoed in a header. */
+  /**
+   * The session's CSRF token, echoed in `x-csrf-token` on mutating requests.
+   *
+   * A **synchronizer token, not double-submit**, and the comment that used to
+   * say "also in a readable cookie" was wrong in a way that cost a bug (D-473).
+   * There is no such cookie and there cannot be one: the dashboard is a
+   * different origin from this API, so a cookie set here is unreadable by the
+   * script that would have to echo it. The token is handed to the client in a
+   * response body instead — by login, by signup, and by `GET /v1/auth/me`,
+   * which is what lets a tab that did not log in obtain one.
+   */
   csrf: string;
   created_at: number;
   last_seen_at: number;
@@ -110,12 +120,13 @@ export function createSessionStore(redis: Redis) {
 export type SessionStore = ReturnType<typeof createSessionStore>;
 
 /**
- * Double-submit CSRF check.
+ * The CSRF check: a header against the session's own token.
  *
  * The cookie is `SameSite=Lax`, which already blocks cross-site POSTs from a
  * plain form — but not a same-site subdomain, and not every browser we will meet.
  * Comparing a header against the session's own token costs nothing and closes
- * both.
+ * both, and requiring a *custom* header forces the preflight that the CORS
+ * allowlist then refuses (`kernel/cors.ts`).
  */
 export function csrfOk(session: Session, header: string | undefined): boolean {
   if (!header) return false;

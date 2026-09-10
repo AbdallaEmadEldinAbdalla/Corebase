@@ -220,7 +220,28 @@ export function registerAuth(app: FastifyInstance, deps: AuthDeps) {
       .send();
   });
 
-  // ── me ────────────────────────────────────────────────────────────────────
+  /**
+   * ── me ──────────────────────────────────────────────────────────────────
+   *
+   * Also **re-issues the CSRF token** for a cookie session, and that is not a
+   * convenience (D-473).
+   *
+   * The token was returned by login and by signup and nowhere else, and the
+   * client keeps it in `sessionStorage` — which is per *tab*. The session cookie
+   * is not: it is shared by every tab on the origin. So a tab that did not
+   * itself log in — a new tab, a pasted URL, a duplicated tab, a restored
+   * window — was authenticated for every `GET` and rejected on every mutation,
+   * with a 403 the user could only clear by logging in again. The table editor
+   * made that constant rather than occasional, because D-132 executes even a
+   * *read* as `POST /db/query`, so a second tab could not read a single row.
+   *
+   * Safe to return here because the response is readable only from an
+   * allowlisted origin: `kernel/cors.ts` echoes no wildcard and sends
+   * `Vary: Origin`, so a hostile page cannot read this any more than it can read
+   * the memberships beside it. A bearer-token principal gets no token, because
+   * CSRF does not apply to one (see `principal.ts`) and inventing a field for it
+   * would suggest otherwise.
+   */
   app.get('/v1/auth/me', async (req) => {
     const principal = await resolvePrincipal(req, deps);
     if (!principal.userId) {
@@ -240,6 +261,7 @@ export function registerAuth(app: FastifyInstance, deps: AuthDeps) {
         role: m.role,
       })),
       principal: principal.kind,
+      ...(principal.session ? { csrf_token: principal.session.csrf } : {}),
     };
   });
 

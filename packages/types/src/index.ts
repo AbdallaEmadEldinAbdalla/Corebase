@@ -94,6 +94,18 @@ export const ERROR_CODES = {
    * customer's typo in the platform's error-rate alert.
    */
   SQL_ERROR: 'SQL_ERROR',
+  /**
+   * A session cookie arrived without a matching `x-csrf-token` (P7r).
+   *
+   * Its own code rather than another `UNAUTHORIZED`, because it is the one 403
+   * a *correctly authenticated* client can recover from without the user doing
+   * anything: the session is valid, only the token the page holds is missing or
+   * stale. The dashboard re-seeds it from `GET /v1/auth/me` and retries once,
+   * and it can only tell that case from "your role is insufficient" by the
+   * code. Matching on the message string was the alternative, and a message is
+   * prose that gets reworded.
+   */
+  CSRF_REQUIRED: 'CSRF_REQUIRED',
   INTERNAL: 'INTERNAL',
 } as const;
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];

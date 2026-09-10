@@ -59,8 +59,16 @@ export async function resolvePrincipal(
       // CSRF is checked here rather than in each route, so a new mutating route
       // cannot forget it.
       if (MUTATING.has(req.method) && !csrfOk(session, req.headers[CSRF_HEADER] as string | undefined)) {
-        throw new ApiError(403, ERROR_CODES.UNAUTHORIZED,
-          `This request needs a ${CSRF_HEADER} header matching the session's CSRF token.`);
+        // `CSRF_REQUIRED`, not `UNAUTHORIZED`: the session is valid and only the
+        // token is missing or stale, which is the one 403 a client can recover
+        // from on its own — see the code's own docblock, and D-473.
+        throw new ApiError(403, ERROR_CODES.CSRF_REQUIRED,
+          `This request needs a ${CSRF_HEADER} header matching the session's CSRF token.`
+          // Not "reload the page": `sessionStorage` survives a reload, so a
+          // stale token would survive one too. The endpoint is the actual cure,
+          // and naming it serves the CLI and curl callers who read this message
+          // as well as the dashboard, which now recovers on its own (D-473).
+          + ' GET /v1/auth/me returns the token for the current session.');
       }
       return { userId: session.user_id, kind: 'session', session };
     }
