@@ -42,6 +42,7 @@ export default function ProjectLayout({ children, params }: {
         <NavItem href={`/project/${ref}`} current={path === `/project/${ref}`} icon="overview">Overview</NavItem>
         <NavItem href={`/project/${ref}/table-editor`}
                  current={path.includes('/table-editor')} icon="table-editor">Table editor</NavItem>
+        <NavItem href={`/project/${ref}/sql`} current={path.includes('/sql')} icon="sql">SQL</NavItem>
         <NavItem href={`/project/${ref}/connect`} current={path.endsWith('/connect')} icon="connect">Connect</NavItem>
         <NavItem href={`/project/${ref}/keys`} current={path.endsWith('/keys')} icon="keys">API keys</NavItem>
         <NavItem href={`/project/${ref}/usage`} current={path.endsWith('/usage')} icon="usage">Usage</NavItem>

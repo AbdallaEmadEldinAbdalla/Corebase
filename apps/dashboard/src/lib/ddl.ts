@@ -57,18 +57,27 @@ export interface Notice {
   text: string;
 }
 
-/** What the compiler produces: a script, a name for it, and its costs. */
-export interface Plan {
-  /**
-   * The statements, as one script separated by `;`. One script because the
-   * server runs a script as one transaction, so a create-table that enables RLS
-   * can never half-apply (D-464).
-   */
+/**
+ * The least a dialog needs to preview something: the statement, a past-tense
+ * line for the toast, and its costs.
+ *
+ * A base type rather than a third arm of a union, because there really are three
+ * cases and only two of them carry extras. A `Plan` adds a migration filename; a
+ * `RowPlan` adds bound parameters and their bindings; and a statement the **user
+ * wrote themselves** — the SQL editor's — has neither, which makes it the base.
+ * The dialog reads `'filename' in plan` and `'bindings' in plan`, so each extra
+ * appears exactly when it exists and a raw statement is offered neither a
+ * migration download nor a binding list it does not have.
+ */
+export interface Previewable {
   sql: string;
-  /** For the toast: "Column added", "Table renamed". Past tense, no full stop. */
+  /** Past tense, no full stop: "Column added", "Table renamed". */
   done: string;
-  /** Cost, in the order it matters. */
   notices: Notice[];
+}
+
+/** What the compiler produces: a script, a name for it, and its costs. */
+export interface Plan extends Previewable {
   /**
    * A `.sql` filename per D-028, for the download the loop offers.
    *
@@ -77,6 +86,18 @@ export interface Plan {
    * genuinely the right shape and is genuinely not recorded, and the UI says so.
    */
   filename: string;
+}
+
+/**
+ * Does this previewable carry a migration filename — i.e. is it schema work?
+ *
+ * A type predicate rather than an inline `'filename' in p`, because the `in`
+ * operator narrows a base type to `Previewable & Record<'filename', unknown>` and
+ * `unknown` is not a filename. The predicate is what lets the dialog use the
+ * value it just proved is there.
+ */
+export function isSchemaPlan(p: Previewable): p is Plan {
+  return 'filename' in p;
 }
 
 /**

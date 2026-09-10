@@ -6,8 +6,10 @@ import { useReturnFocus } from '../lib/return-focus.ts';
 import { ApiError } from '../lib/api.ts';
 import { SqlPreview } from './SqlPreview.tsx';
 import { CopyButton } from './Copy.tsx';
-import { describeFailure, type Plan } from '../lib/ddl.ts';
-import type { RowPlan } from '../lib/dml.ts';
+import {
+  describeFailure, isSchemaPlan, type Plan, type Previewable,
+} from '../lib/ddl.ts';
+import { isRowPlan } from '../lib/dml.ts';
 import { namesSatisfied } from '../lib/confirm.ts';
 
 /**
@@ -64,7 +66,7 @@ export interface DdlDialogProps {
    * enforced by the shape of the data instead of by a prop somebody has to
    * remember to pass.
    */
-  plan: () => Plan | RowPlan;
+  plan: () => Previewable;
   onCancel: () => void;
   /** Runs the script. Resolves on success; rejects with an `ApiError`. */
   onRun: (req: {
@@ -119,7 +121,7 @@ export function DdlDialog(props: DdlDialogProps) {
    * re-thrown, because a `TypeError` rendered as a friendly hint is a
    * `TypeError` that survives.
    */
-  let built: { plan: Plan | RowPlan } | { refusal: string } | { todo: string };
+  let built: { plan: Previewable } | { refusal: string } | { todo: string };
   try { built = { plan: plan() }; } catch (err) { built = describeFailure(err); }
 
   const generated = 'plan' in built ? built.plan.sql : '';
@@ -209,7 +211,7 @@ export function DdlDialog(props: DdlDialogProps) {
          * loudly on a missing parameter instead of writing the wrong value,
          * which is the right way round for this to break.
          */
-        params: !editing && 'plan' in built && 'params' in built.plan
+        params: !editing && 'plan' in built && isRowPlan(built.plan)
           ? built.plan.params : [],
         // `editing`, the mode — not `edited`, which is the text itself.
         edited: editing,
@@ -312,7 +314,7 @@ export function DdlDialog(props: DdlDialogProps) {
                 * statement keeps its placeholders and the values are listed
                 * beside it, which is also how psql reports a prepared statement.
                 */}
-              {'bindings' in built.plan && built.plan.bindings.length > 0 ? (
+              {isRowPlan(built.plan) && built.plan.bindings.length > 0 ? (
                 <dl className="ddl__binds">
                   {built.plan.bindings.map((b) => (
                     <div className="ddl__bind" key={b.placeholder}>
@@ -423,7 +425,7 @@ export function DdlDialog(props: DdlDialogProps) {
         </div>
 
         <div className="sh-dialog__footer ddl__footer">
-          {'plan' in built && 'filename' in built.plan ? (
+          {'plan' in built && isSchemaPlan(built.plan) ? (
             /**
              * Not "Save as migration", deliberately.
              *

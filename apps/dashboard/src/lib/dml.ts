@@ -27,7 +27,7 @@
  * happens to know, which would hit every duplicate row.
  */
 import { quote, qualified } from './grid-sql.ts';
-import { Incomplete, type Notice } from './ddl.ts';
+import { Incomplete, type Notice, type Previewable } from './ddl.ts';
 
 /**
  * A cell's intended value.
@@ -44,12 +44,8 @@ export type CellValue =
   | { kind: 'default' };
 
 /** What the compiler produces. Deliberately without a migration filename. */
-export interface RowPlan {
-  sql: string;
+export interface RowPlan extends Previewable {
   params: unknown[];
-  /** Past tense, for the toast. */
-  done: string;
-  notices: Notice[];
   /** What each placeholder holds, so the preview can show it beside the SQL. */
   bindings: { placeholder: string; column: string; value: string }[];
 }
@@ -65,6 +61,11 @@ export interface RowPlan {
  * mistake that survives until someone adds a call site that forgets.
  */
 type BoundValue = Exclude<CellValue, { kind: 'default' }>;
+
+/** Does this previewable carry bound parameters — i.e. is it a row edit? */
+export function isRowPlan(p: Previewable): p is RowPlan {
+  return 'bindings' in p && 'params' in p;
+}
 
 const bind = (v: BoundValue): unknown => (v.kind === 'null' ? null : v.text);
 

@@ -1,6 +1,6 @@
 import {
-  BarChart3, Cable, Gauge, KeyRound, LayoutGrid, Settings, Table2, Users,
-  type LucideIcon } from 'lucide-react';
+  BarChart3, Cable, Gauge, KeyRound, LayoutGrid, Settings, SquareTerminal, Table2, Users, type LucideIcon,
+} from 'lucide-react';
 
 /**
  * The Steadhold mark — the chiselled S, cut at the waist.
@@ -114,6 +114,15 @@ const ICONS = {
   members: Users,
   /** A grid, because the page is rows and columns before it is anything else. */
   'table-editor': Table2,
+  /**
+   * A terminal, not a database or a file.
+   *
+   * The page is a *console*: you type a statement and it answers. A database
+   * cylinder would say "this is where the data is", which is the table editor's
+   * claim, and a document icon would say the SQL is the artefact — it is not,
+   * the result is.
+   */
+  sql: SquareTerminal,
   usage: BarChart3,
   settings: Settings,
 } satisfies Record<string, LucideIcon>;
