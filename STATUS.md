@@ -5518,6 +5518,97 @@ its `<label>`, so clicking the word did nothing and the accessible name came onl
 from an `aria-label` that had to be kept in step with it (design system §5 rule 5
 asks for a 40px hit area). And `.sqled { }` was an empty rule.
 
+## 4v. P7s — the project's own users
+
+The first of the IA's unbuilt V1 pages, and the first one to disprove something I
+told the user about all of them.
+
+**They are not UI-only work.** I had said the backends for auth, storage, logs and
+backups "are built, so those are UI-only work, which is the fastest kind here."
+That is wrong, and the reason is D-132. The admin endpoints *do* exist — at
+`/auth/v1/admin/users`, on the data plane, authorised by the project's
+`service_role` key — and D-132 forbids a browser to hold one. So the dashboard
+could not call them, and every one of those four pages needs a control-plane
+surface first. `GET /v1/projects/:ref/auth/users` is that surface for this page.
+
+**`developer` cannot read `auth.users`.** Checked rather than assumed:
+`has_table_privilege('developer', 'auth.users', 'SELECT')` is false, and so is
+`steadhold_admin`'s — the tables are owned by `postgres` and reached by
+`steadhold_auth`, which is the role the data plane's own connection uses. That
+single fact is why this is a module rather than a page over `POST /db/query`, and
+it is also why the capability sits where it does.
+
+**The role gate is admin, and it is the one place `db.query`'s argument does not
+transfer** (D-478). The console is a member capability because a member can
+already reveal the `developer` connection string and run the same SQL from psql —
+gating it would protect nothing. Neither half holds here: `developer` has no
+privilege on the table, and the `service_role` key that would reach it is behind
+`key.manage`, which is admin-only. So this page hands a member something they
+genuinely cannot get today, and what it hands over is the customer's users' email
+addresses. Read and manage are separate capabilities with identical holders, so
+that widening read later cannot silently widen delete.
+
+**Nothing is reimplemented.** Every statement comes from
+`modules/project-auth/store.ts`, so a ban means here exactly what it means over
+the data plane — including the parts that are easy to get subtly different: a ban
+revokes every session (D-113 checks bans at login and refresh, so without the
+revoke a banned user keeps working for up to an hour while the dashboard shows
+them banned) and a delete is a tombstone that does not cascade into the
+customer's tables.
+
+**The host was the afternoon's bug.** A first version resolved the project with
+`consoleContext`, which reads `project_databases.connection_host` — the
+*customer-facing* name. The control plane is not a customer: it reaches the
+database over the private network, where the node is what is addressable. In
+staging both are `127.0.0.1`, so it worked by hand and failed in the e2e fixture
+with `getaddrinfo ENOTFOUND …steadhold.app`. `modules/project-auth/context.ts`
+already used `nodes.address`, which was the clue available to be read.
+
+**What the opening `ux-review` changed before any UI existed.** Two things worth
+recording. It found that Q12 had an answer I had told the gate it did not: I
+wrote "I cannot write '1–20 of 143'", and D-466 had already solved exactly that
+for the grid with `pg_class.reltuples` and a tilde. So the endpoint gained
+`estimated_total`, and the footer reads "1–50 of ~4,200" — with `-1` rendering as
+"total not counted yet" rather than as zero, since a fresh project reporting 0
+while listing three would be worse than saying nothing. And it settled three
+questions from precedent rather than taste: the nav item is **hidden** from a
+member (the settings page hides its danger zone rather than greying it, and its
+comment names the trap — `me` must be in the loading gate or the page presents an
+unresolved request as a verdict); the pending state lives on the **dialog's**
+confirm button, not the menu item that closed; and delete requires the address
+typed back, because there is no restore path for a soft-deleted end user, so it
+is irreversible from the product's point of view — the dialog says "there is no
+undo" rather than inventing the recovery window a project gets.
+
+**Two empty states, on purpose.** "Your app has no users yet" and "nothing
+matches `foo`" are different facts, and conflating them tells a developer with
+four thousand users that they have none the moment they mistype. The first cannot
+carry the action §6 asks for — a developer does not create an end user from here,
+their app does — so it points at the API keys page instead of growing a button
+that would have to lie.
+
+**Addresses are not masked**, and the asymmetry with the `service_role` key is
+deliberate: a key is a credential whose reading grants power, an address is the
+datum the page exists to show, and a support-ticket lookup is the whole use case.
+The controls doing the work are the admin-only capability and an audit row per
+mutation — two of them, one in the customer's database (D-314) so it leaves with
+their `pg_dump`, and one in ours, because "who banned this user" is a question
+about a Steadhold account that the customer's log cannot answer.
+
+Also fixed: `RESOURCE_NOT_FOUND` now exists (D-479). Every 404 in the codebase
+borrowed `PROJECT_NOT_FOUND` through one helper, which read correctly while
+everything 404-able was a project — deleting an already-deleted end user answered
+"PROJECT_NOT_FOUND", which sends a developer to check whether their project still
+exists.
+
+**Verification.** 8 e2e tests in `services/worker` against a genuinely
+provisioned project, each proven by breaking it — the member gate widened to
+members fails two of them. Live against staging before the UI existed: paging by
+cursor, substring search, a ban killing an outstanding refresh token, a dashboard
+confirm letting a previously-blocked user sign in, a delete that 404s on repeat,
+CSRF enforced, a strict body, and an unauthenticated caller unable to tell a real
+ref from an invented one.
+
 ## 5. Rules the code follows
 
 These are not style preferences; each one exists because breaking it caused a real
@@ -6099,8 +6190,8 @@ mechanisms and a product needs both.
 
 ## 6. Decisions made while building (not from the plan)
 
-The [decision log](docs/00-foundation/05-decision-log.md) holds **466 decisions**,
-numbered D-001…D-477 — D-041…D-049 and D-158…D-159 were never allocated. It is
+The [decision log](docs/00-foundation/05-decision-log.md) holds **468 decisions**,
+numbered D-001…D-479 — D-041…D-049 and D-158…D-159 were never allocated. It is
 binding when two documents disagree, and it is the authority; this section is not.
 
 **The table below is a historical extract, not a current index.** It covers

@@ -338,10 +338,18 @@ policy that was correct. Five green steps, one whole class of caller untested.
 ## Phase 7 — the dashboard (in progress)
 
 The shell, the project surfaces, the members and account pages, the table editor
-(read and write) and the SQL editor are built. Roughly half of the dashboard the
-[IA](docs/09-dashboard/01-dashboard-ia.md) specifies for V1 exists: the auth,
-storage, logs and backups pages are not written yet, though the services behind
-them are. [STATUS.md](STATUS.md) §4j–§4s has the per-step detail and §8 the gaps.
+(read and write), the SQL editor and the end-users page are built. Storage, logs
+and backups are the [IA](docs/09-dashboard/01-dashboard-ia.md)'s remaining V1
+pages. [STATUS.md](STATUS.md) §4j–§4v has the per-step detail and §8 the gaps.
+
+**Those remaining pages are not UI-only work, which is worth saying because we
+said the opposite.** The services behind them exist, but their endpoints are on
+the *data plane*, authorised by a project's `service_role` key — and D-132 exists
+precisely so that a browser never holds one. So each page needs a control-plane
+surface first: a scoped endpoint that keeps the privileged credential
+server-side, audits what it does, and hands the browser only the operations the
+page needs. The end-users page is the first of them and the shape the rest will
+follow.
 
 Two things from it are worth stating here because they are decisions rather than
 progress.
@@ -376,6 +384,20 @@ execute. The destructive-statement guard in the editor is not a copy of the API'
 and what the server refuses cannot drift apart. Saved queries and history are not
 built: they need a control-plane endpoint that does not exist yet, and history
 also needs an answer on redacting the literals people paste into a `WHERE`.
+
+**The end-users page reads a table your own SQL editor cannot.** A project's
+`auth.users` is owned by `postgres` and reachable by the auth role;
+`has_table_privilege('developer', 'auth.users', 'SELECT')` is false, so
+`select * from auth.users` in the SQL editor is a permission error and always
+was. That single fact decided two things. The page is a control-plane endpoint
+rather than a view over the console — and its capability sits at **admin**, not
+member, which is the one place the console's own argument does not carry over
+(D-478). `db.query` is a member's because a member can already reveal the
+`developer` connection string and run the same SQL from psql, so gating it would
+protect nothing; here there is nothing to already have, and what the page hands
+over is your users' email addresses. A ban revokes every session as it is
+applied, because bans are checked at login and refresh — without that a banned
+user keeps working for up to an hour while the dashboard says otherwise.
 
 **A session is shared between tabs; its CSRF token was not.** The token was
 issued by login and by signup and nowhere else, and the client keeps it in

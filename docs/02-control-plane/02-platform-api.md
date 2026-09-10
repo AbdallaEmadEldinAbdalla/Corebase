@@ -45,7 +45,7 @@ Operator (staff) access is a separate surface — see [audit & admin access](05-
 | 403 | `FORBIDDEN` | Authenticated but role insufficient |
 | 403 | `CSRF_REQUIRED` | Session cookie present, `x-csrf-token` missing or stale. Recoverable without the user: `GET /v1/auth/me` re-issues the token (D-473) |
 | 403 | `PROJECT_SUSPENDED` | Project suspended for abuse/billing ([abuse prevention](../12-business/03-abuse-prevention.md)) |
-| 404 | `PROJECT_NOT_FOUND` / `ORG_NOT_FOUND` / `RESOURCE_NOT_FOUND` | Also returned instead of 403 for resources in orgs the caller cannot see (no existence oracle) |
+| 404 | `PROJECT_NOT_FOUND` / `ORG_NOT_FOUND` / `RESOURCE_NOT_FOUND` | Also returned instead of 403 for resources in orgs the caller cannot see (no existence oracle). `RESOURCE_NOT_FOUND` is for anything that is neither a project nor an org — a missing end user, say (D-479) |
 | 409 | `PROJECT_NOT_READY` | Lifecycle action invalid in current state (e.g. pause while `provisioning`) |
 | 409 | `IDEMPOTENCY_KEY_REUSED` | Same key, different request body |
 | 409 | `LAST_OWNER` | Would leave the org ownerless |
@@ -85,6 +85,9 @@ Operator (staff) access is a separate surface — see [audit & admin access](05-
 |---|---|---|
 | `POST /v1/projects` | Create → returns `202` + project in `creating` | `Idempotency-Key` required |
 | `GET /v1/projects?org_id=` | List (cursor-paginated); excludes `deleted`, includes `soft_deleted` with `restorable_until`. Scoped to the caller's own organizations | |
+| `GET /v1/projects/:ref/auth/users` | The project's **end users** — search (`q`), keyset paging (`cursor`), and a `reltuples` estimate. `authuser.read`, admin+ (D-478) |
+| `PATCH /v1/projects/:ref/auth/users/:id` | Ban (`ban_until`), unban (`null`), confirm an address, or sign out everywhere. `authuser.manage` |
+| `DELETE /v1/projects/:ref/auth/users/:id` | Soft, a tombstone, no cascade into the customer's schemas |
 | `GET /v1/projects/:ref/keys` | `anon` returned in the clear (publishable by design); `service_role` needs `?reveal=true`, the `key.manage` capability, and writes a `key.revealed` audit row | Prefix is a label — `shk_anon_<ref4>` (D-218) |
 | `GET /v1/projects/:ref/.well-known/jwks.json` | Per-project JWKS (D-014). Unauthenticated and cacheable: a public key is public, and a JWKS behind auth breaks every verifier when a credential rotates | |
 | `GET /v1/projects/:ref` | Detail incl. `database` block when `ready` | |
